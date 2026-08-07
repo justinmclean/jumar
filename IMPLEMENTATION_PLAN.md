@@ -11,10 +11,9 @@ never weaken a check to get green.
 
 ## Status — 2026-08-07
 
-Phase 0 (skeleton), Phase 1 (read-only path), and most of Phase 2 (decompose)
-are complete and merged to main. The `select-next-item` branch was merged;
-`harness.py` and `decompose.py` also landed in the same run (commits visible
-in `git log`). The next open item is `gate-modes`.
+Phase 0 (skeleton), Phase 1 (read-only path), Phase 2 (decompose + gate), and
+the first two items of Phase 3 (execute/verify) are complete and merged to main.
+The next open item is `repair-bounded`.
 
 ### Completed (merged to main)
 
@@ -42,6 +41,19 @@ in `git log`). The next open item is `gate-modes`.
   hard rejections (missing check, placeholder statement, plan too long, `judge`
   without `rationale`, cyclic `depends_on`), full plan journalled before return.
   Closed: AC3.1–AC3.6.
+- **gate-modes** — `gate.py`: `--dry-run` / `--approve` / `--auto` mode
+  dispatch, pre-execution capability refusal naming the subtask and capability,
+  `--approve --non-interactive` startup error before ingest.
+  Closed: AC4.1–AC4.4.
+- **execute-and-verify-command** — `execute.py` + `verify/__init__.py`
+  (registry) + `verify/command.py`: one subtask dispatched per execute call,
+  wall-clock timeout termination, evidence capture, agent claim stored as a
+  claim only; `command` verifier; dummy-kind registry test.
+  Closed: AC5.1–AC5.5, AC6.1, AC6.3, AC6.6, AC6.7.
+- **verify-file-and-absence** — `verify/file.py`: `file` kind (path exists,
+  optional pattern match, hash in evidence) and `absence` kind (path/glob gone),
+  both registered in the verifier registry.
+  Closed: AC6.2.
 
 ## Work items (priority order)
 
@@ -50,44 +62,9 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 
 ---
 
-### Phase 2 (finish) — decompose + gate
+### Phase 3 (finish) — inner loop
 
-1. **gate-modes** — `gate.py`: `--dry-run` / `--approve` / `--auto` mode
-   dispatch, pre-execution capability refusal naming the subtask and
-   capability, and the startup check that rejects `--approve` combined with
-   `--non-interactive` before ingest runs. The `--non-interactive` flag is
-   introduced here as a CLI-level concept.
-   *Validation:* `make check` + `pytest tests/test_gate.py -q` — must include
-   a test for each of AC4.1–AC4.4, including the `--approve
-   --non-interactive` startup error with a mock that asserts ingest is never
-   called.
-   *Closes:* AC4.1–AC4.4.
-
----
-
-### Phase 3 — the inner loop (execute and verify land together)
-
-2. **execute-and-verify-command** — `execute.py` **and**
-   `verify/__init__.py` (registry) **and** `verify/command.py`, in one
-   branch. One subtask dispatched per execute call, wall-clock timeout
-   termination, evidence capture, agent claim stored as a claim only. The
-   `command` verifier exits the golden path; the registry makes adding new
-   kinds a one-module operation. Include a golden-journal test asserting
-   `attempt_started` → `attempt_finished` → `verification` order before the
-   next subtask starts.
-   **Do not split this item** — shipping execute without a verifier is
-   forbidden by AGENTS.md.
-   *Validation:* `make check` + `pytest tests/test_execute.py
-   tests/test_verify_command.py -q` plus the golden-journal ordering test.
-   *Closes:* AC5.1–AC5.5, AC6.1, AC6.3, AC6.6, AC6.7.
-
-3. **verify-file-and-absence** — `verify/file.py`: `file` kind (path exists,
-   optional pattern match, hash in evidence) and `absence` kind (path/glob is
-   gone). Both are registered in the verifier registry.
-   *Validation:* `make check` + `pytest tests/test_verify_file.py -q`.
-   *Closes:* AC6.2.
-
-4. **repair-bounded** — `repair.py`: up to `max_repairs` retry attempts,
+1. **repair-bounded** — `repair.py`: up to `max_repairs` retry attempts,
    failing evidence injected into the repair prompt, rejection of any repair
    that mutates its subtask's `check` (original check re-run), correct
    terminal state on budget exhaustion, `--halt-on-fail` support.
@@ -99,7 +76,7 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 
 ### Phase 4 — completion
 
-5. **complete-item** — `complete.py`: checkbox flip byte-preserving (only the
+2. **complete-item** — `complete.py`: checkbox flip byte-preserving (only the
    target line changes), optional per-item branch commit with item text as
    subject, no push and no PR ever invoked. Non-recurring items only in this
    item; recurring item support comes in Phase 4b.
@@ -107,7 +84,7 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
    include a byte-diff assertion and a temp-git-repo branch assertion.
    *Closes:* AC8.1–AC8.4.
 
-6. **report-and-resume** — `report.py` + `gsd resume <run-id>` CLI command:
+3. **report-and-resume** — `report.py` + `gsd resume <run-id>` CLI command:
    per-run report written to `runs/<run-id>/report.md`, summary to stdout,
    exit status 0 on clean run and 1 on any failure, partial report from an
    interrupted journal (clearly marked). Deferred-only runs exit 0 and name
@@ -122,7 +99,7 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 
 ### Phase 4b — item scheduling
 
-7. **clock-and-recurrence** — `recurrence.py`: next-occurrence arithmetic
+4. **clock-and-recurrence** — `recurrence.py`: next-occurrence arithmetic
    for `@every=` rules (weekday, interval+unit, named-DOW), including
    DST-gap and DST-fold deterministic resolution. Extend `complete.py` to
    advance a completed recurring item's `@not-before=` token in place
@@ -139,7 +116,7 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 
 ### Phase 5 — remaining verifiers
 
-8. **verify-judge-adversarial** — `verify/judge.py`: fresh context only
+5. **verify-judge-adversarial** — `verify/judge.py`: fresh context only
    (asserted by inspecting the assembled prompt), default-fail framing,
    structured `{verdict, reason, artefacts_shown}`, unparseable response ⇒
    `inconclusive`.
@@ -148,7 +125,7 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
    no fragment of the executor's transcript is present.
    *Closes:* AC6.4.
 
-9. **verify-manual** — `verify/manual.py`: interactive confirm at the
+6. **verify-manual** — `verify/manual.py`: interactive confirm at the
    prompt; under `--non-interactive` yields `inconclusive`, never auto-pass.
    *Validation:* `make check` + `pytest tests/test_verify_manual.py -q`.
    *Closes:* AC6.5.
@@ -160,7 +137,7 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 Ship the lock **before** the scheduler. Installing a recurring run before
 single-flight exists is how two agents end up editing the same file.
 
-10. **lock-single-flight** — `lock.py`: PID-stamped lock file keyed to the
+7. **lock-single-flight** — `lock.py`: PID-stamped lock file keyed to the
     todo path, live-lock check exits 0 with `already_running`, stale-lock
     reclaim is journalled and the run proceeds. No scheduler yet — the lock is
     exercised by a test that spawns a fake second run against a live lockfile.
@@ -168,7 +145,7 @@ single-flight exists is how two agents end up editing the same file.
     the stale-lock reclaim test (fake PID that does not exist).
     *Closes:* AC10.5, AC10.6.
 
-11. **schedule-os-backends** — `schedule.py`: `gsd schedule add/list/remove/show`
+8. **schedule-os-backends** — `schedule.py`: `gsd schedule add/list/remove/show`
     with `crontab` (Linux/BSD) and `launchd` plist (macOS) backends selected
     by platform; backend overridable in config. Every installed entry is wrapped
     in `# >>> gsd <id> >>>` / `# <<< gsd <id> <<<` markers; `remove` deletes
@@ -187,12 +164,12 @@ single-flight exists is how two agents end up editing the same file.
 
 ### Phase 6 — polish
 
-12. **gsd-doctor** — single `gsd doctor` command: config validity, harness
+9. **gsd-doctor** — single `gsd doctor` command: config validity, harness
     binary on PATH, allow-list sanity, installed schedule entries readable, todo
     file parseable. Actionable error per failure.
     *Validation:* `make check` + `pytest tests/test_doctor.py -q`.
 
-13. **ci-and-coverage-floor** — GitHub Actions workflow running `make check`
+10. **ci-and-coverage-floor** — GitHub Actions workflow running `make check`
     on push; per-module coverage floor at 90% enforced once Phase 1 has landed.
     *Validation:* the workflow green on a scratch branch with a coverage
     assertion that fails below 90%.
@@ -202,8 +179,10 @@ single-flight exists is how two agents end up editing the same file.
 ## Guardrails (do not re-plan these)
 
 - **Verification is not optional and not deferrable.** No work item may ship a
-  stage that performs work ahead of the check that proves it worked. Item 2 is
-  deliberately two modules in one branch for this reason.
+  stage that performs work ahead of the check that proves it worked.
+  `execute-and-verify-command` (now merged) was deliberately two modules in one
+  branch for this reason; the same rule applies to any future item that adds an
+  execution path.
 - **A check may never be weakened to pass.** Not a test, not an AC, not a
   subtask's own `Check` at runtime (that is what AC7.3 exists to enforce).
 - **`network` is not a default capability**, and `curl`/`wget`/`ssh`/`scp` stay
