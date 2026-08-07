@@ -1,0 +1,204 @@
+<!-- SPDX-License-Identifier: Apache-2.0
+     https://www.apache.org/licenses/LICENSE-2.0 -->
+---
+status: proposed
+---
+
+# 03 — Data Model
+
+Canonical shapes. Implemented as frozen dataclasses (or pydantic models) in
+`src/getstuffdone/models.py`. Anything serialised to the journal is
+JSON-round-trippable: every field is a primitive, a list, a dict, or another
+model here.
+
+## Enumerations
+
+```
+ItemStatus    = pending | in_progress | done | failed | blocked
+              | skipped_by_human | inconclusive
+SubtaskStatus = pending | running | passed | failed | inconclusive | skipped
+CheckKind     = command | file | absence | judge | manual
+Verdict       = passed | failed | inconclusive
+Capability    = read_fs | write_fs | run_commands | network | git_commit
+FailureCode   = unverifiable_plan | plan_too_long | invalid_plan
+              | capability_denied | timed_out | check_failed
+              | repairs_exhausted | harness_error | dependency_blocked
+```
+
+`Capability` is deliberately coarse. Fine-grained allow-lists (which commands,
+which hosts) live in config, not in the model.
+
+## TodoItem
+
+Produced by stage 1 (ingest).
+
+| field | type | notes |
+|---|---|---|
+| `item_id` | str | stable: `@id=` or `slug(text)-<8 hex of sha256(text)>` |
+| `text` | str | the todo line, metadata tokens stripped |
+| `raw_line` | str | the original line, byte-exact (needed to rewrite it) |
+| `line_no` | int | 1-based line number in the todo file |
+| `status` | ItemStatus | `done` if the source line was `- [x]` |
+| `context` | list[str] | preceding prose/headings, in order |
+| `authored_subtasks` | list[str] | from an indented task list; may be empty |
+| `meta` | dict[str, str] | parsed `@key=value` tokens, unknown keys kept |
+| `priority` | int \| None | from `@priority` |
+| `depends` | list[str] | item_ids from `@depends` (comma-separated) |
+| `capabilities` | set[Capability] | granted set: config default ∪ `@capability` |
+
+`decomposition` is derived: `authored` when `authored_subtasks` is non-empty,
+else `model`.
+
+## Check
+
+The executable proof a subtask worked. Produced by stage 3, consumed by stage 6.
+
+| field | type | notes |
+|---|---|---|
+| `kind` | CheckKind | |
+| `statement` | str | human-readable acceptance sentence, always required |
+| `command` | list[str] \| None | argv for `kind=command`; never a shell string |
+| `expect_status` | int | default 0 |
+| `expect_stdout` | str \| None | optional regex the output must match |
+| `path` | str \| None | for `file` / `absence`; repo-relative |
+| `pattern` | str \| None | regex the file's contents must match (`file`) |
+| `rationale` | str \| None | **required** when `kind=judge`: why no executable check is possible |
+| `timeout_s` | int | default 300 |
+
+Invariants (enforced in `models.py`, tested):
+
+- `kind=command` ⇒ `command` non-empty.
+- `kind in {file, absence}` ⇒ `path` non-empty.
+- `kind=judge` ⇒ `rationale` non-empty.
+- `statement` is non-empty and is not one of the placeholder strings
+  (`""`, `"n/a"`, `"none"`, `"TODO"`, `"verify manually"`) — the anti-"trust me"
+  guard from AC3.1.
+- A `command` is argv, never `shell=True`. No shell metacharacter interpolation.
+
+## Subtask
+
+| field | type | notes |
+|---|---|---|
+| `subtask_id` | str | `<item_id>#<index>` |
+| `index` | int | 0-based position in the plan |
+| `description` | str | one imperative step |
+| `check` | Check | required — a subtask without one is never constructed |
+| `capabilities` | set[Capability] | must be a subset of the item's granted set |
+| `depends_on` | list[int] | indices within the same plan; must form a DAG |
+| `status` | SubtaskStatus | |
+| `attempts` | list[Attempt] | in order, including repairs |
+
+## Plan
+
+| field | type | notes |
+|---|---|---|
+| `item_id` | str | |
+| `subtasks` | list[Subtask] | ordered; `len <= max_subtasks` |
+| `source` | str | `authored` \| `model` |
+| `created_at` | str | ISO-8601 UTC |
+| `harness` | HarnessInfo | agent/model that produced it |
+
+## Attempt
+
+One execution of one subtask (initial or repair).
+
+| field | type | notes |
+|---|---|---|
+| `attempt_no` | int | 0 = initial, 1..n = repairs |
+| `started_at` / `finished_at` | str | ISO-8601 UTC |
+| `harness` | HarnessInfo | |
+| `agent_claim` | str \| None | the agent's own summary — a claim, never a verdict |
+| `transcript_path` | str | artefact file under `runs/<run-id>/artifacts/` |
+| `exit_status` | int \| None | harness process status |
+| `files_touched` | list[str] | best-effort, from git status or mtime scan |
+| `error` | str \| None | harness-level failure |
+
+## VerificationResult
+
+| field | type | notes |
+|---|---|---|
+| `subtask_id` | str | |
+| `attempt_no` | int | which attempt this verdict judges |
+| `verdict` | Verdict | |
+| `kind` | CheckKind | echoed for reporting |
+| `evidence` | dict | kind-specific; see below |
+| `summary` | str | one line, human-facing |
+| `evidence_path` | str \| None | full untruncated output artefact |
+| `checked_at` | str | ISO-8601 UTC |
+
+Evidence by kind:
+
+- `command`: `{argv, exit_status, stdout_head, stderr_head, duration_s}`
+- `file`: `{path, exists, size, sha256, matched_excerpt}`
+- `absence`: `{path, resolved, still_present}`
+- `judge`: `{verdict, reason, artefacts_shown}`
+- `manual`: `{response, answered_at}`
+
+## Run
+
+| field | type | notes |
+|---|---|---|
+| `run_id` | str | `<UTC timestamp>-<6 random chars>` |
+| `todo_path` | str | |
+| `mode` | str | `auto` \| `dry-run` \| `approve` |
+| `config` | dict | resolved effective config, for reproducibility |
+| `started_at` / `finished_at` | str | |
+| `items` | list[ItemResult] | |
+| `warnings` | list[str] | ingest parse warnings etc. |
+
+`ItemResult` = `{item_id, status, plan, failure_code, failed_subtask_index,
+verifications}`.
+
+## HarnessInfo
+
+`{agent, model, harness, invoked_as}` — recorded on every plan, attempt, and
+judge verdict so a journal is reproducible and attributable.
+
+## Journal record
+
+One JSON object per line in `runs/<run-id>/journal.jsonl`:
+
+```json
+{"ts": "...", "seq": 12, "event": "verification", "run_id": "...",
+ "item_id": "...", "subtask_id": "...", "payload": { ... }}
+```
+
+`event` ∈ `run_started | item_selected | plan_created | plan_rejected |
+gate_decision | attempt_started | attempt_finished | verification |
+repair_started | item_completed | item_failed | run_finished`.
+
+Invariants:
+
+- Append-only. `seq` strictly increases within a run.
+- Every `attempt_finished` is followed by a `verification` for the same
+  `subtask_id` before any other `attempt_started` — this is the machine-checkable
+  form of "one subtask at a time, verified before the next".
+- Payloads embed the models above verbatim; the journal is the source of truth
+  for resume and for the report.
+
+## Config
+
+`gsd.toml` (or `[tool.gsd]` in `pyproject.toml`), resolved config ⊕ CLI flags:
+
+```toml
+[gsd]
+todo_path       = "todo.md"
+max_subtasks    = 12
+max_repairs     = 2
+subtask_timeout_s = 900
+halt_on_fail    = false
+commit_on_complete = false
+capabilities    = ["read_fs", "write_fs", "run_commands"]   # network NOT default
+evidence_head_bytes = 4000
+
+[gsd.harness]
+agent = "claude"
+model = "sonnet"
+
+[gsd.commands]
+allow = ["python3", "pytest", "ruff", "git", "make"]        # argv[0] allow-list
+deny  = ["curl", "wget", "ssh", "scp"]
+```
+
+`deny` wins over `allow`. An argv[0] outside `allow` is refused at execution
+time with `capability_denied`, before the process is spawned.
