@@ -1,0 +1,203 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Stage 5 — Execute: run exactly one subtask via the agent harness.
+
+Public API
+----------
+execute()  – dispatch one subtask, journal attempt_started + attempt_finished,
+             and return an Attempt.  Never marks a subtask successful — the
+             verdict comes from Stage 6 (verify).
+
+The agent's own "I'm done" is stored as ``agent_claim`` on the attempt, never
+as the outcome.  Only a passing verification produces a passed subtask (AC5.5).
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from .clock import stamp
+from .config import Config
+from .harness import AgentResult
+from .harness import run_agent as _default_run_agent
+from .journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, Journal
+from .models import Attempt, HarnessInfo, Subtask, TodoItem, VerificationResult
+
+# ---------------------------------------------------------------------------
+# Prompt construction
+# ---------------------------------------------------------------------------
+
+
+def _prior_evidence_block(prior_evidence: list[VerificationResult]) -> str:
+    """Format prior subtask evidence for the execution prompt (AC5.3)."""
+    if not prior_evidence:
+        return ""
+    lines = ["\nVerified prior subtasks (evidence from earlier steps):"]
+    for vr in prior_evidence:
+        lines.append(f"\n  [{vr.subtask_id}] {vr.verdict.value} — {vr.summary}")
+        ev = vr.evidence
+        stdout_head = str(ev.get("stdout_head", ""))
+        if stdout_head:
+            lines.append(f"    stdout: {stdout_head[:200]}")
+    return "\n".join(lines)
+
+
+def _build_prompt(
+    subtask: Subtask,
+    item: TodoItem,
+    prior_evidence: list[VerificationResult],
+) -> str:
+    ctx_block = ("\nContext:\n" + "\n".join(item.context)) if item.context else ""
+    evidence_block = _prior_evidence_block(prior_evidence)
+    return (
+        "You are executing exactly one subtask of a larger todo item.\n\n"
+        f"Todo item: {item.text}{ctx_block}\n\n"
+        f"Subtask {subtask.index + 1}: {subtask.description}\n\n"
+        "Execute ONLY this subtask. Do not proceed to subsequent subtasks."
+        f"{evidence_block}\n\n"
+        "When done, summarise what you did in one sentence."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helper: best-effort list of files touched by git
+# ---------------------------------------------------------------------------
+
+
+def _files_touched(cwd: Path) -> tuple[str, ...]:
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+            check=False,
+        )
+        files: list[str] = []
+        for line in proc.stdout.splitlines():
+            if line.strip():
+                files.append(line[3:].strip())
+        return tuple(files)
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def execute(
+    subtask: Subtask,
+    *,
+    item: TodoItem,
+    prior_evidence: list[VerificationResult],
+    config: Config,
+    journal: Journal,
+    cwd: Path,
+    run_dir: Path,
+    attempt_no: int = 0,
+    _run_agent: Any | None = None,
+) -> Attempt:
+    """Execute *subtask* via the agent harness.
+
+    Journals ``attempt_started`` before the harness is invoked and
+    ``attempt_finished`` after it returns (AC5.4).  Returns an :class:`Attempt`
+    whose ``agent_claim`` is the last non-empty stdout line — a claim only,
+    never a verdict (AC5.5).
+
+    Parameters
+    ----------
+    subtask:       The one subtask to execute.
+    item:          Parent todo item (used to build the prompt context).
+    prior_evidence: Verified results from earlier subtasks (AC5.3).
+    config:        Resolved run config (harness, timeout, …).
+    journal:       Append-only run journal.
+    cwd:           Working directory for the agent subprocess.
+    run_dir:       Directory for artefact files (transcripts).
+    attempt_no:    0 for the initial attempt; 1..n for repairs.
+    _run_agent:    Injectable harness callable for tests (default: harness.run_agent).
+    """
+    runner = _run_agent if _run_agent is not None else _default_run_agent
+
+    harness_info = HarnessInfo(
+        agent=config.harness.agent,
+        model=config.harness.model,
+        harness=config.harness.agent,
+        invoked_as=config.harness.agent,
+    )
+
+    prompt = _build_prompt(subtask, item, prior_evidence)
+    started_at = stamp()
+
+    # Journal attempt_started BEFORE the agent runs (AC5.4).
+    journal.append(
+        ATTEMPT_STARTED,
+        subtask_id=subtask.subtask_id,
+        item_id=item.item_id,
+        payload={
+            "attempt_no": attempt_no,
+            "started_at": started_at,
+            "harness": {
+                "agent": harness_info.agent,
+                "model": harness_info.model,
+            },
+        },
+    )
+
+    result: AgentResult = runner(
+        prompt,
+        cwd=cwd,
+        capabilities=subtask.capabilities,
+        timeout_s=config.subtask_timeout_s,
+        harness=harness_info,
+    )
+
+    finished_at = stamp()
+    touched = _files_touched(cwd)
+
+    # Write agent transcript as an artefact file.
+    artefacts_dir = run_dir / "artifacts"
+    artefacts_dir.mkdir(parents=True, exist_ok=True)
+    transcript_name = f"{subtask.subtask_id.replace('#', '-')}-attempt-{attempt_no}.txt"
+    transcript_path = artefacts_dir / transcript_name
+    transcript_path.write_text(
+        f"=== stdout ===\n{result.stdout}\n=== stderr ===\n{result.stderr}\n",
+        encoding="utf-8",
+    )
+
+    error: str | None = None
+    if result.timed_out:
+        error = "timed_out"
+    elif result.exit_status not in (0, None):
+        error = f"exit_status={result.exit_status}"
+
+    journal.append(
+        ATTEMPT_FINISHED,
+        subtask_id=subtask.subtask_id,
+        item_id=item.item_id,
+        payload={
+            "attempt_no": attempt_no,
+            "finished_at": finished_at,
+            "exit_status": result.exit_status,
+            "timed_out": result.timed_out,
+            "agent_claim": result.agent_claim,
+            "files_touched": list(touched),
+            "error": error,
+        },
+    )
+
+    return Attempt(
+        attempt_no=attempt_no,
+        started_at=started_at,
+        finished_at=finished_at,
+        harness=harness_info,
+        agent_claim=result.agent_claim,
+        transcript_path=str(transcript_path),
+        exit_status=result.exit_status,
+        files_touched=touched,
+        error=error,
+    )
