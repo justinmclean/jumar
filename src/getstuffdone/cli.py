@@ -41,8 +41,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan_p.add_argument("--todo", default=None, metavar="PATH", help="Override the todo file path.")
 
+    # run — gate flags introduced in Phase 2 (gate-modes work item)
+    run_p = subs.add_parser("run", help="Run the next eligible todo item.")
+    run_p.add_argument("--todo", default=None, metavar="PATH", help="Override the todo file path.")
+    _mode_group = run_p.add_mutually_exclusive_group()
+    _mode_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan and exit without executing anything.",
+    )
+    _mode_group.add_argument(
+        "--approve",
+        action="store_true",
+        help="Print the plan and wait for human approval before executing.",
+    )
+    run_p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Disable all interactive prompts (required for scheduled / headless runs).",
+    )
+
     # stubs — accepting the subcommand name is enough for smoke tests
-    for cmd in ("run", "resume", "report", "schedule", "doctor"):
+    for cmd in ("resume", "report", "schedule", "doctor"):
         subs.add_parser(cmd)
 
     return parser
@@ -56,6 +76,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "plan":
         return _cmd_plan(args)
+    if args.command == "run":
+        return _cmd_run(args)
     print(f"gsd {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
     return 2
 
@@ -149,6 +171,34 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             print(f"  - {item.text!r}  [{reason}]")
 
     return 0
+
+
+# ---------------------------------------------------------------------------
+# run subcommand
+# ---------------------------------------------------------------------------
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """Implement ``gsd run [--dry-run | --approve] [--non-interactive]``."""
+    from .gate import GateMode, GateStartupError, check_startup_flags
+
+    if getattr(args, "dry_run", False):
+        mode = GateMode.dry_run
+    elif getattr(args, "approve", False):
+        mode = GateMode.approve
+    else:
+        mode = GateMode.auto
+
+    non_interactive: bool = getattr(args, "non_interactive", False)
+
+    try:
+        check_startup_flags(mode, non_interactive=non_interactive)
+    except GateStartupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print("gsd run: full pipeline not yet implemented — see IMPLEMENTATION_PLAN.md")
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover
