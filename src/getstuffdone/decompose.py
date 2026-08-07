@@ -22,10 +22,10 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .clock import stamp
 from .config import Config
 from .harness import AgentResult
 from .harness import run_agent as _default_run_agent
@@ -422,7 +422,7 @@ def decompose(
 
         if rejection is None:
             # Success — journal the full plan before returning (AC3.6).
-            created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            created_at = stamp()
             plan = Plan(
                 item_id=item.item_id,
                 subtasks=subtasks,
