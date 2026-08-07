@@ -45,6 +45,7 @@ class VerifyContext:
     judge_timeout_s: int = 300
     # Injectable agent runner for tests (default: harness.run_agent).
     judge_run_agent: Any | None = field(default=None, compare=False, hash=False)
+    non_interactive: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -121,8 +122,10 @@ from .command import verify_command as _verify_command  # noqa: E402
 from .file import verify_absence as _verify_absence  # noqa: E402
 from .file import verify_file as _verify_file  # noqa: E402
 from .judge import verify_judge as _verify_judge  # noqa: E402
+from .manual import verify_manual as _verify_manual  # noqa: E402
 
 register(CheckKind.command, _verify_command)
 register(CheckKind.file, _verify_file)
 register(CheckKind.absence, _verify_absence)
 register(CheckKind.judge, _verify_judge)
+register(CheckKind.manual, _verify_manual)
