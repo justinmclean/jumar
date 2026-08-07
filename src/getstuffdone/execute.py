@@ -101,6 +101,7 @@ def execute(
     run_dir: Path,
     attempt_no: int = 0,
     _run_agent: Any | None = None,
+    prompt_override: str | None = None,
 ) -> Attempt:
     """Execute *subtask* via the agent harness.
 
@@ -111,15 +112,16 @@ def execute(
 
     Parameters
     ----------
-    subtask:       The one subtask to execute.
-    item:          Parent todo item (used to build the prompt context).
-    prior_evidence: Verified results from earlier subtasks (AC5.3).
-    config:        Resolved run config (harness, timeout, …).
-    journal:       Append-only run journal.
-    cwd:           Working directory for the agent subprocess.
-    run_dir:       Directory for artefact files (transcripts).
-    attempt_no:    0 for the initial attempt; 1..n for repairs.
-    _run_agent:    Injectable harness callable for tests (default: harness.run_agent).
+    subtask:         The one subtask to execute.
+    item:            Parent todo item (used to build the prompt context).
+    prior_evidence:  Verified results from earlier subtasks (AC5.3).
+    config:          Resolved run config (harness, timeout, …).
+    journal:         Append-only run journal.
+    cwd:             Working directory for the agent subprocess.
+    run_dir:         Directory for artefact files (transcripts).
+    attempt_no:      0 for the initial attempt; 1..n for repairs.
+    _run_agent:      Injectable harness callable for tests (default: harness.run_agent).
+    prompt_override: When set, replaces the default prompt (used by repair.py).
     """
     runner = _run_agent if _run_agent is not None else _default_run_agent
 
@@ -130,7 +132,11 @@ def execute(
         invoked_as=config.harness.agent,
     )
 
-    prompt = _build_prompt(subtask, item, prior_evidence)
+    prompt = (
+        prompt_override
+        if prompt_override is not None
+        else _build_prompt(subtask, item, prior_evidence)
+    )
     started_at = stamp()
 
     # Journal attempt_started BEFORE the agent runs (AC5.4).
