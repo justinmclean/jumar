@@ -15,7 +15,11 @@ from getstuffdone.models import (
     ItemResult,
     ItemStatus,
     Plan,
+    Recurrence,
+    RecurUnit,
     Run,
+    Schedule,
+    ScheduleBackend,
     Subtask,
     SubtaskStatus,
     TodoItem,
@@ -38,6 +42,7 @@ def test_item_status_members() -> None:
         "blocked",
         "skipped_by_human",
         "inconclusive",
+        "deferred",
     }
 
 
@@ -73,6 +78,8 @@ def test_failure_code_members() -> None:
         "repairs_exhausted",
         "harness_error",
         "dependency_blocked",
+        "bad_schedule",
+        "already_running",
     }
 
 
@@ -456,3 +463,181 @@ def test_run_construction() -> None:
     assert run.mode == "auto"
     assert run.finished_at is None
     assert run.warnings == ()
+
+
+# ---------------------------------------------------------------------------
+# RecurUnit, ScheduleBackend
+# ---------------------------------------------------------------------------
+
+
+def test_recur_unit_members() -> None:
+    assert {e.value for e in RecurUnit} == {"day", "week", "month", "weekday", "dow"}
+
+
+def test_schedule_backend_members() -> None:
+    assert {e.value for e in ScheduleBackend} == {"cron", "launchd", "systemd"}
+
+
+# ---------------------------------------------------------------------------
+# Recurrence invariants
+# ---------------------------------------------------------------------------
+
+
+def test_recurrence_valid_daily() -> None:
+    r = Recurrence(unit=RecurUnit.day, interval=1, days=())
+    assert r.interval == 1
+    assert r.days == ()
+
+
+def test_recurrence_valid_weekly() -> None:
+    r = Recurrence(unit=RecurUnit.week, interval=2, days=())
+    assert r.unit is RecurUnit.week
+    assert r.interval == 2
+
+
+def test_recurrence_valid_weekday() -> None:
+    r = Recurrence(unit=RecurUnit.weekday, interval=1, days=())
+    assert r.unit is RecurUnit.weekday
+
+
+def test_recurrence_valid_dow() -> None:
+    r = Recurrence(unit=RecurUnit.dow, interval=1, days=("mon", "thu"))
+    assert r.days == ("mon", "thu")
+
+
+def test_recurrence_rejects_interval_zero() -> None:
+    with pytest.raises(ValueError, match="interval"):
+        Recurrence(unit=RecurUnit.day, interval=0, days=())
+
+
+def test_recurrence_rejects_interval_negative() -> None:
+    with pytest.raises(ValueError, match="interval"):
+        Recurrence(unit=RecurUnit.day, interval=-1, days=())
+
+
+def test_recurrence_dow_requires_non_empty_days() -> None:
+    with pytest.raises(ValueError, match="days"):
+        Recurrence(unit=RecurUnit.dow, interval=1, days=())
+
+
+def test_recurrence_is_frozen() -> None:
+    r = Recurrence(unit=RecurUnit.day, interval=1, days=())
+    with pytest.raises((AttributeError, TypeError)):
+        r.interval = 99  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Schedule invariants
+# ---------------------------------------------------------------------------
+
+
+def test_schedule_valid_not_before() -> None:
+    s = Schedule(
+        not_before="2026-08-11T00:00:00+00:00",
+        not_before_literal="2026-08-11",
+        due=None,
+        due_literal=None,
+        recur=None,
+        tz="UTC",
+    )
+    assert s.not_before == "2026-08-11T00:00:00+00:00"
+    assert s.not_before_literal == "2026-08-11"
+
+
+def test_schedule_valid_due() -> None:
+    s = Schedule(
+        not_before=None,
+        not_before_literal=None,
+        due="2026-08-14T00:00:00+00:00",
+        due_literal="2026-08-14",
+        recur=None,
+        tz="UTC",
+    )
+    assert s.due == "2026-08-14T00:00:00+00:00"
+
+
+def test_schedule_valid_with_recurrence() -> None:
+    recur = Recurrence(unit=RecurUnit.weekday, interval=1, days=())
+    s = Schedule(
+        not_before=None,
+        not_before_literal=None,
+        due=None,
+        due_literal=None,
+        recur=recur,
+        tz="Australia/Sydney",
+    )
+    assert s.recur is not None
+    assert s.recur.unit is RecurUnit.weekday
+
+
+def test_schedule_rejects_naive_not_before() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        Schedule(
+            not_before="2026-08-11T00:00:00",
+            not_before_literal="2026-08-11",
+            due=None,
+            due_literal=None,
+            recur=None,
+            tz="UTC",
+        )
+
+
+def test_schedule_rejects_naive_due() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        Schedule(
+            not_before=None,
+            not_before_literal=None,
+            due="2026-08-14T00:00:00",
+            due_literal="2026-08-14",
+            recur=None,
+            tz="UTC",
+        )
+
+
+def test_schedule_rejects_invalid_not_before_string() -> None:
+    with pytest.raises(ValueError):
+        Schedule(
+            not_before="not-a-date",
+            not_before_literal="not-a-date",
+            due=None,
+            due_literal=None,
+            recur=None,
+            tz="UTC",
+        )
+
+
+def test_schedule_is_frozen() -> None:
+    s = Schedule(
+        not_before=None,
+        not_before_literal=None,
+        due=None,
+        due_literal=None,
+        recur=None,
+        tz="UTC",
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        s.tz = "mutated"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# TodoItem with schedule field
+# ---------------------------------------------------------------------------
+
+
+def test_todo_item_default_schedule_is_none() -> None:
+    item = _make_todo_item()
+    assert item.schedule is None
+
+
+def test_todo_item_with_schedule() -> None:
+    schedule = Schedule(
+        not_before="2026-08-11T00:00:00+00:00",
+        not_before_literal="2026-08-11",
+        due=None,
+        due_literal=None,
+        recur=None,
+        tz="UTC",
+    )
+    item = _make_todo_item(schedule=schedule)
+    assert item.schedule is not None
+    assert item.schedule.not_before == "2026-08-11T00:00:00+00:00"

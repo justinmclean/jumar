@@ -24,6 +24,7 @@ class ItemStatus(enum.StrEnum):
     blocked = "blocked"
     skipped_by_human = "skipped_by_human"
     inconclusive = "inconclusive"
+    deferred = "deferred"
 
 
 class SubtaskStatus(enum.StrEnum):
@@ -67,10 +68,75 @@ class FailureCode(enum.StrEnum):
     repairs_exhausted = "repairs_exhausted"
     harness_error = "harness_error"
     dependency_blocked = "dependency_blocked"
+    bad_schedule = "bad_schedule"
+    already_running = "already_running"
+
+
+class RecurUnit(enum.StrEnum):
+    day = "day"
+    week = "week"
+    month = "month"
+    weekday = "weekday"
+    dow = "dow"
+
+
+class ScheduleBackend(enum.StrEnum):
+    cron = "cron"
+    launchd = "launchd"
+    systemd = "systemd"
 
 
 # Strings that must never appear as Check.statement — the anti-"trust me" guard.
 _PLACEHOLDER_STATEMENTS: frozenset[str] = frozenset({"", "n/a", "none", "TODO", "verify manually"})
+
+
+# ---------------------------------------------------------------------------
+# Schedule shapes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Recurrence:
+    """Recurrence rule parsed from @every= token."""
+
+    unit: RecurUnit
+    interval: int
+    days: tuple[str, ...]  # non-empty only when unit=dow
+
+    def __post_init__(self) -> None:
+        if self.interval < 1:
+            raise ValueError("Recurrence.interval must be >= 1")
+        if self.unit is RecurUnit.dow and not self.days:
+            raise ValueError("unit=dow requires a non-empty days list")
+
+
+@dataclass(frozen=True)
+class Schedule:
+    """Item-level eligibility parsed from @not-before / @due / @every tokens."""
+
+    not_before: str | None
+    not_before_literal: str | None
+    due: str | None
+    due_literal: str | None
+    recur: Recurrence | None
+    tz: str  # IANA zone used to resolve bare dates
+
+    def __post_init__(self) -> None:
+        import datetime as _datetime
+
+        for fname, val in [("not_before", self.not_before), ("due", self.due)]:
+            if val is None:
+                continue
+            try:
+                parsed = _datetime.datetime.fromisoformat(val)
+            except ValueError:
+                raise ValueError(
+                    f"Schedule.{fname} is not a valid ISO-8601 datetime: {val!r}"
+                ) from None
+            if parsed.tzinfo is None:
+                raise ValueError(
+                    f"Schedule.{fname} must be a timezone-aware UTC instant, got naive: {val!r}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +201,7 @@ class TodoItem:
     priority: int | None
     depends: tuple[str, ...]
     capabilities: frozenset[Capability]
+    schedule: Schedule | None = None
 
 
 @dataclass(frozen=True)
