@@ -20,7 +20,10 @@ def test_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
 
 @pytest.mark.parametrize("command", SUBCOMMANDS)
 def test_known_subcommands_parse(command: str) -> None:
-    assert build_parser().parse_args([command]).command == command
+    # resume and report require a run_id positional; supply a stub.
+    _NEEDS_RUN_ID = {"resume", "report"}
+    argv = [command, "stub-run-id"] if command in _NEEDS_RUN_ID else [command]
+    assert build_parser().parse_args(argv).command == command
 
 
 def test_unimplemented_subcommand_reports_nonzero() -> None:
