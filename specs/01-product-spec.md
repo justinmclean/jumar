@@ -53,9 +53,12 @@ team task-management product.
    contents, a test run) — never the executing agent's self-report alone.
 5. **Gate** progress on that verification: a failed check blocks the next
    subtask, triggers a bounded number of repair attempts, then stops the item.
-6. **Journal** every decomposition, execution, and verification to durable state
+6. **Schedule** work in two dimensions: *when an item becomes eligible*
+   (not-before, due, recurring) and *when the tool runs at all* (a cadence the
+   tool installs into the operating system's own scheduler).
+7. **Journal** every decomposition, execution, and verification to durable state
    so a run is resumable, auditable, and never silently redoes finished work.
-7. **Be spec-driven about itself** — the system's own behaviour is described in
+8. **Be spec-driven about itself** — the system's own behaviour is described in
    `specs/`, and its own code is built by a spec loop reconciling code against
    those specs (see `04-technical-plan.md`).
 
@@ -63,8 +66,13 @@ team task-management product.
 
 - **Not** a shared/team task tracker, and **not** a sync client for Jira, Asana,
   Todoist, or similar. The todo list is a local file.
-- **Not** a scheduler or daemon. Runs are started by the human (or by their own
-  cron), not by a resident service.
+- **Not** a resident daemon. Scheduling is real (see Goal 6), but it is
+  delegated: `gsd schedule` generates and installs a `cron`/`launchd`/systemd
+  entry that invokes `gsd run`, and the process exits. There is no long-lived
+  GetStuffDone service holding state in memory.
+- **Not** a calendar. Item scheduling expresses *eligibility* ("not before
+  Monday", "every weekday"), not appointments, invitations, or reminders to a
+  human.
 - **Not** an unattended actor on the outside world: no sending mail, no pushing
   branches, no opening PRs, no purchases. Side effects reach outward only
   through steps the human explicitly enabled.
@@ -90,6 +98,13 @@ like; 02 says what a test can check.
   did not pass, in language I can act on.
 - A dry run shows me the full decomposition — subtasks and their checks — before
   anything is executed, so I can veto a bad plan cheaply.
+- I can say "this item isn't eligible until Monday" or "do this every weekday"
+  in the todo line itself, and an unattended run **respects that without me
+  being there** — a not-yet-eligible item is deferred, never quietly done early.
+- I can install a recurring run with one command, see exactly what will be
+  installed before it is, and remove it just as easily.
+- An unattended scheduled run never blocks on a prompt: anything needing a human
+  ends `inconclusive` and waits, rather than being auto-passed or auto-skipped.
 - Adding a new kind of check (a new verifier) does not require touching the
   execution engine.
 
@@ -108,5 +123,12 @@ like; 02 says what a test can check.
   next one starts, so the durable record is always ahead of the side effects.
 - **Least authority.** Default to a sandboxed, no-network, no-push execution
   context; capability is granted per-item, explicitly, in config.
+- **Time is an eligibility gate, not a trigger to hurry.** A due date changes
+  what is *selected*; it never relaxes a check, shortens a plan, or licenses
+  skipping verification. Nothing about being late makes unproven work
+  acceptable.
+- **Scheduling is delegated, not reinvented.** The operating system already has
+  a reliable scheduler; GetStuffDone writes an entry to it and gets out of the
+  way.
 - **Config over code.** Adjusting decomposition depth, retry budgets, allowed
   tools, or the verification policy is a config change, not a code change.

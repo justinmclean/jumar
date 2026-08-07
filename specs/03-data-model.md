@@ -15,7 +15,7 @@ model here.
 
 ```
 ItemStatus    = pending | in_progress | done | failed | blocked
-              | skipped_by_human | inconclusive
+              | skipped_by_human | inconclusive | deferred
 SubtaskStatus = pending | running | passed | failed | inconclusive | skipped
 CheckKind     = command | file | absence | judge | manual
 Verdict       = passed | failed | inconclusive
@@ -23,6 +23,9 @@ Capability    = read_fs | write_fs | run_commands | network | git_commit
 FailureCode   = unverifiable_plan | plan_too_long | invalid_plan
               | capability_denied | timed_out | check_failed
               | repairs_exhausted | harness_error | dependency_blocked
+              | bad_schedule | already_running
+RecurUnit     = day | week | month | weekday | dow      # dow = named weekdays
+ScheduleBackend = cron | launchd | systemd
 ```
 
 `Capability` is deliberately coarse. Fine-grained allow-lists (which commands,
@@ -45,9 +48,41 @@ Produced by stage 1 (ingest).
 | `priority` | int \| None | from `@priority` |
 | `depends` | list[str] | item_ids from `@depends` (comma-separated) |
 | `capabilities` | set[Capability] | granted set: config default ∪ `@capability` |
+| `schedule` | Schedule \| None | parsed `@not-before` / `@due` / `@every` |
 
 `decomposition` is derived: `authored` when `authored_subtasks` is non-empty,
 else `model`.
+
+## Schedule
+
+Item-level **eligibility**, parsed by stage 1, consumed by stage 2 and
+maintained by stage 8. Not a calendar entry: it says when an item may be worked,
+not when a human should be somewhere.
+
+| field | type | notes |
+|---|---|---|
+| `not_before` | str \| None | ISO-8601 **UTC** instant; item is ineligible before it |
+| `not_before_literal` | str \| None | the original `@not-before=` text, kept so the line can be rewritten faithfully |
+| `due` | str \| None | ISO-8601 UTC; advisory — affects ordering and reporting only |
+| `due_literal` | str \| None | original `@due=` text |
+| `recur` | Recurrence \| None | from `@every=` |
+| `tz` | str | IANA zone used to resolve bare dates (e.g. `Australia/Sydney`) |
+
+`Recurrence` = `{unit: RecurUnit, interval: int, days: list[str]}` — `@every=2w`
+is `{week, 2, []}`, `@every=weekday` is `{weekday, 1, []}`, `@every=mon,thu` is
+`{dow, 1, ["mon","thu"]}`.
+
+Invariants (enforced in `models.py`, tested):
+
+- `not_before` and `due`, when present, are timezone-aware UTC instants — a
+  naive datetime never enters the model.
+- `due` is advisory. **Nothing in the codebase may branch on `due` other than
+  ordering (stage 2) and reporting (stage 9).** A lateness check that skipped
+  verification would invert the product's whole premise; a test asserts `due` is
+  not read by `decompose`, `execute`, `verify`, or `repair`.
+- `recur` requires `interval >= 1`; `unit=dow` requires a non-empty `days`.
+- A `Schedule` that fails to parse is never constructed — stage 1 raises
+  `bad_schedule` for that item instead of building a partial one.
 
 ## Check
 
@@ -141,13 +176,50 @@ Evidence by kind:
 | `run_id` | str | `<UTC timestamp>-<6 random chars>` |
 | `todo_path` | str | |
 | `mode` | str | `auto` \| `dry-run` \| `approve` |
+| `interactive` | bool | false for scheduled runs |
+| `trigger` | str | `human` \| `schedule:<schedule-id>` |
+| `now` | str | the single eligibility instant for the whole run (ISO-8601 UTC) |
+| `tz` | str | resolved local zone, recorded so a report is interpretable later |
 | `config` | dict | resolved effective config, for reproducibility |
 | `started_at` / `finished_at` | str | |
 | `items` | list[ItemResult] | |
 | `warnings` | list[str] | ingest parse warnings etc. |
 
 `ItemResult` = `{item_id, status, plan, failure_code, failed_subtask_index,
-verifications}`.
+verifications, eligible_at, was_overdue, next_occurrence}` — `eligible_at` is
+set on a `deferred` item, `next_occurrence` on a completed recurring one.
+
+## ScheduleEntry
+
+A recurring invocation of `gsd run` installed in the OS scheduler (stage 10).
+GetStuffDone owns the record; the scheduler owns the firing.
+
+| field | type | notes |
+|---|---|---|
+| `schedule_id` | str | short slug; also the marker used to delimit the owned block |
+| `cron` | str | 5-field expression, interpreted in `tz` |
+| `tz` | str | resolved IANA zone, recorded at install time |
+| `backend` | ScheduleBackend | |
+| `todo_path` | str | absolute |
+| `config_path` | str \| None | absolute |
+| `command` | list[str] | the exact argv installed, absolute `gsd`, always including `--non-interactive` |
+| `log_path` | str | where the entry redirects stdout/stderr |
+| `installed_at` | str | ISO-8601 UTC |
+
+Invariants:
+
+- `command[0]` is absolute; `todo_path` and `config_path` are absolute.
+- `--non-interactive` is present in `command`; `--approve` is absent.
+- `schedule_id` matches `[a-z0-9-]{1,32}` — it lands in a crontab comment marker
+  and must not be able to break out of it.
+
+## RunLock
+
+Single-flight guard for a todo path (AC10.5, AC10.6).
+
+`{todo_path, run_id, pid, hostname, acquired_at}` — written to
+`runs/.lock-<hash of todo_path>`. A lock whose `pid` is not live is **stale** and
+may be reclaimed, with the reclaim journalled.
 
 ## HarnessInfo
 
@@ -163,9 +235,14 @@ One JSON object per line in `runs/<run-id>/journal.jsonl`:
  "item_id": "...", "subtask_id": "...", "payload": { ... }}
 ```
 
-`event` ∈ `run_started | item_selected | plan_created | plan_rejected |
-gate_decision | attempt_started | attempt_finished | verification |
-repair_started | item_completed | item_failed | run_finished`.
+`event` ∈ `run_started | item_selected | item_deferred | plan_created |
+plan_rejected | gate_decision | attempt_started | attempt_finished |
+verification | repair_started | item_completed | item_failed |
+schedule_advanced | lock_reclaimed | run_finished`.
+
+`run_started` carries the run's `now`, `tz`, `trigger`, and `interactive` flag —
+which is what makes an eligibility decision reproducible after the fact, and what
+a resume replays instead of re-reading the clock (AC-S4).
 
 Invariants:
 
@@ -183,6 +260,7 @@ Invariants:
 ```toml
 [gsd]
 todo_path       = "todo.md"
+timezone        = "Australia/Sydney"   # resolves bare dates; defaults to system zone
 max_subtasks    = 12
 max_repairs     = 2
 subtask_timeout_s = 900
@@ -194,6 +272,11 @@ evidence_head_bytes = 4000
 [gsd.harness]
 agent = "claude"
 model = "sonnet"
+
+[gsd.schedule]
+backend    = "auto"        # auto | cron | launchd | systemd
+log_dir    = "runs/logs"
+lock_dir   = "runs"
 
 [gsd.commands]
 allow = ["python3", "pytest", "ruff", "git", "make"]        # argv[0] allow-list

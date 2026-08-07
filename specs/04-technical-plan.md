@@ -20,11 +20,13 @@ status: proposed
 ```
 src/getstuffdone/
   __init__.py
-  cli.py            # `gsd` entry point: run / plan / resume / report / doctor
+  cli.py            # `gsd` entry point: run / plan / resume / report / schedule / doctor
   config.py         # gsd.toml + CLI flag resolution, capability + argv policy
   models.py         # every shape in 03-data-model.md, with invariants
   ingest.py         # stage 1
-  select.py         # stage 2
+  select.py         # stage 2 (time + dependency eligibility)
+  clock.py          # the run's single `now`, tz resolution, injectable for tests
+  recurrence.py     # @every parsing + next-occurrence arithmetic
   decompose.py      # stage 3
   gate.py           # stage 4
   execute.py        # stage 5
@@ -37,6 +39,8 @@ src/getstuffdone/
   repair.py         # stage 7
   complete.py       # stage 8 (checkbox flip, optional per-item commit)
   report.py         # stage 9
+  schedule.py       # stage 10: cron/launchd/systemd install, list, remove
+  lock.py           # single-flight run lock, stale-lock reclaim
   journal.py        # append-only journal + replay/resume
   harness.py        # agent CLI abstraction (see below)
 tests/              # one module per stage, plus fixtures/ and golden/
@@ -99,6 +103,49 @@ The `judge` verifier is the delicate one. Its contract:
 - It returns structured `{verdict, reason, artefacts_shown}`; an unparseable
   response is `inconclusive`, not a pass.
 
+## Time, clocks, and scheduling
+
+Two independent mechanisms, deliberately not conflated:
+
+**Item eligibility** (`clock.py`, `recurrence.py`, consumed by `select.py`) —
+*which* items may be worked. **Run scheduling** (`schedule.py`) — *when the
+process starts at all*. The first is in-process and unit-testable; the second is
+delegated to the OS.
+
+Rules that make the time logic testable and safe:
+
+- **One clock, injected.** Nothing calls `datetime.now()` outside `clock.py`.
+  The run captures `now` once, journals it, and passes it down. A test asserts no
+  other module imports a wall-clock call — the same discipline the spec loop
+  needs for reproducible replay, for the same reason.
+- **UTC internally, local at the edges.** Bare dates are resolved in the
+  configured IANA zone at parse time; everything downstream is timezone-aware
+  UTC. Naive datetimes never enter the model.
+- **DST is a parsing concern, not an arithmetic one.** Recurrence arithmetic
+  operates on local wall-clock intent ("every weekday at 09:00") and re-resolves
+  to UTC per occurrence, so a daily item does not drift an hour twice a year.
+  Non-existent and ambiguous local times (the DST gap and fold) resolve
+  forward, deterministically, and the choice is tested rather than inherited
+  from whatever the platform does.
+- **No catch-up storms.** A missed recurrence advances to the next occurrence
+  after `now`, never a backlog (AC8.6). Executed work is not a counter.
+- **Single-flight.** `lock.py` guards a todo path with a PID-stamped lock file so
+  two cron firings cannot run agents over the same tree concurrently. Stale
+  locks are reclaimed and the reclaim is journalled — a lock that can only be
+  cleared by hand turns one crash into a silently dead schedule.
+- **Scheduled runs are non-interactive by construction**, so `manual` checks are
+  `inconclusive` rather than a hung headless process, and `--approve` is refused
+  at startup (AC4.4).
+- **`due` is inert outside ordering and reporting.** A test asserts that
+  `decompose`, `execute`, `verify`, and `repair` never read it. Deadline
+  pressure must not be able to reach the verification path — that is the one
+  coupling that would quietly turn this into the thing it was built to replace.
+
+The scheduler backends write into files the user also owns (a crontab, a
+LaunchAgents plist), so every write is delimited by `gsd <schedule-id>` markers
+and `remove` only ever edits between its own markers. Unrecognised lines are
+never reformatted.
+
 ## Ordering and concurrency
 
 v1 is strictly sequential: one item, one subtask, one verification at a time.
@@ -121,10 +168,18 @@ invariant — it would be reformulated per dependency chain, not dropped.
   never before it in the build order.
 - **Phase 4 — completion.** `complete.py` (checkbox flip, per-item branch
   commit), `report.py`, `gsd resume`.
+- **Phase 4b — item scheduling.** `clock.py`, `recurrence.py`, the eligibility
+  gate in `select.py`, and recurrence advance in `complete.py`. Lands *after*
+  completion because recurrence rewrites the same line the checkbox flip does,
+  and *before* run scheduling because an unattended run with no eligibility gate
+  would just redo everything nightly.
 - **Phase 5 — the remaining verifiers.** `verify/judge.py`,
   `verify/absence.py`, `verify/manual.py`.
-- **Phase 6 — polish.** `gsd doctor` (config + harness + allow-list sanity),
-  richer reports, evidence artefact pruning.
+- **Phase 5b — run scheduling.** `lock.py`, then `schedule.py` with the cron
+  backend, then launchd/systemd. The lock ships first: installing a recurring
+  run before single-flight exists is how you get two agents editing one tree.
+- **Phase 6 — polish.** `gsd doctor` (config + harness + allow-list + installed
+  schedule sanity), richer reports, evidence artefact pruning.
 
 **Sequencing rule:** no phase that executes work may land before the
 verification it depends on. Phase 3 ships `execute` and `verify` together, in
@@ -145,8 +200,19 @@ one work item or two strictly-ordered ones.
   commands. Same rule as the spec loop, for the same reason.
 - **Bounded repairs over unbounded retry.** An agent that cannot pass a check in
   three tries is not converging; more attempts mostly produce more damage.
+- **Scheduling is delegated to the OS.** Writing a scheduler means reimplementing
+  wake-from-sleep, missed-fire policy, boot ordering, and user sessions — all of
+  which cron/launchd/systemd already do better. GetStuffDone writes an entry and
+  exits.
+- **Eligibility lives in the todo line, not a sidecar file.** `@not-before=` and
+  `@every=` stay visible where the human edits them; a separate schedule store
+  would drift from the list it describes.
+- **The run path is identical whether a human or cron started it.** `trigger` is
+  recorded for the journal, but no behaviour branches on it except interactivity
+  — one code path is one set of bugs.
 - **Deferred:** parallel subtasks, cross-item planning, non-Markdown inputs,
-  external task-tracker sync, a resident daemon.
+  external task-tracker sync, a resident daemon, Windows Task Scheduler,
+  calendar/ICS import, notification delivery on failure.
 
 ## Testing strategy
 
@@ -156,7 +222,15 @@ one work item or two strictly-ordered ones.
 - **Golden journals**: fixture runs whose `journal.jsonl` is asserted whole,
   which is how the ordering invariants stay honest.
 - **Negative tests are first-class**: unverifiable plans, self-modified checks,
-  ungranted capabilities, missing verifier binaries, corrupt journals. The
-  product is a refusal machine; most of its value is in the paths where it says
-  no.
+  ungranted capabilities, missing verifier binaries, corrupt journals,
+  unparseable schedule tokens, concurrent runs. The product is a refusal
+  machine; most of its value is in the paths where it says no.
+- **Time is always injected, never real.** Every scheduling test runs against a
+  frozen or scripted clock and a fixed timezone, including explicit DST-gap and
+  DST-fold cases. A test that reads the real clock is a flaky test waiting for
+  the last Sunday in October.
+- **Scheduler backends are tested against a fake backend** that records what
+  would be written, plus a round-trip test over a fixture crontab containing
+  unrelated user entries, asserting they survive install and remove
+  byte-identical.
 - Coverage floor enforced in CI once Phase 1 lands; every module ≥ 90%.

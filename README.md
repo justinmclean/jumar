@@ -14,11 +14,16 @@ and says exactly which subtask and which check failed.
 The unit of trust is the verified subtask, not the agent's claim of success.
 
 ```
-todo file → ingest → select → decompose → gate → ┌ execute one subtask ┐
-                                                 │ verify it          │ ← repeat
-                                                 └ repair (bounded)   ┘
-                                                 → complete item → report
+todo file → ingest → select ─┬─ time eligibility (@not-before / @due / @every)
+                             └─ dependency eligibility (@depends)
+          → decompose → gate → ┌ execute one subtask ┐
+                               │ verify it          │ ← repeat
+                               └ repair (bounded)   ┘
+                               → complete item → report
 ```
+
+Runs themselves can recur: `gsd schedule add "0 9 * * 1-5"` installs a weekday
+entry in cron/launchd/systemd and exits. There is no resident daemon.
 
 ## Why this exists
 
@@ -36,6 +41,11 @@ so the whole design is built around refusing to advance on unproven work:
 - A check that cannot run is `inconclusive`, which is **not** a pass.
 - Repairs are **bounded**; a repair may never rewrite its own acceptance check.
 - The system **never pushes and never opens a PR**. It stops at a local commit.
+- A deadline changes only **queue position**. Being overdue never shortens a
+  plan, relaxes a check, or skips verification — a test asserts `due` is unread
+  by the decompose, execute, verify, and repair paths.
+- A scheduled run is **non-interactive by construction**: anything needing a
+  human ends `inconclusive` and waits, rather than being auto-passed.
 
 ## Status
 
@@ -59,13 +69,14 @@ what the loop builds, one verified work item at a time.
 
 - **[01 — Product & Vision](specs/01-product-spec.md)** — the problem, the
   goals, the non-goals, the guiding principles.
-- **[02 — Functional Spec](specs/02-functional-spec.md)** — the nine stages,
-  each with behaviour, contract, and numbered acceptance criteria (AC1.1 … AC9.3)
-  that tests check directly.
+- **[02 — Functional Spec](specs/02-functional-spec.md)** — the ten stages,
+  each with behaviour, contract, and numbered acceptance criteria (AC1.1 …
+  AC10.9) that tests check directly.
 - **[03 — Data Model](specs/03-data-model.md)** — every shape, its invariants,
   and the append-only journal format.
 - **[04 — Technical Plan](specs/04-technical-plan.md)** — stack, package layout,
-  the agent-harness abstraction, execution isolation, and the **build phases**.
+  the agent-harness abstraction, execution isolation, the clock/scheduling
+  rules, and the **build phases**.
 - **[05 — Operator Tooling](specs/05-operator-tooling.md)** — the spec loop, and
   the mapping between how the product works and how the repo is built.
 
@@ -79,6 +90,14 @@ make check                         # ruff + mypy + pytest + loop fixture tests
 
 ./tools/spec-loop/loop.sh plan     # derive work items from the specs
 ./tools/spec-loop/loop.sh build 1  # build exactly one, on its own branch
+```
+
+Once the pipeline is built, a recurring run installs with:
+
+```bash
+gsd schedule add "0 9 * * 1-5" --todo ~/todo.md --dry-run   # see it first
+gsd schedule add "0 9 * * 1-5" --todo ~/todo.md             # then install
+gsd schedule list
 ```
 
 Review the branch, push it yourself, open the PR yourself. The loop stops at a
@@ -110,8 +129,16 @@ never treated as work.
 - [ ] Update the README install section @depends=export-json
       - [ ] Rewrite the install steps for the new flag
       - [ ] Check every command in the README actually runs
+- [ ] Rotate the backup logs @every=weekday
+- [ ] Draft the quarterly summary @not-before=2026-09-01 @due=2026-09-05
 - [x] Already done — skipped
 ```
+
+Schedule tokens: `@not-before=` gates eligibility, `@due=` is an advisory
+deadline that only affects ordering and reporting, `@every=` makes an item
+recur (`weekday`, `1d`, `2w`, `mon,thu`). A completed recurring item stays
+unchecked with its `@not-before=` advanced — that is what makes it recurring.
+An unparseable schedule token blocks that item rather than being guessed at.
 
 An indented task list under an item is **your** breakdown and is used verbatim;
 the model is only asked to supply acceptance checks for steps that lack one.

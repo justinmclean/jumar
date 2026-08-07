@@ -86,9 +86,27 @@ human installs. Once the product is complete enough, GetStuffDone can be pointed
 at its own `IMPLEMENTATION_PLAN.md`; that is a milestone, not a dependency, and
 nothing in the product may assume it.
 
+## Scheduling the loop
+
+The loop is a plain command, so it schedules the same way the product does — via
+cron/launchd/systemd, not a daemon. An overnight `./tools/spec-loop/loop.sh
+build 3` is a reasonable cadence once you trust it. Two cautions specific to the
+loop:
+
+- **Single-flight matters more here**, because two concurrent loops would fork
+  work-item branches off the same base and duplicate work. The loop has no lock
+  of its own (the product's `lock.py` guards the product, not the loop) — so a
+  scheduled loop must not overlap its own run window.
+- **Nothing is pushed**, so a scheduled loop accumulates local work-item
+  branches for review. That is the intended shape: the machine builds, the human
+  merges.
+
 ## Known gaps
 
 - The loop does not measure whether a build iteration's Validation command was
   actually run (it trusts the beat prompt). A future `SPEC_LOOP_VERIFY=1` mode
   could re-run `make check` in the runner after each iteration — the runner-side
   equivalent of the product's stage 6.
+- The loop has no single-flight lock, so an overlapping scheduled invocation
+  would duplicate work. Until it does, keep the cadence longer than the longest
+  plausible run.

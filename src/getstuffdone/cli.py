@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 from . import __version__
 
-SUBCOMMANDS = ("plan", "run", "resume", "report", "doctor")
+SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor")
 
 
 def build_parser() -> argparse.ArgumentParser:
