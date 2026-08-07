@@ -113,5 +113,9 @@ def run_verify(
 # ---------------------------------------------------------------------------
 
 from .command import verify_command as _verify_command  # noqa: E402
+from .file import verify_absence as _verify_absence  # noqa: E402
+from .file import verify_file as _verify_file  # noqa: E402
 
 register(CheckKind.command, _verify_command)
+register(CheckKind.file, _verify_file)
+register(CheckKind.absence, _verify_absence)
