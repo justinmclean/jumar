@@ -1,0 +1,217 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Canonical data shapes for GetStuffDone.
+
+All shapes are frozen dataclasses. Every field is a primitive, tuple, frozenset,
+dict, or another shape defined here, so journal records are JSON-round-trippable.
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass
+from typing import Any
+
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+
+
+class ItemStatus(enum.StrEnum):
+    pending = "pending"
+    in_progress = "in_progress"
+    done = "done"
+    failed = "failed"
+    blocked = "blocked"
+    skipped_by_human = "skipped_by_human"
+    inconclusive = "inconclusive"
+
+
+class SubtaskStatus(enum.StrEnum):
+    pending = "pending"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    inconclusive = "inconclusive"
+    skipped = "skipped"
+
+
+class CheckKind(enum.StrEnum):
+    command = "command"
+    file = "file"
+    absence = "absence"
+    judge = "judge"
+    manual = "manual"
+
+
+class Verdict(enum.StrEnum):
+    passed = "passed"
+    failed = "failed"
+    inconclusive = "inconclusive"
+
+
+class Capability(enum.StrEnum):
+    read_fs = "read_fs"
+    write_fs = "write_fs"
+    run_commands = "run_commands"
+    network = "network"
+    git_commit = "git_commit"
+
+
+class FailureCode(enum.StrEnum):
+    unverifiable_plan = "unverifiable_plan"
+    plan_too_long = "plan_too_long"
+    invalid_plan = "invalid_plan"
+    capability_denied = "capability_denied"
+    timed_out = "timed_out"
+    check_failed = "check_failed"
+    repairs_exhausted = "repairs_exhausted"
+    harness_error = "harness_error"
+    dependency_blocked = "dependency_blocked"
+
+
+# Strings that must never appear as Check.statement — the anti-"trust me" guard.
+_PLACEHOLDER_STATEMENTS: frozenset[str] = frozenset({"", "n/a", "none", "TODO", "verify manually"})
+
+
+# ---------------------------------------------------------------------------
+# Shapes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HarnessInfo:
+    """Identifies the agent/model that produced a plan, attempt, or judge verdict."""
+
+    agent: str
+    model: str
+    harness: str
+    invoked_as: str
+
+
+@dataclass(frozen=True)
+class Check:
+    """Executable proof that a subtask succeeded.
+
+    Invariants enforced at construction time:
+    - kind=command  =>  command is non-empty
+    - kind=file or kind=absence  =>  path is non-empty
+    - kind=judge  =>  rationale is non-empty
+    - statement is non-empty and is not one of the known placeholder strings
+    """
+
+    kind: CheckKind
+    statement: str
+    command: tuple[str, ...] | None = None
+    expect_status: int = 0
+    expect_stdout: str | None = None
+    path: str | None = None
+    pattern: str | None = None
+    rationale: str | None = None
+    timeout_s: int = 300
+
+    def __post_init__(self) -> None:
+        if not self.statement or self.statement in _PLACEHOLDER_STATEMENTS:
+            raise ValueError(f"Check.statement is empty or a placeholder: {self.statement!r}")
+        if self.kind is CheckKind.command and not self.command:
+            raise ValueError("kind=command requires a non-empty command argv")
+        if self.kind in (CheckKind.file, CheckKind.absence) and not self.path:
+            raise ValueError(f"kind={self.kind.value} requires a non-empty path")
+        if self.kind is CheckKind.judge and not self.rationale:
+            raise ValueError("kind=judge requires a non-empty rationale")
+
+
+@dataclass(frozen=True)
+class TodoItem:
+    """One task list entry produced by the ingest stage."""
+
+    item_id: str
+    text: str
+    raw_line: str
+    line_no: int
+    status: ItemStatus
+    context: tuple[str, ...]
+    authored_subtasks: tuple[str, ...]
+    meta: dict[str, str]
+    priority: int | None
+    depends: tuple[str, ...]
+    capabilities: frozenset[Capability]
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One execution of one subtask (initial or repair)."""
+
+    attempt_no: int
+    started_at: str
+    finished_at: str
+    harness: HarnessInfo
+    agent_claim: str | None
+    transcript_path: str
+    exit_status: int | None
+    files_touched: tuple[str, ...]
+    error: str | None
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    """Outcome of running a Check against the world the subtask left behind."""
+
+    subtask_id: str
+    attempt_no: int
+    verdict: Verdict
+    kind: CheckKind
+    evidence: dict[str, Any]
+    summary: str
+    evidence_path: str | None
+    checked_at: str
+
+
+@dataclass(frozen=True)
+class Subtask:
+    """One step in a Plan, with its executable proof."""
+
+    subtask_id: str
+    index: int
+    description: str
+    check: Check
+    capabilities: frozenset[Capability]
+    depends_on: tuple[int, ...]
+    status: SubtaskStatus
+    attempts: tuple[Attempt, ...]
+
+
+@dataclass(frozen=True)
+class Plan:
+    """Ordered sequence of subtasks produced by the decompose stage."""
+
+    item_id: str
+    subtasks: tuple[Subtask, ...]
+    source: str  # "authored" | "model"
+    created_at: str
+    harness: HarnessInfo
+
+
+@dataclass(frozen=True)
+class ItemResult:
+    """Per-item outcome recorded in the run report."""
+
+    item_id: str
+    status: ItemStatus
+    plan: Plan | None
+    failure_code: FailureCode | None
+    failed_subtask_index: int | None
+    verifications: tuple[VerificationResult, ...]
+
+
+@dataclass(frozen=True)
+class Run:
+    """Top-level container for one gsd run."""
+
+    run_id: str
+    todo_path: str
+    mode: str  # "auto" | "dry-run" | "approve"
+    config: dict[str, Any]
+    started_at: str
+    finished_at: str | None
+    items: tuple[ItemResult, ...]
+    warnings: tuple[str, ...]
