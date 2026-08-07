@@ -19,12 +19,12 @@ No other module needs to be touched (AC6.7).
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from ..journal import VERIFICATION, Journal
-from ..models import Check, CheckKind, VerificationResult
+from ..models import Check, CheckKind, HarnessInfo, VerificationResult
 
 # ---------------------------------------------------------------------------
 # Context passed to every verifier
@@ -40,6 +40,11 @@ class VerifyContext:
     evidence_head_bytes: int
     subtask_id: str
     attempt_no: int
+    # Optional judge harness fields — only required by kind=judge.
+    harness: HarnessInfo | None = None
+    judge_timeout_s: int = 300
+    # Injectable agent runner for tests (default: harness.run_agent).
+    judge_run_agent: Any | None = field(default=None, compare=False, hash=False)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +120,9 @@ def run_verify(
 from .command import verify_command as _verify_command  # noqa: E402
 from .file import verify_absence as _verify_absence  # noqa: E402
 from .file import verify_file as _verify_file  # noqa: E402
+from .judge import verify_judge as _verify_judge  # noqa: E402
 
 register(CheckKind.command, _verify_command)
 register(CheckKind.file, _verify_file)
 register(CheckKind.absence, _verify_absence)
+register(CheckKind.judge, _verify_judge)
