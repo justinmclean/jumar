@@ -9,11 +9,18 @@ Acceptance criteria covered:
          the base branch's HEAD is unchanged.
 - AC8.4  No push and no PR command is ever invoked — asserted by a test that
          fails if "git push" or "gh" appears in the dispatched argv.
+- AC8.5  A completed @every= item is left unchecked with @not-before= advanced
+         to the next occurrence; the rest of the file is byte-identical.
+- AC8.6  A recurring item whose occurrence was missed repeatedly advances to
+         the single next occurrence after now, not a backlog.
+- AC8.7  A recurring item that failed has its schedule left untouched.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -22,7 +29,7 @@ import pytest
 
 from getstuffdone.complete import complete
 from getstuffdone.config import Config
-from getstuffdone.journal import ITEM_COMPLETED, Journal
+from getstuffdone.journal import ITEM_COMPLETED, SCHEDULE_ADVANCED, Journal
 from getstuffdone.models import (
     Capability,
     Check,
@@ -30,6 +37,9 @@ from getstuffdone.models import (
     HarnessInfo,
     ItemStatus,
     Plan,
+    Recurrence,
+    RecurUnit,
+    Schedule,
     Subtask,
     SubtaskStatus,
     TodoItem,
@@ -614,3 +624,358 @@ def test_no_push_or_gh_without_git_repo(tmp_path: Path, journal: Journal) -> Non
             f"git push found: {argv}"
         )
         assert argv[0] != "gh", f"gh found: {argv}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for recurring item tests
+# ---------------------------------------------------------------------------
+
+_UTC_NOW = datetime(2026, 8, 10, 12, 0, 0, tzinfo=UTC)  # Monday noon UTC
+
+
+def _make_schedule(
+    every: str = "1d",
+    not_before_literal: str | None = "2026-08-09",
+) -> Schedule:
+    """Build a minimal Schedule with a @every= rule for test use."""
+    if every == "weekday":
+        recur = Recurrence(unit=RecurUnit.weekday, interval=1, days=())
+    elif every in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+        recur = Recurrence(unit=RecurUnit.dow, interval=1, days=(every,))
+    else:
+        # Interval+unit e.g. "1d", "2w", "3m"
+        interval = int(every[:-1])
+        unit_map = {"d": RecurUnit.day, "w": RecurUnit.week, "m": RecurUnit.month}
+        recur = Recurrence(unit=unit_map[every[-1]], interval=interval, days=())
+
+    # Build a resolved not_before in UTC for the Schedule invariant.
+    nb = "2026-08-09T00:00:00+00:00" if not_before_literal else None
+
+    return Schedule(
+        not_before=nb,
+        not_before_literal=not_before_literal,
+        due=None,
+        due_literal=None,
+        recur=recur,
+        tz="UTC",
+    )
+
+
+def _make_recurring_item(
+    text: str = "Daily report",
+    item_id: str = "daily-report-abc12345",
+    line_no: int = 1,
+    every: str = "1d",
+    not_before_literal: str | None = "2026-08-09",
+) -> TodoItem:
+    return TodoItem(
+        item_id=item_id,
+        text=text,
+        raw_line=f"- [ ] {text} @every={every}\n",
+        line_no=line_no,
+        status=ItemStatus.pending,
+        context=(),
+        authored_subtasks=(),
+        meta={"every": every},
+        priority=None,
+        depends=(),
+        capabilities=frozenset({Capability.run_commands}),
+        schedule=_make_schedule(every=every, not_before_literal=not_before_literal),
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC8.5 — recurring item stays unchecked; @not-before= is advanced
+# ---------------------------------------------------------------------------
+
+
+def test_recurring_item_stays_unchecked(tmp_path: Path, journal: Journal, cfg: Config) -> None:
+    """A completed @every= item is left with unchecked checkbox (AC8.5)."""
+    todo_path = tmp_path / "todo.md"
+    line = "- [ ] Daily report @every=1d @not-before=2026-08-09\n"
+    todo_path.write_bytes(line.encode())
+
+    item = _make_recurring_item(line_no=1, not_before_literal="2026-08-09")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    result = complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    assert result is True
+    content = todo_path.read_bytes().decode()
+    assert "- [x]" not in content, "Recurring item must stay unchecked (AC8.5)"
+    assert "- [ ]" in content
+
+
+def test_recurring_item_not_before_advanced(tmp_path: Path, journal: Journal, cfg: Config) -> None:
+    """@not-before= is rewritten to the next occurrence after now (AC8.5)."""
+    todo_path = tmp_path / "todo.md"
+    line = "- [ ] Daily report @every=1d @not-before=2026-08-09\n"
+    todo_path.write_bytes(line.encode())
+
+    item = _make_recurring_item(line_no=1, not_before_literal="2026-08-09")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    # now = 2026-08-10 (Monday noon UTC); daily → next occurrence is 2026-08-11
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    content = todo_path.read_bytes().decode()
+    assert "@not-before=2026-08-11" in content
+
+
+def test_recurring_item_only_not_before_line_changes(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """Only the @not-before= value on the item's line changes; all other bytes identical (AC8.5)."""
+    lines = [
+        "# Tasks\n",
+        "\n",
+        "- [ ] Daily report @every=1d @not-before=2026-08-09\n",
+        "- [ ] Another task\n",
+    ]
+    todo_path = tmp_path / "todo.md"
+    original = "".join(lines).encode()
+    todo_path.write_bytes(original)
+
+    item = _make_recurring_item(line_no=3, not_before_literal="2026-08-09")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    updated = todo_path.read_bytes()
+    orig_lines = original.splitlines(keepends=True)
+    new_lines = updated.splitlines(keepends=True)
+
+    assert len(orig_lines) == len(new_lines)
+    changed = [i for i in range(len(orig_lines)) if orig_lines[i] != new_lines[i]]
+    assert changed == [2], f"Expected only line index 2 to change, got {changed}"
+    # Unchanged lines are byte-identical.
+    for i in range(len(orig_lines)):
+        if i != 2:
+            assert orig_lines[i] == new_lines[i], f"Line {i + 1} changed unexpectedly"
+
+
+def test_recurring_no_existing_not_before_appended(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """When the line has no @not-before=, it is appended (AC8.5)."""
+    line = "- [ ] Daily report @every=1d\n"
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(line.encode())
+
+    # Make a schedule with no not_before_literal
+    item = _make_recurring_item(line_no=1, not_before_literal=None)
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    content = todo_path.read_bytes().decode()
+    assert "@not-before=" in content
+    # The @not-before value should be a date in the future relative to now.
+    m = re.search(r"@not-before=(\S+)", content)
+    assert m is not None
+    # Should be 2026-08-11 (one day after 2026-08-10)
+    assert m.group(1) == "2026-08-11"
+
+
+def test_recurring_schedule_advanced_journalled(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """SCHEDULE_ADVANCED event is written to the journal for recurring items."""
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Daily report @every=1d @not-before=2026-08-09\n")
+
+    item = _make_recurring_item(line_no=1, not_before_literal="2026-08-09")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    state = journal.replay()
+    events = [e["event"] for e in state.entries]
+    assert SCHEDULE_ADVANCED in events
+    assert ITEM_COMPLETED in events
+
+
+# ---------------------------------------------------------------------------
+# AC8.6 — missed occurrence does not accumulate
+# ---------------------------------------------------------------------------
+
+
+def test_missed_occurrence_advances_to_next_not_backlog(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """A daily item missed for 10 days advances to tomorrow, not 10 days out (AC8.6)."""
+    todo_path = tmp_path / "todo.md"
+    # The @not-before was 10 days ago.
+    todo_path.write_bytes(b"- [ ] Daily report @every=1d @not-before=2026-07-31\n")
+
+    item = _make_recurring_item(line_no=1, not_before_literal="2026-07-31")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    # now = 2026-08-10 noon — 10 days after the scheduled date
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    content = todo_path.read_bytes().decode()
+    m = re.search(r"@not-before=(\S+)", content)
+    assert m is not None
+    # Should be exactly 1 day after now, not 10 days later.
+    assert m.group(1) == "2026-08-11"
+
+
+# ---------------------------------------------------------------------------
+# AC8.7 — failed recurring item has schedule left untouched
+# ---------------------------------------------------------------------------
+
+
+def test_failed_recurring_item_schedule_untouched(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """A recurring item that failed does not have its @not-before= changed (AC8.7)."""
+    original_line = b"- [ ] Daily report @every=1d @not-before=2026-08-09\n"
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(original_line)
+
+    item = _make_recurring_item(line_no=1, not_before_literal="2026-08-09")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = (_make_verification(verdict=Verdict.failed),)
+
+    result = complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    assert result is False
+    assert todo_path.read_bytes() == original_line
+
+
+def test_failed_recurring_item_not_journalled(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """ITEM_COMPLETED and SCHEDULE_ADVANCED are NOT written when item failed (AC8.7)."""
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Daily report @every=1d @not-before=2026-08-09\n")
+
+    item = _make_recurring_item(line_no=1, not_before_literal="2026-08-09")
+    plan = _make_plan(item_id=item.item_id)
+    verifications = (_make_verification(verdict=Verdict.failed),)
+
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    state = journal.replay()
+    events = [e["event"] for e in state.entries]
+    assert ITEM_COMPLETED not in events
+    assert SCHEDULE_ADVANCED not in events
+
+
+# ---------------------------------------------------------------------------
+# AC8.5 — weekday recurrence advances correctly
+# ---------------------------------------------------------------------------
+
+
+def test_weekday_recurring_skips_weekend(tmp_path: Path, journal: Journal, cfg: Config) -> None:
+    """A @every=weekday item completed on Friday advances to Monday (AC8.5)."""
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Stand-up @every=weekday @not-before=2026-08-07\n")
+
+    item = _make_recurring_item(
+        text="Stand-up",
+        item_id="stand-up-abc12345",
+        line_no=1,
+        every="weekday",
+        not_before_literal="2026-08-07",
+    )
+    plan = _make_plan(item_id=item.item_id)
+    verifications = _make_passed_verifications(item_id=item.item_id)
+
+    # now = 2026-08-14 Friday noon UTC
+    friday_noon = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=friday_noon,
+    )
+
+    content = todo_path.read_bytes().decode()
+    m = re.search(r"@not-before=(\S+)", content)
+    assert m is not None
+    # Next weekday after Friday 2026-08-14 is Monday 2026-08-17.
+    assert m.group(1) == "2026-08-17"
