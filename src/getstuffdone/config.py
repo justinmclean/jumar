@@ -13,6 +13,7 @@ is_allowed()    – True iff an argv list may be dispatched.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -37,6 +38,20 @@ class Capability(StrEnum):
 # ---------------------------------------------------------------------------
 # Private defaults
 # ---------------------------------------------------------------------------
+
+
+def _system_timezone() -> str:
+    """Return the system's IANA timezone name, falling back to UTC."""
+    tz_env = os.environ.get("TZ")
+    if tz_env:
+        return tz_env
+    localtime = Path("/etc/localtime")
+    if localtime.is_symlink():
+        resolved = str(localtime.resolve())
+        if "/zoneinfo/" in resolved:
+            return resolved.split("/zoneinfo/")[-1]
+    return "UTC"
+
 
 _DEFAULT_CAPABILITIES: frozenset[Capability] = frozenset(
     {Capability.read_fs, Capability.write_fs, Capability.run_commands}
@@ -83,6 +98,7 @@ class Config:
     """Resolved configuration for one gsd run."""
 
     todo_path: str = "todo.md"
+    timezone: str = field(default_factory=_system_timezone)
     max_subtasks: int = 12
     max_repairs: int = 2
     subtask_timeout_s: int = 900
@@ -157,6 +173,7 @@ def load_config(
 
     return Config(
         todo_path=str(_get("todo_path", "todo.md")),
+        timezone=str(_get("timezone", _system_timezone())),
         max_subtasks=int(_get("max_subtasks", 12)),
         max_repairs=int(_get("max_repairs", 2)),
         subtask_timeout_s=int(_get("subtask_timeout_s", 900)),
