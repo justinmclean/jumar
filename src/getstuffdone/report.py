@@ -27,6 +27,7 @@ run_finished  (presence only)
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -521,3 +522,111 @@ def report_exit_status(report: RunReport) -> int:
         if item.status == "failed":
             return 1
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Plan result shapes  (shared by human and JSON renderers; no CLI-layer dicts)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PlanSelectedItem:
+    """The item selected for work, in a JSON-serializable form."""
+
+    item_id: str
+    text: str
+    capabilities: list[str]
+    due: str | None
+    authored_subtasks: list[str]
+
+
+@dataclass
+class PlanDeferredItem:
+    """An item deferred by its not_before gate."""
+
+    item_id: str
+    text: str
+    eligible_at: str
+
+
+@dataclass
+class PlanBlockedItem:
+    """An item blocked by an unfinished dependency."""
+
+    item_id: str
+    text: str
+    reason: str
+
+
+@dataclass
+class PlanResult:
+    """Full output of ``gsd plan --dry-run``, shared by human and JSON renderers."""
+
+    run_id: str
+    now: str
+    todo_path: str
+    pending_count: int
+    selected: PlanSelectedItem | None
+    deferred: list[PlanDeferredItem]
+    blocked: list[PlanBlockedItem]
+    next_eligible_at: str | None
+
+
+# ---------------------------------------------------------------------------
+# Plan formatting (human text and JSON)
+# ---------------------------------------------------------------------------
+
+
+def format_plan_text(result: PlanResult) -> str:
+    """Return the human-readable ``gsd plan --dry-run`` output string."""
+    lines: list[str] = []
+    lines.append(f"Run:   {result.run_id}")
+    lines.append(f"Todo:  {result.todo_path}  ({result.pending_count} pending)")
+    lines.append(f"Now:   {result.now}")
+    lines.append("")
+
+    if result.selected:
+        item = result.selected
+        caps = ", ".join(sorted(item.capabilities)) or "(none)"
+        lines.append(f"Selected:  {item.text}")
+        lines.append(f"  id:           {item.item_id}")
+        lines.append(f"  capabilities: {caps}")
+        if item.due:
+            lines.append(f"  due:          {item.due}")
+        if item.authored_subtasks:
+            lines.append(f"  subtasks ({len(item.authored_subtasks)}):")
+            for i, st in enumerate(item.authored_subtasks, 1):
+                lines.append(f"    {i}. {st}")
+    else:
+        lines.append("Nothing eligible to work on.")
+        if result.next_eligible_at:
+            lines.append(f"Next eligible: {result.next_eligible_at}")
+
+    if result.deferred:
+        lines.append("")
+        lines.append(f"Deferred ({len(result.deferred)}):")
+        for d in result.deferred:
+            lines.append(f"  - {d.text!r}  [eligible at {d.eligible_at}]")
+
+    if result.blocked:
+        lines.append("")
+        lines.append(f"Blocked ({len(result.blocked)}):")
+        for b in result.blocked:
+            lines.append(f"  - {b.text!r}  [{b.reason}]")
+
+    return "\n".join(lines)
+
+
+def format_plan_json(result: PlanResult) -> str:
+    """Return a JSON document representing the plan result."""
+    return json.dumps(dataclasses.asdict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Report JSON serialization
+# ---------------------------------------------------------------------------
+
+
+def format_report_json(report: RunReport) -> str:
+    """Return a JSON document representing the full run report."""
+    return json.dumps(dataclasses.asdict(report), indent=2)

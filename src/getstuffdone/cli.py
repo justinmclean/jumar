@@ -41,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the selected item and exit without any agent calls.",
     )
     plan_p.add_argument("--todo", default=None, metavar="PATH", help="Override the todo file path.")
+    plan_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the plan result as a JSON document on stdout (warnings still go to stderr).",
+    )
 
     # run — gate flags introduced in Phase 2 (gate-modes work item)
     run_p = subs.add_parser("run", help="Run the next eligible todo item.")
@@ -74,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_p.add_argument("run_id", help="The run ID to report on.")
     report_p.add_argument(
         "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
+    )
+    report_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the report as a JSON document on stdout (warnings still go to stderr).",
     )
 
     # schedule
@@ -162,7 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
-    """Implement ``gsd plan [--dry-run]``."""
+    """Implement ``gsd plan [--dry-run] [--json]``."""
     if not args.dry_run:
         print("gsd plan: full pipeline not yet implemented — use --dry-run to preview")
         return 2
@@ -171,6 +181,14 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     from .config import load_config
     from .ingest import IngestError, ingest
     from .journal import RUN_STARTED, Journal
+    from .report import (
+        PlanBlockedItem,
+        PlanDeferredItem,
+        PlanResult,
+        PlanSelectedItem,
+        format_plan_json,
+        format_plan_text,
+    )
     from .select import CycleError, select_next
 
     cli_overrides: dict[str, object] = {}
@@ -195,54 +213,55 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 
     todo_path = Path(config.todo_path)
     try:
-        result = ingest(todo_path, config)
+        ingest_result = ingest(todo_path, config)
     except IngestError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    for w in result.warnings:
+    for w in ingest_result.warnings:
         print(f"warning: {w.message}", file=sys.stderr)
 
     try:
-        sel = select_next(result.items, now)
+        sel = select_next(ingest_result.items, now)
     except CycleError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    pending_count = sum(1 for it in result.items if it.status.value == "pending")
-    print(f"Run:   {run_id}")
-    print(f"Todo:  {todo_path}  ({pending_count} pending)")
-    print(f"Now:   {now.isoformat()}")
-    print()
+    pending_count = sum(1 for it in ingest_result.items if it.status.value == "pending")
 
+    # Build the shared result object — both human and JSON renderers use this.
+    selected: PlanSelectedItem | None = None
     if sel.selected:
         item = sel.selected
-        caps = ", ".join(sorted(str(c) for c in item.capabilities)) or "(none)"
-        print(f"Selected:  {item.text}")
-        print(f"  id:           {item.item_id}")
-        print(f"  capabilities: {caps}")
-        if item.schedule and item.schedule.due_literal:
-            print(f"  due:          {item.schedule.due_literal}")
-        if item.authored_subtasks:
-            print(f"  subtasks ({len(item.authored_subtasks)}):")
-            for i, st in enumerate(item.authored_subtasks, 1):
-                print(f"    {i}. {st}")
+        selected = PlanSelectedItem(
+            item_id=item.item_id,
+            text=item.text,
+            capabilities=sorted(str(c) for c in item.capabilities),
+            due=item.schedule.due_literal if item.schedule else None,
+            authored_subtasks=list(item.authored_subtasks),
+        )
+
+    plan_result = PlanResult(
+        run_id=run_id,
+        now=now.isoformat(),
+        todo_path=str(todo_path),
+        pending_count=pending_count,
+        selected=selected,
+        deferred=[
+            PlanDeferredItem(item_id=it.item_id, text=it.text, eligible_at=ea)
+            for it, ea in sel.deferred
+        ],
+        blocked=[
+            PlanBlockedItem(item_id=it.item_id, text=it.text, reason=r) for it, r in sel.blocked
+        ],
+        next_eligible_at=sel.next_eligible_at,
+    )
+
+    use_json: bool = getattr(args, "json", False)
+    if use_json:
+        print(format_plan_json(plan_result))
     else:
-        print("Nothing eligible to work on.")
-        if sel.next_eligible_at:
-            print(f"Next eligible: {sel.next_eligible_at}")
-
-    if sel.deferred:
-        print()
-        print(f"Deferred ({len(sel.deferred)}):")
-        for item, eligible_at in sel.deferred:
-            print(f"  - {item.text!r}  [eligible at {eligible_at}]")
-
-    if sel.blocked:
-        print()
-        print(f"Blocked ({len(sel.blocked)}):")
-        for item, reason in sel.blocked:
-            print(f"  - {item.text!r}  [{reason}]")
+        print(format_plan_text(plan_result))
 
     return 0
 
@@ -615,8 +634,14 @@ def _cmd_run(
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    """Implement ``gsd report <run-id>``."""
-    from .report import build_report, format_summary, report_exit_status, write_report
+    """Implement ``gsd report <run-id> [--json]``."""
+    from .report import (
+        build_report,
+        format_report_json,
+        format_summary,
+        report_exit_status,
+        write_report,
+    )
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
     run_dir = runs_dir / args.run_id
@@ -626,10 +651,17 @@ def _cmd_report(args: argparse.Namespace) -> int:
         return 1
 
     report = build_report(run_dir)
-    report_path = write_report(report, run_dir)
-    print(format_summary(report))
-    print(f"\nReport written to: {report_path}")
-    return report_exit_status(report)
+    exit_code = report_exit_status(report)
+
+    use_json: bool = getattr(args, "json", False)
+    if use_json:
+        print(format_report_json(report))
+    else:
+        report_path = write_report(report, run_dir)
+        print(format_summary(report))
+        print(f"\nReport written to: {report_path}")
+
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
