@@ -66,6 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable all interactive prompts (required for scheduled / headless runs).",
     )
+    run_p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Echo the agent's captured output after each attempt (progress to stderr).",
+    )
+    run_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable output on stdout; suppresses progress on stderr.",
+    )
 
     # resume
     resume_p = subs.add_parser("resume", help="Resume an interrupted run.")
@@ -319,6 +329,7 @@ def run_item(
     resumed: bool = False,
     stdin: Any | None = None,
     stdout: Any | None = None,
+    progress: Any | None = None,
     _run_agent: Any | None = None,
 ) -> int:
     """Decompose, gate, then execute→verify→repair each subtask, then complete.
@@ -336,8 +347,11 @@ def run_item(
     from .gate import GateDecision, GateError, GateMode, gate
     from .journal import ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
     from .models import Verdict
+    from .progress import Progress
     from .repair import RepairExhausted, repair
     from .verify import VerifyContext, run_verify
+
+    prog = progress if progress is not None else Progress(enabled=False)
 
     cwd = todo_path.parent
     non_interactive = mode != GateMode.approve
@@ -405,12 +419,16 @@ def run_item(
     # --- inner loop: one subtask at a time, verified before the next (AC5.1)
     verifications: list[Any] = list(prior_verifications or [])
     prior_evidence: list[Any] = list(verifications)
+    total = len(plan.subtasks)
+    prog.item_started(item.text, total)
 
     for subtask in plan.subtasks:
         if subtask.subtask_id in already_passed:
+            prog.subtask_skipped(subtask.index, total, subtask.description)
             continue  # AC-S1: never redo verified work
 
-        execute(
+        prog.subtask_started(subtask.index, total, subtask.description)
+        attempt = execute(
             subtask,
             item=item,
             prior_evidence=prior_evidence,
@@ -421,6 +439,9 @@ def run_item(
             attempt_no=0,
             _run_agent=_run_agent,
         )
+
+        prog.agent_transcript(getattr(attempt, "transcript_path", None))
+        prog.verifying(subtask.check.kind)
 
         ctx = VerifyContext(
             cwd=cwd,
@@ -434,6 +455,7 @@ def run_item(
 
         # --- bounded repair on a non-pass (AC7.1–AC7.4)
         if result.verdict != Verdict.passed:
+            prog.repairing(getattr(config, "max_repairs", 0))
             try:
                 result = repair(
                     subtask,
@@ -447,6 +469,7 @@ def run_item(
                     _run_agent=_run_agent,
                 )
             except RepairExhausted:
+                prog.verdict("repairs exhausted", getattr(result, "summary", None))
                 journal.append(
                     ITEM_FAILED,
                     item_id=item.item_id,
@@ -459,6 +482,7 @@ def run_item(
                 return 1
 
         if result.verdict != Verdict.passed:
+            prog.verdict(result.verdict, getattr(result, "summary", None))
             journal.append(
                 ITEM_FAILED,
                 item_id=item.item_id,
@@ -470,6 +494,7 @@ def run_item(
             advance_failure_count(todo_path, item, config, journal)
             return 1
 
+        prog.verdict(result.verdict, getattr(result, "summary", None))
         verifications.append(result)
         prior_evidence.append(result)
 
@@ -507,6 +532,7 @@ def _cmd_run(
     args: argparse.Namespace,
     *,
     _run_agent: object | None = None,
+    _progress_force: bool | None = None,
 ) -> int:
     """Implement ``gsd run [--dry-run | --approve] [--non-interactive]``.
 
@@ -608,6 +634,14 @@ def _cmd_run(
             journal.append(RUN_FINISHED, payload={"exit_status": 0})
             return 0
 
+        from .progress import Progress
+
+        prog = Progress.for_run(
+            json_output=bool(getattr(args, "json", False)),
+            verbose=bool(getattr(args, "verbose", False)),
+            force=_progress_force,
+        )
+
         status = run_item(
             sel.selected,
             config=config,
@@ -616,9 +650,11 @@ def _cmd_run(
             run_dir=run_dir,
             now=now,
             mode=mode,
+            progress=prog,
             _run_agent=_run_agent,
         )
 
+        prog.item_finished("done" if status == 0 else "failed")
         journal.append(RUN_FINISHED, payload={"exit_status": status})
         report = build_report(run_dir)
         write_report(report, run_dir)
