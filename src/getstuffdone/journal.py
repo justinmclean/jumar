@@ -44,6 +44,7 @@ ITEM_COMPLETED = "item_completed"
 ITEM_FAILED = "item_failed"
 SCHEDULE_ADVANCED = "schedule_advanced"
 LOCK_RECLAIMED = "lock_reclaimed"
+ALREADY_RUNNING = "already_running"
 RUN_FINISHED = "run_finished"
 
 

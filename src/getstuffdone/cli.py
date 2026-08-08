@@ -216,8 +216,37 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    print("gsd run: full pipeline not yet implemented — see IMPLEMENTATION_PLAN.md")
-    return 2
+    from .config import load_config
+    from .lock import AlreadyRunning, Lock
+
+    cli_overrides: dict[str, object] = {}
+    if getattr(args, "todo", None):
+        cli_overrides["todo_path"] = args.todo
+    config = load_config(cli_overrides=cli_overrides or None)
+    todo_path = Path(config.todo_path)
+
+    # Acquire single-flight lock before ingest (AC10.5, AC10.6).
+    run_id = str(uuid.uuid4())
+    lock = Lock(todo_path)
+    try:
+        lock.acquire(run_id=run_id)
+    except AlreadyRunning as exc:
+        print(f"already_running (pid={exc.pid})", file=sys.stderr)
+        return 0
+
+    try:
+        # Journal the stale-lock reclaim if one happened.
+        if lock.reclaimed_info is not None:
+            from .journal import LOCK_RECLAIMED, Journal
+
+            journal_path = Path("runs") / run_id / "journal.jsonl"
+            journal = Journal(journal_path, run_id)
+            journal.append(LOCK_RECLAIMED, payload=lock.reclaimed_info)
+
+        print("gsd run: full pipeline not yet implemented — see IMPLEMENTATION_PLAN.md")
+        return 2
+    finally:
+        lock.release()
 
 
 # ---------------------------------------------------------------------------
