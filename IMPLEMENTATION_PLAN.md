@@ -10,10 +10,10 @@ never weaken a check to get green.
 
 ## Status — 2026-08-08
 
-Phases 0–5 are complete and merged to `main`. The last five commits landed
-repair (AC7.1–7.4), complete (AC8.1–8.4), report+resume (AC9.1–9.5, AC-S1,
-AC-S4), verify/judge (AC6.4), recurrence+recurring-complete (AC8.5–8.7), and
-verify/manual (AC6.5). The next open item is `lock-single-flight` (Phase 5b).
+All phases through Phase 6 are substantially complete. Phases 0–5b are fully
+merged to main. Phase 6 (`gsd-doctor`) is built on the local `gsd-doctor`
+branch (1 commit ahead of main, awaiting human review and merge). The single
+remaining planned item is `ci-and-coverage-floor`.
 
 ### Completed (merged to main)
 
@@ -80,6 +80,23 @@ verify/manual (AC6.5). The next open item is `lock-single-flight` (Phase 5b).
   token in place; missed occurrence advances to the single next occurrence after
   `now`, not a backlog; failed recurring item's schedule left untouched.
   Closed: AC8.5–AC8.7.
+- **lock-single-flight** — `lock.py`: PID-stamped lock file keyed to the
+  todo path, live-lock check exits 0 with `already_running`, stale-lock
+  reclaim journalled and run proceeds. Wired into `cli.py`'s `gsd run` before
+  ingest. Closed: AC10.5, AC10.6.
+- **schedule-os-backends** — `schedule.py`: `gsd schedule add/list/remove/show`
+  with `crontab` (Linux/BSD) and `launchd` plist (macOS) backends; marker-
+  delimited entries; `add` prints before writing; absolute paths and
+  `--non-interactive` in installed command; invalid cron expressions rejected;
+  timezone recorded and printed. Closed: AC10.1–AC10.4, AC10.7–AC10.9.
+
+### In-flight (local branch, awaiting human review)
+
+- **gsd-doctor** — `doctor.py` + `gsd doctor` CLI command: config validity,
+  harness binary on PATH, allow-list sanity, installed schedule entries
+  readable, todo file parseable. Actionable error per failure. On branch
+  `gsd-doctor` (1 commit ahead of main).
+  *Closes:* Phase 6 doctor requirement.
 
 ---
 
@@ -90,54 +107,16 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 
 ---
 
-### Phase 5b — run scheduling
-
-Ship the lock **before** the scheduler. Installing a recurring run before
-single-flight exists is how two agents end up editing the same file.
-
-1. **lock-single-flight** — `lock.py`: PID-stamped lock file keyed to the
-   todo path, live-lock check exits 0 with `already_running`, stale-lock
-   reclaim is journalled and the run proceeds. No scheduler yet — the lock is
-   exercised by a test that spawns a fake second run against a live lockfile.
-   Wire the lock into `cli.py`'s `gsd run` entry point so it is acquired
-   before ingest and released on exit.
-   *Validation:* `make check` + `pytest tests/test_lock.py -q` — must include
-   the live-lock test (a pre-written lock file whose PID is the current
-   process) and the stale-lock reclaim test (a lock file whose recorded PID
-   does not exist). Both paths must be journalled.
-   *Closes:* AC10.5, AC10.6.
-   *Branch slug:* `lock-single-flight`
-
-2. **schedule-os-backends** — `schedule.py`: `gsd schedule add/list/remove/show`
-   with `crontab` (Linux/BSD) and `launchd` plist (macOS) backends selected by
-   platform; backend overridable in config. Every installed entry is wrapped in
-   `# >>> gsd <id> >>>` / `# <<< gsd <id> <<<` markers; `remove` deletes only
-   between its own markers. `add` always prints the exact entry before writing.
-   The installed command carries absolute `gsd` path, absolute todo path,
-   absolute config path, and `--non-interactive`. `schedule show` and `--dry-run`
-   print and exit without writing. Invalid cron expressions are rejected with a
-   field-level message. Timezone is recorded on the schedule and printed at
-   install time. Test against a fake backend that records what would be written,
-   plus a round-trip test over a fixture crontab containing unrelated entries
-   asserting they survive install and remove byte-identical.
-   *Validation:* `make check` + `pytest tests/test_schedule.py -q`.
-   *Closes:* AC10.1–AC10.4, AC10.7–AC10.9.
-   *Branch slug:* `schedule-os-backends`
-
----
-
 ### Phase 6 — polish
 
-3. **gsd-doctor** — single `gsd doctor` command: config validity, harness
-   binary on PATH, allow-list sanity, installed schedule entries readable, todo
-   file parseable. Actionable error per failure.
-   *Validation:* `make check` + `pytest tests/test_doctor.py -q`.
-   *Branch slug:* `gsd-doctor`
-
-4. **ci-and-coverage-floor** — GitHub Actions workflow running `make check`
-   on push; per-module coverage floor at 90% enforced once Phase 1 has landed.
-   *Validation:* the workflow green on a scratch branch with a coverage
-   assertion that fails below 90%.
+1. **ci-and-coverage-floor** — GitHub Actions workflow running `make check`
+   on push; per-module coverage floor at 90% enforced (per the testing
+   strategy in `specs/04`). The workflow must pass on a scratch branch with a
+   coverage assertion that fails below 90%, confirming the floor is live.
+   *Validation:* the workflow green on the branch; `make cov` locally
+   showing every module at ≥ 90%; a deliberate coverage drop must cause the
+   workflow to fail.
+   *Closes:* `specs/04` §Testing strategy coverage floor.
    *Branch slug:* `ci-and-coverage`
 
 ---
@@ -170,3 +149,4 @@ single-flight exists is how two agents end up editing the same file.
 - Confirm which agent CLI is on PATH before the first loop run
   (`SPEC_LOOP_AGENT`, default `claude`).
 - Run the loop inside a sandbox with no push credentials in the environment.
+- Review and merge the `gsd-doctor` local branch before running `ci-and-coverage`.
