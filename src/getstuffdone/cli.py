@@ -76,9 +76,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
     )
 
-    # stubs — accepting the subcommand name is enough for smoke tests
-    for cmd in ("schedule", "doctor"):
-        subs.add_parser(cmd)
+    # schedule
+    schedule_p = subs.add_parser("schedule", help="Manage scheduled gsd runs.")
+    schedule_subs = schedule_p.add_subparsers(dest="schedule_command")
+
+    _schedule_add_p = schedule_subs.add_parser("add", help="Install a schedule.")
+    _schedule_add_p.add_argument("cron_expr", help="5-field cron expression, e.g. '0 9 * * 1-5'.")
+    _schedule_add_p.add_argument(
+        "--todo", required=True, metavar="PATH", help="Absolute path to the todo file."
+    )
+    _schedule_add_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to gsd.toml."
+    )
+    _schedule_add_p.add_argument(
+        "--dry-run", action="store_true", help="Print the entry without installing."
+    )
+    _schedule_add_p.add_argument(
+        "--backend", default=None, metavar="NAME", help="Force 'cron' or 'launchd'."
+    )
+
+    schedule_subs.add_parser("list", help="List gsd-owned schedule entries.")
+
+    _schedule_remove_p = schedule_subs.add_parser("remove", help="Remove a schedule entry.")
+    _schedule_remove_p.add_argument("schedule_id", help="The schedule ID to remove.")
+    _schedule_remove_p.add_argument(
+        "--backend", default=None, metavar="NAME", help="Force 'cron' or 'launchd'."
+    )
+
+    _schedule_show_p = schedule_subs.add_parser(
+        "show", help="Preview what 'add' would install (never writes)."
+    )
+    _schedule_show_p.add_argument("cron_expr", help="5-field cron expression.")
+    _schedule_show_p.add_argument(
+        "--todo", required=True, metavar="PATH", help="Absolute path to the todo file."
+    )
+    _schedule_show_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to gsd.toml."
+    )
+
+    # doctor stub
+    subs.add_parser("doctor")
 
     return parser
 
@@ -97,6 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_report(args)
     if args.command == "resume":
         return _cmd_resume(args)
+    if args.command == "schedule":
+        return _cmd_schedule(args)
     print(f"gsd {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
     return 2
 
@@ -579,6 +618,83 @@ def _cmd_resume(
     write_report(report, run_dir)
     print(format_summary(report))
     return exit_status
+
+
+# ---------------------------------------------------------------------------
+# schedule subcommand
+# ---------------------------------------------------------------------------
+
+
+def _cmd_schedule(args: argparse.Namespace) -> int:
+    """Implement ``gsd schedule <add|list|remove|show>``."""
+    from .config import load_config
+    from .schedule import (
+        CronExprError,
+        add_schedule,
+        default_backend,
+        list_schedules,
+        remove_schedule,
+    )
+
+    sub = getattr(args, "schedule_command", None)
+    if sub is None:
+        build_parser().parse_args(["schedule", "--help"])
+        return 0
+
+    config = load_config()
+    backend_override: str | None = getattr(args, "backend", None) or config.schedule_backend
+
+    if sub == "add":
+        try:
+            add_schedule(
+                args.cron_expr,
+                todo_path=args.todo,
+                config_path=getattr(args, "config", None),
+                timezone=config.timezone,
+                backend=default_backend(backend_override),
+                dry_run=getattr(args, "dry_run", False),
+            )
+        except CronExprError as exc:
+            print(f"error: invalid cron expression ({exc.field}): {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if sub == "show":
+        try:
+            add_schedule(
+                args.cron_expr,
+                todo_path=args.todo,
+                config_path=getattr(args, "config", None),
+                timezone=config.timezone,
+                backend=default_backend(backend_override),
+                dry_run=True,
+            )
+        except CronExprError as exc:
+            print(f"error: invalid cron expression ({exc.field}): {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if sub == "list":
+        entries = list_schedules(default_backend(backend_override))
+        if not entries:
+            print("No gsd-owned schedule entries found.")
+            return 0
+        for e in entries:
+            print(
+                f"  id={e.schedule_id}  cron={e.cron_expr!r}  tz={e.timezone}  todo={e.todo_path}"
+            )
+        return 0
+
+    if sub == "remove":
+        removed = remove_schedule(args.schedule_id, default_backend(backend_override))
+        if not removed:
+            print(f"error: schedule {args.schedule_id!r} not found", file=sys.stderr)
+            return 1
+        print(f"Removed schedule {args.schedule_id!r}.")
+        return 0
+
+    print(f"gsd schedule {sub}: unknown sub-command", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

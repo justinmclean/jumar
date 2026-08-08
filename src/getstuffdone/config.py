@@ -110,6 +110,7 @@ class Config:
     evidence_head_bytes: int = 4000
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     commands: CommandPolicy = field(default_factory=CommandPolicy)
+    schedule_backend: str | None = None  # None = platform default (cron/launchd)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +172,9 @@ def load_config(
         deny=tuple(str(x) for x in commands_raw.get("deny", list(_DEFAULT_DENY))),
     )
 
+    raw_sched_backend = _get("schedule_backend", None)
+    schedule_backend = str(raw_sched_backend) if raw_sched_backend is not None else None
+
     return Config(
         todo_path=str(_get("todo_path", "todo.md")),
         timezone=str(_get("timezone", _system_timezone())),
@@ -183,6 +187,7 @@ def load_config(
         evidence_head_bytes=int(_get("evidence_head_bytes", 4000)),
         harness=harness,
         commands=commands,
+        schedule_backend=schedule_backend,
     )
 
 
