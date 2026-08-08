@@ -22,102 +22,70 @@ todo file → ingest → select ─┬─ time eligibility (@not-before / @due /
                                → complete item → report
 ```
 
-Runs themselves can recur: `gsd schedule add "0 9 * * 1-5"` installs a weekday
-entry in cron/launchd/systemd and exits. There is no resident daemon.
-
 ## Why this exists
 
 Handing "migrate the export script" to an agent produces *something*. Nothing
 checks that it works, and nothing notices that steps two through five were never
-done. The failure mode is confident, unverified, partial completion —
-so the whole design is built around refusing to advance on unproven work:
+done. The failure mode is confident, unverified, partial completion — so the
+whole design is built around refusing to advance on unproven work:
 
 - A subtask with no executable acceptance check is **rejected at planning time**.
   "Trust me" is not a check.
 - Verification runs in a **fresh context** that never sees the executing agent's
   reasoning — only the world it left behind.
-- The independent judge verifier is prompted **adversarially**: its default
-  answer is fail, and it must cite specific evidence to pass.
+- The judge verifier is prompted **adversarially**: its default answer is fail,
+  and it must cite specific evidence to pass.
 - A check that cannot run is `inconclusive`, which is **not** a pass.
-- Repairs are **bounded**; a repair may never rewrite its own acceptance check.
-- The system **never pushes and never opens a PR**. It stops at a local commit.
+- Repairs are **bounded**, and a repair may never rewrite its own check.
 - A deadline changes only **queue position**. Being overdue never shortens a
-  plan, relaxes a check, or skips verification — a test asserts `due` is unread
-  by the decompose, execute, verify, and repair paths.
-- A scheduled run is **non-interactive by construction**: anything needing a
-  human ends `inconclusive` and waits, rather than being auto-passed.
+  plan or skips verification — a test asserts `due` is unread by the decompose,
+  execute, verify and repair paths.
+- The system **never pushes and never opens a PR**. It stops at a local commit.
 
 ## Status
 
-**Bootstrap.** The specification, the operational rules, the prioritised plan,
-and the build loop exist. The pipeline itself is not implemented yet — that is
-what the loop builds, one verified work item at a time.
+Honest state of play, because a tool about verification should not overstate
+itself:
 
-## Layout
-
-| Path | What it is |
+| Command | State |
 |---|---|
-| `specs/` | The specification: product & vision, functional spec with numbered acceptance criteria, data model, technical plan, and the spec for the loop itself. |
-| `IMPLEMENTATION_PLAN.md` | Prioritised work items. One work item = one branch = one PR. |
-| `AGENTS.md` | Operational rules for any agent working in this repo: repo map, validation commands, branch rules, hard limits. |
-| `tools/spec-loop/` | The spec-driven build loop that builds this repo. |
-| `src/getstuffdone/` | The Python package (skeleton; built by the loop). |
-| `tests/` | pytest suites, one module per stage. |
-| `todo.example.md` | An example todo list showing the supported syntax. |
+| `gsd plan --dry-run` | **Works.** Ingests, selects, prints the eligible item plus deferred/blocked. No agent calls. |
+| `gsd report <run-id>` | **Works.** Builds `report.md` from a run journal; exit 1 if anything failed. |
+| `gsd resume <run-id>` | **Works.** Replays the journal and runs the full execute→verify→complete loop from the first unverified subtask. |
+| `gsd run` | **Stub** — exits 2. Flag validation is live, the pipeline is not yet wired. |
+| `gsd schedule`, `gsd doctor` | **Stubs** — exit 2. |
 
-## The spec pack
+Every pipeline *module* is built and tested: `ingest`, `select`, `clock`,
+`recurrence`, `decompose`, `gate`, `execute`, `repair`, `complete`, `report`,
+`journal`, `harness`, and all five verifiers (`command`, `file`, `absence`,
+`judge`, `manual`). What's missing is the wiring for `gsd run`, plus `lock.py`,
+`schedule.py`, `doctor`, and CI. See `IMPLEMENTATION_PLAN.md`.
 
-- **[01 — Product & Vision](specs/01-product-spec.md)** — the problem, the
-  goals, the non-goals, the guiding principles.
-- **[02 — Functional Spec](specs/02-functional-spec.md)** — the ten stages,
-  each with behaviour, contract, and numbered acceptance criteria (AC1.1 …
-  AC10.9) that tests check directly.
-- **[03 — Data Model](specs/03-data-model.md)** — every shape, its invariants,
-  and the append-only journal format.
-- **[04 — Technical Plan](specs/04-technical-plan.md)** — stack, package layout,
-  the agent-harness abstraction, execution isolation, the clock/scheduling
-  rules, and the **build phases**.
-- **[05 — Operator Tooling](specs/05-operator-tooling.md)** — the spec loop, and
-  the mapping between how the product works and how the repo is built.
+Because `gsd resume` already orchestrates the whole loop, the fastest path to a
+working `gsd run` is to lift that orchestration into a shared function — see
+**Known gaps** below.
 
-## Getting started
+## Install
+
+Python 3.11 or newer (the code uses `datetime.UTC`).
 
 ```bash
-git init && git add -A && git commit -m "Initial spec pack + loop"
-git branch -M main
-make install                       # editable install + dev tools
-make check                         # ruff + mypy + pytest + loop fixture tests
-
-./tools/spec-loop/loop.sh plan     # derive work items from the specs
-./tools/spec-loop/loop.sh build 1  # build exactly one, on its own branch
+git clone <your-remote> GetStuffDone && cd GetStuffDone
+make install      # editable install + dev tools (pytest, ruff, mypy)
+make check        # ruff + mypy + pytest + the build-loop fixture tests
+gsd --version
 ```
 
-Once the pipeline is built, a recurring run installs with:
+## Quick start
 
 ```bash
-gsd schedule add "0 9 * * 1-5" --todo ~/todo.md --dry-run   # see it first
-gsd schedule add "0 9 * * 1-5" --todo ~/todo.md             # then install
-gsd schedule list
+cp todo.example.md todo.md      # todo.md is git-ignored by default
+$EDITOR todo.md
+gsd plan --dry-run              # see what it would pick, and why
 ```
 
-Review the branch, push it yourself, open the PR yourself. The loop stops at a
-local commit by design.
-
-## How the repo is built
-
-GetStuffDone is built the way GetStuffDone works — one work item at a time, on
-its own branch, validated before it commits:
-
-| product concept | build-loop equivalent |
-|---|---|
-| todo item | work item in `IMPLEMENTATION_PLAN.md` |
-| decomposition | the `plan` beat |
-| one subtask at a time | one work item per `build` iteration |
-| acceptance check | the item's Validation command (`make check`) |
-| verification gate | no commit until validation is green |
-| journal | git history — one commit per verified item |
-
-Full detail in [`tools/spec-loop/README.md`](tools/spec-loop/README.md).
+Full worked examples, the flag reference, and the config reference are in
+**[USAGE.md](USAGE.md)**.
 
 ## Todo file syntax
 
@@ -134,21 +102,81 @@ never treated as work.
 - [x] Already done — skipped
 ```
 
-Schedule tokens: `@not-before=` gates eligibility, `@due=` is an advisory
-deadline that only affects ordering and reporting, `@every=` makes an item
-recur (`weekday`, `1d`, `2w`, `mon,thu`). A completed recurring item stays
-unchecked with its `@not-before=` advanced — that is what makes it recurring.
-An unparseable schedule token blocks that item rather than being guessed at.
+| Token | Meaning |
+|---|---|
+| `@id=` | Stable item id. Otherwise derived from the text plus a hash. |
+| `@priority=` | Lower sorts first. |
+| `@depends=` | Blocks until the named item is done. Cycles are a startup error. |
+| `@capability=` | Grants authority: `read_fs`, `write_fs`, `run_commands`, `network`, `git_commit`. |
+| `@max-subtasks=` | Per-item override of the plan-length cap. |
+| `@not-before=` | Eligibility gate. Before this instant the item is *deferred*. |
+| `@due=` | Advisory deadline. Affects ordering and reporting only. |
+| `@every=` | Recurrence: `weekday`, `1d`, `2w`, `mon,thu`. |
 
 An indented task list under an item is **your** breakdown and is used verbatim;
 the model is only asked to supply acceptance checks for steps that lack one.
 
-See `todo.example.md`, and `specs/02-functional-spec.md` §Stage 1 for the full
-metadata grammar.
+A completed `@every=` item stays **unchecked** with its `@not-before=` advanced
+to the next occurrence — that is what makes it recurring. An unparseable
+schedule token blocks that item rather than being guessed at.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `specs/` | The specification. Ten stages, ~74 numbered acceptance criteria. |
+| `IMPLEMENTATION_PLAN.md` | Prioritised work items. One item = one branch = one PR. |
+| `AGENTS.md` | Operational rules for any agent working in this repo. |
+| `tools/spec-loop/` | The spec-driven build loop that builds this repo. |
+| `src/getstuffdone/` | The Python package. |
+| `tests/` | pytest suites, one module per stage. |
+| `USAGE.md` | Worked examples, command reference, config reference. |
+
+## The spec pack
+
+- **[01 — Product & Vision](specs/01-product-spec.md)** — problem, goals,
+  non-goals, guiding principles.
+- **[02 — Functional Spec](specs/02-functional-spec.md)** — the ten stages, each
+  with behaviour, contract, and numbered acceptance criteria (AC1.1 … AC10.9)
+  that tests check directly.
+- **[03 — Data Model](specs/03-data-model.md)** — every shape, its invariants,
+  and the append-only journal format.
+- **[04 — Technical Plan](specs/04-technical-plan.md)** — stack, package layout,
+  the harness abstraction, execution isolation, clock and scheduling rules, and
+  the build phases.
+- **[05 — Operator Tooling](specs/05-operator-tooling.md)** — the spec loop, and
+  how the product's discipline maps onto how the repo is built.
+
+## How the repo is built
+
+GetStuffDone is built the way GetStuffDone works — one work item at a time, on
+its own branch, validated before it commits:
+
+| product concept | build-loop equivalent |
+|---|---|
+| todo item | work item in `IMPLEMENTATION_PLAN.md` |
+| decomposition | the `plan` beat |
+| one subtask at a time | one work item per `build` iteration |
+| acceptance check | the item's Validation command (`make check`) |
+| verification gate | no commit until validation is green |
+| journal | git history — one commit per verified item |
+
+```bash
+./tools/spec-loop/loop.sh plan      # derive work items from the specs
+./tools/spec-loop/loop.sh build 1   # build exactly one, on its own branch
+```
+
+Review the branch, push it yourself, open the PR yourself. The loop stops at a
+local commit by design. Full detail in
+[`tools/spec-loop/README.md`](tools/spec-loop/README.md).
+
+Prefer `build 1` followed by a merge over `build 3`. Parallel iterations can't
+see each other's files, so two branches will independently implement the same
+shared module and you'll spend the saved time untangling it.
 
 ## Security posture
 
-- Runs the agent CLI with its unattended flag — that bypasses the **agent**
+- The agent CLI runs with its unattended flag — that bypasses the **agent**
   permission layer, not an OS sandbox. Run it inside a sandbox with no push
   credentials in the environment.
 - `network` is **not** a default capability; `curl`, `wget`, `ssh`, `scp` are on
@@ -156,6 +184,20 @@ metadata grammar.
   argv.
 - Every subprocess is argv with `shell=False`. No shell-string interpolation.
 - Secrets come from the environment or a git-ignored `.env`, never the repo.
+
+## Known gaps
+
+- **`gsd run` is not wired**, and there is no work item for it in
+  `IMPLEMENTATION_PLAN.md` — the plan jumps from the verifiers to `lock.py`.
+  `_cmd_resume` in `cli.py` already contains the full orchestration; the fix is
+  to extract it into a shared `run_item()` that both `run` and `resume` call,
+  rather than writing it twice.
+- `lock.py` (single-flight) and `schedule.py` (cron/launchd) are specified in
+  `specs/02-functional-spec.md` §Stage 10 but not built. Until the lock exists,
+  do not install a recurring run.
+- `gsd doctor` and CI are unbuilt.
+- The build loop has no single-flight lock of its own, so a scheduled loop must
+  not overlap its own run window.
 
 ## Licence
 
