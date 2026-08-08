@@ -228,9 +228,9 @@ def _check_todo(config: Config) -> DoctorCheck:
 def _check_schedule(config: Config) -> DoctorCheck:
     """Installed schedule entries readable (graceful when schedule module absent)."""
     try:
-        from . import schedule as _sched  # type: ignore[attr-defined]
+        from . import schedule as _sched
 
-        entries = _sched.list_entries(config)
+        entries = _sched.list_schedules()
     except ImportError:
         return DoctorCheck(
             "schedule",
