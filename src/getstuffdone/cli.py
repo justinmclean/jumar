@@ -20,7 +20,7 @@ from typing import Any
 
 from . import __version__
 
-SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor")
+SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,6 +120,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--todo", default=None, metavar="PATH", help="Override the todo file path."
     )
 
+    # status
+    status_p = subs.add_parser("status", help="Show item-centric status across all runs.")
+    status_p.add_argument(
+        "--todo", default=None, metavar="PATH", help="Override the todo file path."
+    )
+    status_p.add_argument(
+        "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
+    )
+
     return parser
 
 
@@ -141,6 +150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_schedule(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
+    if args.command == "status":
+        return _cmd_status(args)
     print(f"gsd {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
     return 2
 
@@ -973,6 +984,34 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     report = run_doctor(config)
     print(format_report(report))
     return report.exit_status
+
+
+# ---------------------------------------------------------------------------
+# status subcommand
+# ---------------------------------------------------------------------------
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    """Implement ``gsd status``.
+
+    Read-only: never creates a run directory.  Exit 0 always.
+    """
+    from .clock import capture_now
+    from .config import load_config
+    from .status import build_status, format_status
+
+    cli_overrides: dict[str, object] = {}
+    if getattr(args, "todo", None):
+        cli_overrides["todo_path"] = args.todo
+    config = load_config(cli_overrides=cli_overrides or None)
+
+    now = capture_now(config)
+    todo_path = Path(config.todo_path)
+    runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
+
+    report = build_status(todo_path, runs_dir, config, now)
+    print(format_status(report))
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
