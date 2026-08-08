@@ -104,6 +104,7 @@ class Config:
     subtask_timeout_s: int = 900
     halt_on_fail: bool = False
     commit_on_complete: bool = False
+    max_consecutive_failures: int = 3
     capabilities: frozenset[Capability] = field(
         default_factory=lambda: _DEFAULT_CAPABILITIES,
     )
@@ -183,6 +184,7 @@ def load_config(
         subtask_timeout_s=int(_get("subtask_timeout_s", 900)),
         halt_on_fail=bool(_get("halt_on_fail", False)),
         commit_on_complete=bool(_get("commit_on_complete", False)),
+        max_consecutive_failures=int(_get("max_consecutive_failures", 3)),
         capabilities=capabilities,
         evidence_head_bytes=int(_get("evidence_head_bytes", 4000)),
         harness=harness,

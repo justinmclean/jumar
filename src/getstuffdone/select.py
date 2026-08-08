@@ -48,6 +48,9 @@ class SelectResult:
     blocked: list[tuple[TodoItem, str]]
     """Items blocked by an unfinished/deferred dependency: (item, reason)."""
 
+    parked: list[tuple[TodoItem, str]]
+    """Items with @paused= token: (item, reason).  Never selected."""
+
     next_eligible_at: str | None
     """Earliest future eligibility instant across all deferred items (ISO-8601 UTC)."""
 
@@ -165,6 +168,7 @@ def select_next(
 
     deferred: list[tuple[TodoItem, str]] = []
     blocked: list[tuple[TodoItem, str]] = []
+    parked: list[tuple[TodoItem, str]] = []
     eligible: list[TodoItem] = []
 
     def _is_done(item_id: str) -> bool:
@@ -188,6 +192,13 @@ def select_next(
         # Done items (source or journal) are never re-selected.
         if item.status is ItemStatus.done or item.item_id in done_ids:
             continue
+
+        # Parked items (@paused= token) are excluded before all other gates.
+        paused_reason = item.meta.get("paused")
+        if paused_reason:
+            parked.append((item, str(paused_reason)))
+            continue
+
         # Only pending / in_progress items are candidates.
         if item.status in _INELIGIBLE_STATUSES:
             continue
@@ -255,5 +266,6 @@ def select_next(
         selected=eligible[0] if eligible else None,
         deferred=deferred,
         blocked=blocked,
+        parked=parked,
         next_eligible_at=next_eligible_at,
     )

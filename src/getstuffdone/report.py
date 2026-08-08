@@ -142,9 +142,10 @@ def build_report(run_dir: Path) -> RunReport:
     item_failure_code: dict[str, str] = {}
     item_failed_subtask_idx: dict[str, int] = {}
 
-    # Deferred / blocked items.
+    # Deferred / blocked / parked items.
     deferred_items: dict[str, tuple[str, str]] = {}  # item_id -> (text, eligible_at)
     blocked_items: dict[str, tuple[str, str]] = {}  # item_id -> (text, reason)
+    parked_tracking: dict[str, tuple[str, str]] = {}  # item_id -> (text, reason)
 
     for entry in entries:
         event: str = entry.get("event", "")
@@ -177,6 +178,12 @@ def build_report(run_dir: Path) -> RunReport:
             reason = str(payload.get("reason", ""))
             blocked_items[item_id] = (text, reason)
             item_status[item_id] = "blocked"
+
+        elif event == "item_parked" and item_id:
+            text = str(payload.get("text", item_id))
+            reason = str(payload.get("reason", ""))
+            parked_tracking[item_id] = (text, reason)
+            item_status[item_id] = "parked"
 
         elif event == "gate_decision" and item_id:
             if payload.get("skipped_by_human") or payload.get("decision") == "skip":
@@ -272,6 +279,18 @@ def build_report(run_dir: Path) -> RunReport:
                 )
             )
 
+    # Parked items (@paused= token) — listed but never affect exit status.
+    for iid, (text, reason) in parked_tracking.items():
+        if iid not in selected_text:
+            items.append(
+                ReportItem(
+                    item_id=iid,
+                    text=text,
+                    status="parked",
+                    blocked_reason=reason,
+                )
+            )
+
     # Earliest future eligibility across all deferred items (AC9.4).
     eligible_ats = [eligible_at for _, eligible_at in deferred_items.values() if eligible_at]
     next_eligible_at = min(eligible_ats) if eligible_ats else None
@@ -305,6 +324,7 @@ def format_summary(report: RunReport) -> str:
     failed = [i for i in report.items if i.status == "failed"]
     deferred = [i for i in report.items if i.status == "deferred"]
     blocked = [i for i in report.items if i.status == "blocked"]
+    parked = [i for i in report.items if i.status == "parked"]
     in_progress = [i for i in report.items if i.status == "in_progress"]
     overdue_done = [i for i in done if i.is_overdue]
 
@@ -322,6 +342,8 @@ def format_summary(report: RunReport) -> str:
         parts.append(f"{len(deferred)} deferred")
     if blocked:
         parts.append(f"{len(blocked)} blocked")
+    if parked:
+        parts.append(f"{len(parked)} parked")
     if in_progress:
         parts.append(f"{len(in_progress)} in progress (interrupted)")
 
@@ -333,6 +355,11 @@ def format_summary(report: RunReport) -> str:
     # AC9.5 — overdue items listed even when completed.
     for item in overdue_done:
         lines.append(f"Overdue (completed): {item.text}")
+
+    # Parked items — listed with reason, never affect exit status.
+    for item in parked:
+        reason = item.blocked_reason or "auto-failures"
+        lines.append(f"Parked: {item.text}  [paused: {reason}]")
 
     # AC9.1 — failing subtask detail.
     for item in failed:
@@ -380,6 +407,7 @@ def format_markdown(report: RunReport) -> str:
     in_progress = [i for i in report.items if i.status == "in_progress"]
     deferred = [i for i in report.items if i.status == "deferred"]
     blocked = [i for i in report.items if i.status == "blocked"]
+    parked = [i for i in report.items if i.status == "parked"]
     skipped = [i for i in report.items if i.status == "skipped_by_human"]
     overdue_done = [i for i in done if i.is_overdue]
 
@@ -395,6 +423,8 @@ def format_markdown(report: RunReport) -> str:
         lines.append(f"| Deferred | {len(deferred)} |")
     if blocked:
         lines.append(f"| Blocked | {len(blocked)} |")
+    if parked:
+        lines.append(f"| Parked | {len(parked)} |")
     if skipped:
         lines.append(f"| Skipped by human | {len(skipped)} |")
     if overdue_done:
@@ -420,6 +450,15 @@ def format_markdown(report: RunReport) -> str:
         lines.append("")
         for item in blocked:
             reason = item.blocked_reason or "unknown reason"
+            lines.append(f"- **{item.text}**: {reason}")
+        lines.append("")
+
+    # Parked items — listed with reason, never affect exit status.
+    if parked:
+        lines.append("## Parked Items")
+        lines.append("")
+        for item in parked:
+            reason = item.blocked_reason or "auto-failures"
             lines.append(f"- **{item.text}**: {reason}")
         lines.append("")
 

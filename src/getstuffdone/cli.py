@@ -299,6 +299,7 @@ def run_item(
     Returns the exit-status contribution: 0 when the item completed, was
     dry-run, or was skipped by the human; 1 when it failed or was inconclusive.
     """
+    from .backoff import advance_failure_count, clear_failure_count
     from .complete import complete
     from .decompose import DecomposeError, decompose
     from .execute import execute
@@ -342,6 +343,7 @@ def run_item(
                 item_id=item.item_id,
                 payload={"failure_code": exc.failure_code.value},
             )
+            advance_failure_count(todo_path, item, config, journal)
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
@@ -361,6 +363,7 @@ def run_item(
             item_id=item.item_id,
             payload={"failure_code": exc.failure_code.value},
         )
+        advance_failure_count(todo_path, item, config, journal)
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -422,6 +425,7 @@ def run_item(
                         "failed_subtask_index": subtask.index,
                     },
                 )
+                advance_failure_count(todo_path, item, config, journal)
                 return 1
 
         if result.verdict != Verdict.passed:
@@ -433,6 +437,7 @@ def run_item(
                     "failed_subtask_index": subtask.index,
                 },
             )
+            advance_failure_count(todo_path, item, config, journal)
             return 1
 
         verifications.append(result)
@@ -455,8 +460,10 @@ def run_item(
             item_id=item.item_id,
             payload={"failure_code": "check_failed"},
         )
+        advance_failure_count(todo_path, item, config, journal)
         return 1
 
+    clear_failure_count(todo_path, item, journal)
     journal.append(ITEM_COMPLETED, item_id=item.item_id, payload={})
     return 0
 
@@ -514,7 +521,7 @@ def _cmd_run(
     try:
         from .clock import capture_now
         from .ingest import IngestError, ingest
-        from .journal import LOCK_RECLAIMED, RUN_FINISHED, RUN_STARTED, Journal
+        from .journal import ITEM_PARKED, LOCK_RECLAIMED, RUN_FINISHED, RUN_STARTED, Journal
         from .report import build_report, format_summary, write_report
         from .select import CycleError, select_next
 
@@ -551,11 +558,23 @@ def _cmd_run(
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
+        # Journal parked items so the report can list them.
+        for p_item, p_reason in sel.parked:
+            journal.append(
+                ITEM_PARKED,
+                item_id=p_item.item_id,
+                payload={"text": p_item.text, "reason": p_reason},
+            )
+
         if sel.selected is None:
             # AC2.10 / AC9.4: nothing eligible is a success, not a failure.
             print("Nothing eligible to work on.")
             if sel.next_eligible_at:
                 print(f"Next eligible: {sel.next_eligible_at}")
+            if sel.parked:
+                print(f"Parked ({len(sel.parked)}):")
+                for p_item, p_reason in sel.parked:
+                    print(f"  - {p_item.text!r}  [paused: {p_reason}]")
             journal.append(RUN_FINISHED, payload={"exit_status": 0})
             return 0
 

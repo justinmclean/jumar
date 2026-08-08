@@ -46,6 +46,9 @@ SCHEDULE_ADVANCED = "schedule_advanced"
 LOCK_RECLAIMED = "lock_reclaimed"
 ALREADY_RUNNING = "already_running"
 RUN_FINISHED = "run_finished"
+FAILURE_COUNT_ADVANCED = "failure_count_advanced"
+FAILURE_COUNT_CLEARED = "failure_count_cleared"
+ITEM_PARKED = "item_parked"
 
 
 # ---------------------------------------------------------------------------
