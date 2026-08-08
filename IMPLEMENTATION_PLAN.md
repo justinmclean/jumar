@@ -10,12 +10,10 @@ never weaken a check to get green.
 
 ## Status — 2026-08-08
 
-All phases through Phase 6 are substantially complete. Phases 0–5b are fully
-merged to main. Phase 6 (`gsd-doctor`) is built on the local `gsd-doctor`
-branch (1 commit ahead of main, awaiting human review and merge). Two planned
-items remain: `ci-and-coverage-floor`, then `failure-backoff-and-park`
-(Phase 7) — the latter should land before a recurring schedule is installed
-against a real todo list.
+All phases through Phase 6 are fully merged to main (Phases 0–6 complete).
+Three planned items remain, in priority order: `failure-backoff-and-park`
+(Phase 7) — which must land before a recurring schedule is installed against a
+real todo list — then `gsd-status` and `json-output` (Phase 8).
 
 ### Completed (merged to main)
 
@@ -91,14 +89,14 @@ against a real todo list.
   delimited entries; `add` prints before writing; absolute paths and
   `--non-interactive` in installed command; invalid cron expressions rejected;
   timezone recorded and printed. Closed: AC10.1–AC10.4, AC10.7–AC10.9.
-
-### In-flight (local branch, awaiting human review)
-
 - **gsd-doctor** — `doctor.py` + `gsd doctor` CLI command: config validity,
   harness binary on PATH, allow-list sanity, installed schedule entries
-  readable, todo file parseable. Actionable error per failure. On branch
-  `gsd-doctor` (1 commit ahead of main).
-  *Closes:* Phase 6 doctor requirement.
+  readable, todo file parseable. Actionable error per failure.
+  Closed: Phase 6 doctor requirement.
+- **ci-and-coverage-floor** — GitHub Actions workflow running `make check` on
+  push; per-module coverage floor at 90% enforced (per the testing strategy in
+  `specs/04`).
+  Closed: `specs/04` §Testing strategy coverage floor.
 
 ---
 
@@ -106,20 +104,6 @@ against a real todo list.
 
 Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 `specs/02-functional-spec.md`.
-
----
-
-### Phase 6 — polish
-
-1. **ci-and-coverage-floor** — GitHub Actions workflow running `make check`
-   on push; per-module coverage floor at 90% enforced (per the testing
-   strategy in `specs/04`). The workflow must pass on a scratch branch with a
-   coverage assertion that fails below 90%, confirming the floor is live.
-   *Validation:* the workflow green on the branch; `make cov` locally
-   showing every module at ≥ 90%; a deliberate coverage drop must cause the
-   workflow to fail.
-   *Closes:* `specs/04` §Testing strategy coverage floor.
-   *Branch slug:* `ci-and-coverage`
 
 ---
 
@@ -132,7 +116,7 @@ deliberately left untouched (AC8.7), which makes this loop the default
 behaviour, not an edge case. Land this item before installing a recurring
 schedule against a real todo list.
 
-2. **failure-backoff-and-park** — cross-run failure escalation, so an
+1. **failure-backoff-and-park** — cross-run failure escalation, so an
    unattended run cannot re-attempt the same broken item indefinitely. When an
    item reaches a *failed* terminal state (`check_failed`,
    `unverifiable_plan`, repair budget exhausted), the run advances a
@@ -164,6 +148,57 @@ schedule against a real todo list.
 
 ---
 
+### Phase 8 — operator visibility
+
+Everything today is run-centric (`runs/<uuid>/`), but the operator's question
+is item-centric: *what is the state of my list?* With hundreds of run
+directories, that question is currently answered by hand. Both items here are
+read-side only — no agent calls, no todo-file writes.
+
+2. **gsd-status** — `status.py` + `gsd status` CLI command: an item-centric
+   view aggregated across the todo file and all journals in the runs
+   directory. For every item on the list, one line: current state (done /
+   parked / deferred / blocked / eligible / never-attempted), last attempt
+   (run id, instant, outcome), consecutive-failure count, and — for deferred
+   items — the next eligibility instant. Parked items show their
+   `@paused=` reason; failed items name the failing subtask and check kind
+   from the most recent journal. State is derived by replaying journals via
+   the existing `journal.py` replay path — no new state store, the journals
+   and the todo file remain the only sources of truth. Corrupt or partial
+   journals degrade that item's line to what is known (consistent with the
+   existing corrupt-line tolerance), never crash the command. Read-only:
+   `gsd status` must not write a run directory, unlike `plan`. Exit 0 always
+   — status reports state, it does not judge it.
+   *Validation:* `make check` + `pytest tests/test_status.py -q` — must
+   include: aggregation across multiple runs picks the *latest* attempt per
+   item; a parked item shows its reason; a deferred item shows its next
+   eligibility instant; a corrupt journal degrades gracefully; the runs dir
+   is byte-identical before and after (no run directory created).
+   *Closes:* no existing AC — new behaviour. Spec amendment (proposed
+   AC11.x status contract) is a USER-side follow-up.
+   *Branch slug:* `gsd-status`
+
+3. **json-output** — `--json` flag on `gsd plan`, `gsd status`, and
+   `gsd report`: the same facts the human rendering prints, as a single JSON
+   document on stdout — nothing printed that JSON mode omits, nothing in JSON
+   mode the human mode hides. Warnings go to stderr so stdout stays parseable.
+   Schema is derived from the existing dataclasses in `models.py` /
+   `report.py`, serialised with explicit field names — no ad-hoc dicts
+   assembled in the CLI layer. Timestamps are ISO-8601 UTC, matching the
+   journal. Exit-status contract is unchanged in JSON mode: the machine reads
+   the body, the shell reads the code, and they never disagree.
+   *Validation:* `make check` + `pytest tests/test_json_output.py -q` — must
+   include: `--json` output for each command parses with `json.loads` and
+   round-trips `python3 -m json.tool`; a run with warnings keeps stdout pure
+   JSON; human and JSON modes are asserted to be built from the same
+   underlying result object (not two code paths); exit statuses identical in
+   both modes.
+   *Closes:* no existing AC — new behaviour. Spec amendment is a USER-side
+   follow-up alongside the status contract.
+   *Branch slug:* `json-output`
+
+---
+
 ## Guardrails (do not re-plan these)
 
 - **Verification is not optional and not deferrable.** No work item may ship a
@@ -192,7 +227,6 @@ schedule against a real todo list.
 - Confirm which agent CLI is on PATH before the first loop run
   (`SPEC_LOOP_AGENT`, default `claude`).
 - Run the loop inside a sandbox with no push credentials in the environment.
-- Review and merge the `gsd-doctor` local branch before running `ci-and-coverage`.
 - Do not install a recurring schedule against a real todo list until
   `failure-backoff-and-park` has landed — until then a failing item is
   re-attempted (and its agent budget re-spent) on every firing.
@@ -200,3 +234,5 @@ schedule against a real todo list.
   excludes `@paused=` items, reported as Parked) and AC8.8 (failed terminal
   state advances `@failed=`; threshold appends `@paused=auto-failures`) to
   `specs/02-functional-spec.md` — the loop may not edit specs itself.
+- When `gsd-status` / `json-output` land, add the corresponding contract
+  sections (proposed AC11.x) to `specs/02-functional-spec.md` — same rule.
