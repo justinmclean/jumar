@@ -114,8 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default=None, metavar="PATH", help="Absolute path to gsd.toml."
     )
 
-    # doctor stub
-    subs.add_parser("doctor")
+    # doctor
+    doctor_p = subs.add_parser("doctor", help="Check config, harness, and todo file.")
+    doctor_p.add_argument(
+        "--todo", default=None, metavar="PATH", help="Override the todo file path."
+    )
 
     return parser
 
@@ -136,6 +139,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_resume(args)
     if args.command == "schedule":
         return _cmd_schedule(args)
+    if args.command == "doctor":
+        return _cmd_doctor(args)
     print(f"gsd {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
     return 2
 
@@ -695,6 +700,26 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
 
     print(f"gsd schedule {sub}: unknown sub-command", file=sys.stderr)
     return 2
+
+
+# ---------------------------------------------------------------------------
+# doctor subcommand
+# ---------------------------------------------------------------------------
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Implement ``gsd doctor``."""
+    from .config import load_config
+    from .doctor import format_report, run_doctor
+
+    cli_overrides: dict[str, object] = {}
+    if getattr(args, "todo", None):
+        cli_overrides["todo_path"] = args.todo
+    config = load_config(cli_overrides=cli_overrides or None)
+
+    report = run_doctor(config)
+    print(format_report(report))
+    return report.exit_status
 
 
 if __name__ == "__main__":  # pragma: no cover
