@@ -231,12 +231,42 @@ def test_plan_dry_run_item_with_due_date(
     assert "2099-12-31" in out
 
 
-def test_doctor_not_yet_implemented(
+def test_doctor_runs_its_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd doctor`` is not yet implemented and returns 2."""
+    """``gsd doctor`` executes its checks and reports them.
+
+    The verdict is environment-dependent (the harness binary may or may not be
+    on PATH), so this asserts the command ran and rendered a report rather than
+    pinning a pass/fail. Never 2 — that was the pre-implementation stub.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text("- [ ] Something to do\n")
+
     rc = main(["doctor"])
-    assert rc == 2
+    out = capsys.readouterr().out
+
+    assert rc in (0, 1)
+    assert out.startswith("gsd doctor")
+    for name in ("harness", "todo"):
+        assert name in out
+
+
+def test_doctor_reports_a_missing_todo_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A todo file that does not exist is surfaced as a check line, not a crash."""
+    monkeypatch.chdir(tmp_path)
+
+    rc = main(["doctor", "--todo", str(tmp_path / "definitely-absent.md")])
+    out = capsys.readouterr().out
+
+    assert rc in (0, 1)
+    assert "definitely-absent.md" in out or "todo" in out
 
 
 # ---------------------------------------------------------------------------

@@ -12,8 +12,10 @@ never weaken a check to get green.
 
 All phases through Phase 6 are substantially complete. Phases 0–5b are fully
 merged to main. Phase 6 (`gsd-doctor`) is built on the local `gsd-doctor`
-branch (1 commit ahead of main, awaiting human review and merge). The single
-remaining planned item is `ci-and-coverage-floor`.
+branch (1 commit ahead of main, awaiting human review and merge). Two planned
+items remain: `ci-and-coverage-floor`, then `failure-backoff-and-park`
+(Phase 7) — the latter should land before a recurring schedule is installed
+against a real todo list.
 
 ### Completed (merged to main)
 
@@ -121,6 +123,47 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
 
 ---
 
+### Phase 7 — unattended hardening
+
+Now that `schedule-os-backends` is merged, an installed recurring run has no
+cross-run failure memory: a broken item is re-attempted — and its agent budget
+re-spent — every firing, forever. A failed recurring item's schedule is
+deliberately left untouched (AC8.7), which makes this loop the default
+behaviour, not an edge case. Land this item before installing a recurring
+schedule against a real todo list.
+
+2. **failure-backoff-and-park** — cross-run failure escalation, so an
+   unattended run cannot re-attempt the same broken item indefinitely. When an
+   item reaches a *failed* terminal state (`check_failed`,
+   `unverifiable_plan`, repair budget exhausted), the run advances a
+   `@failed=N` count on that item's todo line, byte-preserving in the style of
+   `complete.py` — only the target token changes, the rest of the line is
+   byte-identical. When the count reaches `max_consecutive_failures` (new
+   config key, default 3), the same edit appends `@paused=auto-failures`.
+   `select.py` treats any `@paused=` item as ineligible and reports it in a
+   new **Parked** category (alongside Deferred and Blocked) naming the reason;
+   parked items never fail a run's exit status, but the report lists them so
+   an operator reading `report.md` sees what has been benched and why. A
+   successful completion removes `@failed=`. The resume path is human and
+   deliberate: delete the `@paused=` token from the line — no new command.
+   `--dry-run` writes nothing. A failed recurring item's schedule stays
+   untouched (AC8.7 unchanged) — parking makes it ineligible, it does not
+   rewrite `@every=`/`@not-before=`. Journal the todo-file edit before it is
+   made, consistent with the existing write-ahead rule.
+   *Validation:* `make check` + `pytest tests/test_backoff.py -q` — must
+   include: a failure increments `@failed=` byte-preserving (whole-file diff
+   is exactly one line); reaching the threshold appends `@paused=auto-failures`;
+   a `@paused=` item is excluded by `select` and printed as Parked with its
+   reason; a parked item does not affect exit status but appears in
+   `report.md`; a subsequent success removes `@failed=`; `--dry-run` leaves
+   the file byte-identical.
+   *Closes:* no existing AC — new behaviour. Spec amendment (proposed
+   AC2.11 select-excludes-paused, AC8.8 failure-count-advance-and-park) is a
+   USER-side follow-up, since build iterations never modify `specs/`.
+   *Branch slug:* `failure-backoff-and-park`
+
+---
+
 ## Guardrails (do not re-plan these)
 
 - **Verification is not optional and not deferrable.** No work item may ship a
@@ -150,3 +193,10 @@ Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
   (`SPEC_LOOP_AGENT`, default `claude`).
 - Run the loop inside a sandbox with no push credentials in the environment.
 - Review and merge the `gsd-doctor` local branch before running `ci-and-coverage`.
+- Do not install a recurring schedule against a real todo list until
+  `failure-backoff-and-park` has landed — until then a failing item is
+  re-attempted (and its agent budget re-spent) on every firing.
+- When `failure-backoff-and-park` lands, add the proposed AC2.11 (select
+  excludes `@paused=` items, reported as Parked) and AC8.8 (failed terminal
+  state advances `@failed=`; threshold appends `@paused=auto-failures`) to
+  `specs/02-functional-spec.md` — the loop may not edit specs itself.
