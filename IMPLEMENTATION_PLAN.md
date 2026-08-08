@@ -144,13 +144,70 @@ exit-status contract unchanged.
 
 ## Work items (priority order)
 
-*None.* All identified spec gaps are either merged to main (Phases 0–6) or
-already built on local branches (Phases 7–8 above). The build beat has nothing
-to implement.
+NOTE: the "In-flight" section above is stale — `failure-backoff-and-park`,
+`gsd-status` and `json-output` are all merged to main as of 2026-08-08.
 
-The next plan beat should re-examine the specs only after the three in-flight
-branches have been merged, to confirm there are no regressions or new gaps
-introduced at merge time.
+### Phase 6b — enforce the security controls that are only documented
+
+**Highest priority.** Re-added by hand for the third time: a `plan` beat
+regenerates this file from `specs/`, and these findings came from a code audit
+rather than from a spec, so every regeneration drops them. **The durable fix is
+to add them to `specs/02-functional-spec.md` as acceptance criteria** — a
+USER-side edit, since build iterations may not touch specs. Until that happens,
+expect to re-add this section after each plan beat.
+
+S1. **enforce-command-allowlist** — `config.is_allowed()` is defined,
+   documented in `specs/`, `README.md`, `USAGE.md` and `AGENTS.md`, and
+   **called from nowhere**; `doctor.py` reads the lists only to report them.
+   Call it in `verify/command.py` before `subprocess.run`, refusing a
+   disallowed argv as **`inconclusive`** (never `failed`, never `passed`) with
+   `capability_denied` in the evidence. A `command` check's argv is
+   model-chosen, so today the verifier executes whatever the decomposition
+   proposes. `VerifyContext` does not carry `config`; thread it.
+   *Validation:* `make check` + `pytest tests/test_verify_command.py -q` — a
+   denied argv yields `inconclusive` and **spawns no process** (assert with a
+   runner spy); an allowed argv still runs; the refusal reaches the journal.
+
+S2. **enforce-the-send-boundary** — `network` is granted by default (decided
+   2026-08-08), so the enforced boundary is *send*, not *fetch*. Deny `mail`,
+   `mailx`, `sendmail`, `ssh`, `scp`, `sftp` wherever gsd dispatches a process,
+   and re-express the `git push` / `gh` denial so `git -C … push` and
+   `bash -c 'git push'` do not defeat it. Harnesses that cannot express tool
+   restrictions (`codex`, `cursor`, `gemini`, `kiro`) must be gated behind an
+   explicit `allow_unrestricted_harness = true` or dropped from
+   `SUPPORTED_HARNESSES`. Keep shipping the caveat with the code: with
+   `python3` allowed and the network reachable this cannot stop a determined
+   agent; the container is the control.
+   *Validation:* `make check` + `pytest tests/test_harness_argv.py -q` —
+   argv-level only, no agent launched.
+
+S3. **capability-honesty** — DECIDED: `Capability` is a declaration, not a
+   sandbox, and `specs/03-data-model.md` says so. Remaining sweep: make every
+   other statement agree, and add a test asserting the gate's actual contract
+   (declared-subset check) rather than the containment previously implied.
+
+### Phase 8b — make a run observable
+
+P1. **run-progress-output** — `gsd run` currently prints **nothing** between
+   the gate and the final summary: `run_item`, `execute.py`, `repair.py` and
+   every verifier are silent, and the agent subprocess runs with
+   `capture_output=True` so its output never reaches the terminal. With a
+   15-subtask item and a 900 s per-subtask timeout that is potentially hours of
+   blank terminal with no way to distinguish working from wedged. Emit one line
+   per stage transition to **stderr** (so stdout stays clean for `--json`):
+   subtask index and count, description, then the verdict — e.g.
+   `[3/15] Write marker.txt … verifying … passed`. Include repair attempts
+   (`repairing (1/2)`) and the final per-item outcome. Add `--verbose` to
+   stream the agent's captured stdout as it arrives. Suppress all of it under
+   `--json` and when stderr is not a TTY, so scheduled runs stay quiet.
+   *Validation:* `make check` + `pytest tests/test_run_progress.py -q` — a
+   progress line per subtask on stderr and **none on stdout**; nothing emitted
+   under `--json`; `--verbose` includes agent output; a scheduled
+   (`--non-interactive`, non-TTY) run emits no progress chatter.
+   *Closes:* no existing AC — `specs/02` §Stage 5 says nothing about progress
+   output, which is exactly why this was never built. Proposed AC5.6 is a
+   USER-side spec amendment.
+   *Branch slug:* `run-progress-output`
 
 ---
 
