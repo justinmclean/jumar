@@ -11,9 +11,13 @@ never weaken a check to get green.
 ## Status — 2026-08-08
 
 All phases through Phase 6 are fully merged to main (Phases 0–6 complete).
-Three planned items remain, in priority order: `failure-backoff-and-park`
-(Phase 7) — which must land before a recurring schedule is installed against a
-real todo list — then `gsd-status` and `json-output` (Phase 8).
+All three remaining work items (Phases 7–8) are built and live on local
+branches — none have been pushed or merged yet. There are no open spec gaps
+beyond the three USER-side spec amendments noted in the manual follow-ups
+section below.
+
+The build beat has nothing to pick up. The next action is the human merging
+the three local branches in priority order.
 
 ### Completed (merged to main)
 
@@ -100,102 +104,53 @@ real todo list — then `gsd-status` and `json-output` (Phase 8).
 
 ---
 
-## Work items (priority order)
+## In-flight (local branches — not yet pushed or merged)
 
-Phase ordering comes from `specs/04-technical-plan.md`. AC ids refer to
-`specs/02-functional-spec.md`.
-
----
+These items are built and committed on local branches. The build beat must not
+re-implement them. The human must push and merge them in priority order.
 
 ### Phase 7 — unattended hardening
 
-Now that `schedule-os-backends` is merged, an installed recurring run has no
-cross-run failure memory: a broken item is re-attempted — and its agent budget
-re-spent — every firing, forever. A failed recurring item's schedule is
-deliberately left untouched (AC8.7), which makes this loop the default
-behaviour, not an edge case. Land this item before installing a recurring
-schedule against a real todo list.
-
-1. **failure-backoff-and-park** — cross-run failure escalation, so an
-   unattended run cannot re-attempt the same broken item indefinitely. When an
-   item reaches a *failed* terminal state (`check_failed`,
-   `unverifiable_plan`, repair budget exhausted), the run advances a
-   `@failed=N` count on that item's todo line, byte-preserving in the style of
-   `complete.py` — only the target token changes, the rest of the line is
-   byte-identical. When the count reaches `max_consecutive_failures` (new
-   config key, default 3), the same edit appends `@paused=auto-failures`.
-   `select.py` treats any `@paused=` item as ineligible and reports it in a
-   new **Parked** category (alongside Deferred and Blocked) naming the reason;
-   parked items never fail a run's exit status, but the report lists them so
-   an operator reading `report.md` sees what has been benched and why. A
-   successful completion removes `@failed=`. The resume path is human and
-   deliberate: delete the `@paused=` token from the line — no new command.
-   `--dry-run` writes nothing. A failed recurring item's schedule stays
-   untouched (AC8.7 unchanged) — parking makes it ineligible, it does not
-   rewrite `@every=`/`@not-before=`. Journal the todo-file edit before it is
-   made, consistent with the existing write-ahead rule.
-   *Validation:* `make check` + `pytest tests/test_backoff.py -q` — must
-   include: a failure increments `@failed=` byte-preserving (whole-file diff
-   is exactly one line); reaching the threshold appends `@paused=auto-failures`;
-   a `@paused=` item is excluded by `select` and printed as Parked with its
-   reason; a parked item does not affect exit status but appears in
-   `report.md`; a subsequent success removes `@failed=`; `--dry-run` leaves
-   the file byte-identical.
-   *Closes:* no existing AC — new behaviour. Spec amendment (proposed
-   AC2.11 select-excludes-paused, AC8.8 failure-count-advance-and-park) is a
-   USER-side follow-up, since build iterations never modify `specs/`.
-   *Branch slug:* `failure-backoff-and-park`
-
----
+**failure-backoff-and-park** *(branch: `failure-backoff-and-park`, 1 commit
+ahead of main)* — Cross-run failure escalation: `@failed=N` token advance on
+terminal failure, `@paused=auto-failures` appended at `max_consecutive_failures`
+threshold (new config key, default 3), `select.py` treats `@paused=` items as
+ineligible (Parked category), byte-preserving todo-file writes, `--dry-run`
+leaves file unchanged, successful completion removes `@failed=`. A failed
+recurring item's schedule stays untouched (AC8.7 unchanged).
+*Validation:* `make check` + `pytest tests/test_backoff.py -q`
+*Closes:* new behaviour (proposed AC2.11, AC8.8 — USER-side spec amendment).
 
 ### Phase 8 — operator visibility
 
-Everything today is run-centric (`runs/<uuid>/`), but the operator's question
-is item-centric: *what is the state of my list?* With hundreds of run
-directories, that question is currently answered by hand. Both items here are
-read-side only — no agent calls, no todo-file writes.
+**gsd-status** *(branch: `gsd-status`, 1 commit ahead of main)* — `status.py`
++ `gsd status` CLI command: item-centric view across the todo file and all run
+journals. Per-item line: state, last attempt outcome, consecutive-failure count,
+next eligibility instant for deferred items. Derived via `journal.py` replay;
+corrupt journals degrade gracefully; read-only (no run directory created); exit
+0 always.
+*Validation:* `make check` + `pytest tests/test_status.py -q`
+*Closes:* new behaviour (proposed AC11.x — USER-side spec amendment).
 
-2. **gsd-status** — `status.py` + `gsd status` CLI command: an item-centric
-   view aggregated across the todo file and all journals in the runs
-   directory. For every item on the list, one line: current state (done /
-   parked / deferred / blocked / eligible / never-attempted), last attempt
-   (run id, instant, outcome), consecutive-failure count, and — for deferred
-   items — the next eligibility instant. Parked items show their
-   `@paused=` reason; failed items name the failing subtask and check kind
-   from the most recent journal. State is derived by replaying journals via
-   the existing `journal.py` replay path — no new state store, the journals
-   and the todo file remain the only sources of truth. Corrupt or partial
-   journals degrade that item's line to what is known (consistent with the
-   existing corrupt-line tolerance), never crash the command. Read-only:
-   `gsd status` must not write a run directory, unlike `plan`. Exit 0 always
-   — status reports state, it does not judge it.
-   *Validation:* `make check` + `pytest tests/test_status.py -q` — must
-   include: aggregation across multiple runs picks the *latest* attempt per
-   item; a parked item shows its reason; a deferred item shows its next
-   eligibility instant; a corrupt journal degrades gracefully; the runs dir
-   is byte-identical before and after (no run directory created).
-   *Closes:* no existing AC — new behaviour. Spec amendment (proposed
-   AC11.x status contract) is a USER-side follow-up.
-   *Branch slug:* `gsd-status`
+**json-output** *(branch: `json-output`, 1 commit ahead of main)* — `--json`
+flag on `gsd plan`, `gsd status`, and `gsd report`: same facts as human
+rendering as a single JSON document on stdout; warnings to stderr; schema from
+existing dataclasses in `models.py` / `report.py`; ISO-8601 UTC timestamps;
+exit-status contract unchanged.
+*Validation:* `make check` + `pytest tests/test_json_output.py -q`
+*Closes:* new behaviour (USER-side spec amendment alongside status contract).
 
-3. **json-output** — `--json` flag on `gsd plan`, `gsd status`, and
-   `gsd report`: the same facts the human rendering prints, as a single JSON
-   document on stdout — nothing printed that JSON mode omits, nothing in JSON
-   mode the human mode hides. Warnings go to stderr so stdout stays parseable.
-   Schema is derived from the existing dataclasses in `models.py` /
-   `report.py`, serialised with explicit field names — no ad-hoc dicts
-   assembled in the CLI layer. Timestamps are ISO-8601 UTC, matching the
-   journal. Exit-status contract is unchanged in JSON mode: the machine reads
-   the body, the shell reads the code, and they never disagree.
-   *Validation:* `make check` + `pytest tests/test_json_output.py -q` — must
-   include: `--json` output for each command parses with `json.loads` and
-   round-trips `python3 -m json.tool`; a run with warnings keeps stdout pure
-   JSON; human and JSON modes are asserted to be built from the same
-   underlying result object (not two code paths); exit statuses identical in
-   both modes.
-   *Closes:* no existing AC — new behaviour. Spec amendment is a USER-side
-   follow-up alongside the status contract.
-   *Branch slug:* `json-output`
+---
+
+## Work items (priority order)
+
+*None.* All identified spec gaps are either merged to main (Phases 0–6) or
+already built on local branches (Phases 7–8 above). The build beat has nothing
+to implement.
+
+The next plan beat should re-examine the specs only after the three in-flight
+branches have been merged, to confirm there are no regressions or new gaps
+introduced at merge time.
 
 ---
 
