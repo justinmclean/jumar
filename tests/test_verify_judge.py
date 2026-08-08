@@ -456,3 +456,61 @@ def test_response_in_markdown_fence_parsed(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path, runner=_fenced_runner)
     result = verify_judge(_JUDGE_CHECK, ctx)
     assert result.verdict == Verdict.passed
+
+
+def test_invalid_json_in_fence_falls_through(tmp_path: Path) -> None:
+    """A code-fence block with broken JSON is skipped; the result is inconclusive."""
+
+    def _bad_fence_runner(
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+    ) -> _FakeResult:
+        return _FakeResult(exit_status=0, stdout="```json\n{not valid json}\n```")
+
+    ctx = _ctx(tmp_path, runner=_bad_fence_runner)
+    result = verify_judge(_JUDGE_CHECK, ctx)
+    assert result.verdict == Verdict.inconclusive
+
+
+def test_bare_json_after_text_prefix_parsed(tmp_path: Path) -> None:
+    """JSON found after non-JSON prefix text is parsed via the brace-search path."""
+
+    def _prefixed_runner(
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+    ) -> _FakeResult:
+        payload = '{"verdict": "pass", "reason": "looks good", "artefacts_shown": []}'
+        return _FakeResult(exit_status=0, stdout=f"The result is: {payload}")
+
+    ctx = _ctx(tmp_path, runner=_prefixed_runner)
+    result = verify_judge(_JUDGE_CHECK, ctx)
+    assert result.verdict == Verdict.passed
+
+
+def test_brace_search_with_broken_json_is_inconclusive(tmp_path: Path) -> None:
+    """Brace found but JSON parse fails → inconclusive."""
+
+    def _broken_brace_runner(
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+    ) -> _FakeResult:
+        return _FakeResult(exit_status=0, stdout="result: { broken json here }")
+
+    ctx = _ctx(tmp_path, runner=_broken_brace_runner)
+    result = verify_judge(_JUDGE_CHECK, ctx)
+    assert result.verdict == Verdict.inconclusive
+
+
+def test_artefact_read_oserror_does_not_crash(tmp_path: Path) -> None:
+    """If the artefact path is a directory (read_text raises OSError), the verifier continues."""
+    # Create a directory at the artefact path — read_text() on a directory raises IsADirectoryError.
+    artefact_dir = tmp_path / "mydir"
+    artefact_dir.mkdir()
+
+    check = Check(
+        kind=CheckKind.judge,
+        statement="Artefact is readable.",
+        rationale="Check content.",
+        path="mydir",
+    )
+    runner, _ = _capturing_runner()
+    ctx = _ctx(tmp_path, runner=runner)
+    result = verify_judge(check, ctx)
+    assert result.kind == CheckKind.judge  # did not crash

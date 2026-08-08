@@ -36,7 +36,7 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.coverage.report]
-fail_under = 0   # raised to 90 by the ci-and-coverage-floor work item
+fail_under = 90
 
 [tool.gsd]
 todo_path = "todo.md"

@@ -764,3 +764,136 @@ def test_repair_attempt_numbers_increment(journal: Journal, cfg: Config, tmp_pat
     repair_entries = [e for e in state.entries if e["event"] == REPAIR_STARTED]
     attempt_nos = [e["payload"]["attempt_no"] for e in repair_entries]
     assert attempt_nos == list(range(1, cfg.max_repairs + 1))
+
+
+# ---------------------------------------------------------------------------
+# Repair prompt content — prior evidence, path, pattern, rationale
+# ---------------------------------------------------------------------------
+
+
+def test_repair_prompt_includes_prior_evidence(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The repair prompt lists previously verified subtasks when prior_evidence is set."""
+    subtask = _make_subtask(index=1)
+    item = _make_item()
+    first_result = _failing_result(subtask.subtask_id)
+
+    prior = _passing_result("item-01#0", attempt_no=0)
+    runner = _make_fake_runner()
+    verifier = _make_fake_verify([_passing_result(subtask.subtask_id)])
+
+    repair(
+        subtask,
+        first_result=first_result,
+        item=item,
+        prior_evidence=[prior],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+        _run_verify=verifier,
+    )
+
+    assert len(runner.calls) == 1  # type: ignore[attr-defined]
+    prompt = runner.calls[0]  # type: ignore[attr-defined]
+    assert "Verified prior subtask" in prompt or "item-01#0" in prompt
+
+
+def test_repair_prompt_includes_check_path(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """The repair prompt includes the check's path when set."""
+    check = Check(
+        kind=CheckKind.file,
+        statement="File must exist",
+        path="output.txt",
+    )
+    subtask = _make_subtask(check=check)
+    item = _make_item()
+    first_result = _failing_result(subtask.subtask_id)
+
+    runner = _make_fake_runner()
+    verifier = _make_fake_verify([_passing_result(subtask.subtask_id)])
+
+    repair(
+        subtask,
+        first_result=first_result,
+        item=item,
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+        _run_verify=verifier,
+    )
+
+    prompt = runner.calls[0]  # type: ignore[attr-defined]
+    assert "output.txt" in prompt
+
+
+def test_repair_prompt_includes_check_pattern(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The repair prompt includes the check's pattern when set."""
+    check = Check(
+        kind=CheckKind.file,
+        statement="File must contain pattern",
+        path="output.txt",
+        pattern="SUCCESS",
+    )
+    subtask = _make_subtask(check=check)
+    item = _make_item()
+    first_result = _failing_result(subtask.subtask_id)
+
+    runner = _make_fake_runner()
+    verifier = _make_fake_verify([_passing_result(subtask.subtask_id)])
+
+    repair(
+        subtask,
+        first_result=first_result,
+        item=item,
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+        _run_verify=verifier,
+    )
+
+    prompt = runner.calls[0]  # type: ignore[attr-defined]
+    assert "SUCCESS" in prompt
+
+
+def test_repair_prompt_includes_check_rationale(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The repair prompt includes the check's rationale when set."""
+    check = Check(
+        kind=CheckKind.judge,
+        statement="Output quality is acceptable",
+        rationale="Human-readable check — mechanical check insufficient.",
+    )
+    subtask = _make_subtask(check=check)
+    item = _make_item()
+    first_result = _failing_result(subtask.subtask_id)
+
+    runner = _make_fake_runner()
+    verifier = _make_fake_verify([_passing_result(subtask.subtask_id)])
+
+    repair(
+        subtask,
+        first_result=first_result,
+        item=item,
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+        _run_verify=verifier,
+    )
+
+    prompt = runner.calls[0]  # type: ignore[attr-defined]
+    assert "Human-readable check" in prompt

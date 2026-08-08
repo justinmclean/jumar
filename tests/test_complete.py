@@ -979,3 +979,221 @@ def test_weekday_recurring_skips_weekend(tmp_path: Path, journal: Journal, cfg: 
     assert m is not None
     # Next weekday after Friday 2026-08-14 is Monday 2026-08-17.
     assert m.group(1) == "2026-08-17"
+
+
+# ---------------------------------------------------------------------------
+# _extract_time_of_day: literal with time component (lines 173-181)
+# _format_not_before: has_time=True branch (line 191)
+# ---------------------------------------------------------------------------
+
+
+def test_recurring_item_with_time_preserves_time_of_day(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """A @not-before= token with a time component (YYYY-MM-DDTHH:MM) produces
+    a time-preserving next-occurrence literal (covers _extract_time_of_day lines
+    173-181 and _format_not_before line 191)."""
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Daily standup @every=1d @not-before=2026-08-09T09:00\n")
+
+    schedule = _make_schedule(every="1d", not_before_literal="2026-08-09T09:00")
+    item = _make_item(text="Daily standup", line_no=1)
+    item = TodoItem(
+        item_id=item.item_id,
+        text=item.text,
+        raw_line=item.raw_line,
+        line_no=item.line_no,
+        status=item.status,
+        context=item.context,
+        authored_subtasks=item.authored_subtasks,
+        meta=item.meta,
+        priority=item.priority,
+        depends=item.depends,
+        capabilities=item.capabilities,
+        schedule=schedule,
+    )
+
+    plan = _make_plan()
+    verifications = _make_passed_verifications()
+
+    # now is 2026-08-10 12:00 UTC (Monday noon).
+    complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+
+    content = todo_path.read_bytes().decode()
+    m = re.search(r"@not-before=(\S+)", content)
+    assert m is not None
+    # Next occurrence is 2026-08-11 09:00 local (UTC here); result has T in it.
+    assert "T" in m.group(1)
+
+
+# ---------------------------------------------------------------------------
+# _flip_checkbox: out-of-bounds line_no (line 71 in complete.py)
+# ---------------------------------------------------------------------------
+
+
+def test_flip_checkbox_raises_on_out_of_bounds_line_no(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """Calling complete() with a line_no that exceeds the file length raises CompleteError."""
+    from getstuffdone.complete import CompleteError
+
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Only one line\n")
+
+    item = _make_item(line_no=5)  # file has 1 line; line_no=5 is out of bounds
+    plan = _make_plan()
+    verifications = _make_passed_verifications()
+
+    with pytest.raises(CompleteError, match="out of range"):
+        complete(
+            item,
+            plan,
+            todo_path=todo_path,
+            verifications=verifications,
+            config=cfg,
+            journal=journal,
+            cwd=tmp_path,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _extract_time_of_day: invalid time raises ValueError → returns None (180-181)
+# ---------------------------------------------------------------------------
+
+
+def test_recurring_item_with_invalid_time_in_literal(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """_extract_time_of_day catches ValueError for malformed time parts."""
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Task @every=1d @not-before=2026-08-09T99:00\n")
+
+    # Build a schedule with a malformed time; the module catches ValueError internally.
+    schedule = _make_schedule(every="1d", not_before_literal="2026-08-09T99:00")
+    item = _make_item(line_no=1)
+    item = TodoItem(
+        item_id=item.item_id,
+        text=item.text,
+        raw_line=item.raw_line,
+        line_no=item.line_no,
+        status=item.status,
+        context=item.context,
+        authored_subtasks=item.authored_subtasks,
+        meta=item.meta,
+        priority=item.priority,
+        depends=item.depends,
+        capabilities=item.capabilities,
+        schedule=schedule,
+    )
+
+    plan = _make_plan()
+    verifications = _make_passed_verifications()
+
+    # complete() should still succeed; the invalid time falls back to midnight.
+    result = complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=verifications,
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        now=_UTC_NOW,
+    )
+    assert result is True
+
+
+# ---------------------------------------------------------------------------
+# _advance_not_before: out-of-bounds line_no (line 212)
+# ---------------------------------------------------------------------------
+
+
+def test_advance_not_before_raises_on_out_of_bounds_line_no(
+    tmp_path: Path, journal: Journal, cfg: Config
+) -> None:
+    """_advance_not_before raises CompleteError if line_no is out of range."""
+    from getstuffdone.complete import CompleteError
+
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_bytes(b"- [ ] Only one line @every=1d\n")
+
+    schedule = _make_schedule(every="1d", not_before_literal="2026-08-09")
+    item = _make_item(line_no=99)  # out of bounds
+    item = TodoItem(
+        item_id=item.item_id,
+        text=item.text,
+        raw_line=item.raw_line,
+        line_no=item.line_no,
+        status=item.status,
+        context=item.context,
+        authored_subtasks=item.authored_subtasks,
+        meta=item.meta,
+        priority=item.priority,
+        depends=item.depends,
+        capabilities=item.capabilities,
+        schedule=schedule,
+    )
+
+    plan = _make_plan()
+    verifications = _make_passed_verifications()
+
+    with pytest.raises(CompleteError, match="out of range"):
+        complete(
+            item,
+            plan,
+            todo_path=todo_path,
+            verifications=verifications,
+            config=cfg,
+            journal=journal,
+            cwd=tmp_path,
+            now=_UTC_NOW,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _is_git_repo: OSError branch (lines 107-108)
+# _current_branch: nonzero exit (line 118) and OSError branch (lines 119-120)
+# ---------------------------------------------------------------------------
+
+
+def test_is_git_repo_returns_false_on_oserror(tmp_path: Path) -> None:
+    """_is_git_repo returns False when subprocess raises OSError."""
+    from unittest.mock import patch
+
+    from getstuffdone.complete import _is_git_repo
+
+    with patch("getstuffdone.complete.subprocess.run", side_effect=OSError("no git")):
+        assert _is_git_repo(tmp_path) is False
+
+
+def test_current_branch_returns_none_on_oserror(tmp_path: Path) -> None:
+    """_current_branch returns None when subprocess raises OSError."""
+    from unittest.mock import patch
+
+    from getstuffdone.complete import _current_branch
+
+    with patch("getstuffdone.complete.subprocess.run", side_effect=OSError("no git")):
+        assert _current_branch(tmp_path) is None
+
+
+def test_current_branch_returns_none_on_nonzero_exit(tmp_path: Path) -> None:
+    """_current_branch returns None when git exits non-zero."""
+    from unittest.mock import MagicMock, patch
+
+    from getstuffdone.complete import _current_branch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 128
+    mock_result.stdout = ""
+
+    with patch("getstuffdone.complete.subprocess.run", return_value=mock_result):
+        assert _current_branch(tmp_path) is None

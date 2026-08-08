@@ -192,6 +192,50 @@ def test_missing_binary_evidence_path_is_none(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Timeout path (lines 77-82, 114-115 in command.py)
+# ---------------------------------------------------------------------------
+
+
+def test_command_timeout_yields_failed(tmp_path: Path) -> None:
+    """A command that exceeds its timeout is failed (not inconclusive)."""
+    check = Check(
+        kind=CheckKind.command,
+        statement="Command must finish quickly",
+        command=(sys.executable, "-c", "import time; time.sleep(60)"),
+        timeout_s=1,
+    )
+    ctx = _ctx(tmp_path)
+    result = verify_command(check, ctx)
+    assert result.verdict == Verdict.failed
+
+
+def test_command_timeout_summary_mentions_timeout(tmp_path: Path) -> None:
+    check = Check(
+        kind=CheckKind.command,
+        statement="Command must finish quickly",
+        command=(sys.executable, "-c", "import time; time.sleep(60)"),
+        timeout_s=1,
+    )
+    ctx = _ctx(tmp_path)
+    result = verify_command(check, ctx)
+    assert "timed out" in result.summary.lower() or "timeout" in result.summary.lower()
+
+
+def test_command_timeout_evidence_path_written(tmp_path: Path) -> None:
+    """Artefact file is written even when the command times out."""
+    check = Check(
+        kind=CheckKind.command,
+        statement="Command must finish quickly",
+        command=(sys.executable, "-c", "import time; time.sleep(60)"),
+        timeout_s=1,
+    )
+    ctx = _ctx(tmp_path)
+    result = verify_command(check, ctx)
+    assert result.evidence_path is not None
+    assert Path(result.evidence_path).exists()
+
+
+# ---------------------------------------------------------------------------
 # VerifyError — unregistered kind
 # ---------------------------------------------------------------------------
 

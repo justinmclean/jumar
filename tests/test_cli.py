@@ -6,10 +6,14 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from getstuffdone.cli import main
+
+if TYPE_CHECKING:
+    from getstuffdone.schedule import FakeBackend
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -196,6 +200,45 @@ def test_plan_without_dry_run_is_not_yet_implemented(
     assert rc == 2
 
 
+def test_plan_dry_run_with_ingest_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ingest warnings are printed to stderr."""
+    monkeypatch.chdir(tmp_path)
+    # An empty task item ("- [ ]" with no text) generates an ingest warning.
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] \n- [ ] Real task\n")
+    rc = main(["plan", "--dry-run", "--todo", str(todo)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" in err.lower()
+
+
+def test_plan_dry_run_item_with_due_date(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An item with a @due= token displays the due date in --dry-run output."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Submit report @due=2099-12-31\n")
+    rc = main(["plan", "--dry-run", "--todo", str(todo)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2099-12-31" in out
+
+
+def test_doctor_not_yet_implemented(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``gsd doctor`` is not yet implemented and returns 2."""
+    rc = main(["doctor"])
+    assert rc == 2
+
+
 # ---------------------------------------------------------------------------
 # Clock discipline: static analysis
 # ---------------------------------------------------------------------------
@@ -263,3 +306,309 @@ def test_capture_now_converts_to_utc() -> None:
     assert result.utcoffset() is not None
     assert result.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
     assert result.hour == 14  # EST+4 = UTC 14:00 (summer/EDT is UTC-4)
+
+
+# ---------------------------------------------------------------------------
+# gsd run subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_run_not_implemented(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gsd run`` without a live pipeline returns 2 (not yet implemented)."""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["run"])
+    assert rc == 2
+
+
+def test_run_dry_run_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gsd run --dry-run`` passes through gate check and reaches stub."""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["run", "--dry-run"])
+    assert rc == 2
+
+
+def test_run_approve_non_interactive_startup_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``gsd run --approve --non-interactive`` is refused at startup (AC4.4)."""
+    rc = main(["run", "--approve", "--non-interactive"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "error" in err.lower()
+
+
+def test_run_with_explicit_todo_arg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gsd run --todo <path>`` accepts an explicit todo path."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "mytodo.md"
+    todo.write_text("- [ ] A task\n")
+    rc = main(["run", "--todo", str(todo)])
+    assert rc == 2  # not yet implemented, but reached the stub
+
+
+def test_run_already_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``gsd run`` exits 0 with 'already_running' when a live lock file exists."""
+    import json
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    lock_path = tmp_path / ".gsd.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "run_id": "existing-run",
+                "todo": str(tmp_path / "todo.md"),
+            }
+        )
+    )
+    rc = main(["run"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "already_running" in err
+
+
+# ---------------------------------------------------------------------------
+# gsd report subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_report_missing_journal_returns_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``gsd report <run-id>`` when no journal exists returns 1 with an error."""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["report", "no-such-run-id"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "error" in err.lower()
+
+
+def test_report_with_existing_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``gsd report <run-id>`` with a valid journal exits 0 and writes report.md."""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    run_id = "test-run-abc123"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    journal = run_dir / "journal.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "seq": 1,
+                "event": "run_started",
+                "ts": "2026-01-01T00:00:00+00:00",
+                "payload": {
+                    "now": "2026-01-01T00:00:00+00:00",
+                    "tz": "UTC",
+                    "mode": "run",
+                    "todo_path": "todo.md",
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "seq": 2,
+                "event": "run_finished",
+                "ts": "2026-01-01T00:00:01+00:00",
+                "payload": {"exit_status": 0},
+            }
+        )
+        + "\n"
+    )
+    rc = main(["report", run_id, "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+    assert (run_dir / "report.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# gsd schedule subcommand
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _fake_backend(monkeypatch: pytest.MonkeyPatch) -> FakeBackend:
+    """Patch schedule.default_backend to return a FakeBackend for all CLI tests."""
+    from getstuffdone.schedule import FakeBackend as FB
+
+    fake = FB()
+    monkeypatch.setattr("getstuffdone.schedule.default_backend", lambda override=None: fake)
+    return fake
+
+
+class TestScheduleCLI:
+    def test_add_dry_run_exits_zero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``gsd schedule add --dry-run`` prints the entry and exits 0."""
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        rc = main(["schedule", "add", "0 9 * * 1-5", "--todo", str(todo), "--dry-run"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "0 9 * * 1-5" in out
+
+    def test_add_writes_to_backend(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _fake_backend: FakeBackend,
+    ) -> None:
+        """``gsd schedule add`` installs an entry in the backend."""
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        rc = main(["schedule", "add", "0 9 * * *", "--todo", str(todo)])
+        assert rc == 0
+        from getstuffdone.schedule import list_schedules
+
+        assert len(list_schedules(_fake_backend)) == 1
+
+    def test_add_invalid_cron_returns_1(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _fake_backend: FakeBackend,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Invalid cron expression prints an error and returns 1."""
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        rc = main(["schedule", "add", "99 9 * * *", "--todo", str(todo)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "invalid cron expression" in err
+        assert _fake_backend.write_calls == 0
+
+    def test_show_exits_zero_prints_entry(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``gsd schedule show`` prints the entry without installing."""
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        rc = main(["schedule", "show", "0 9 * * *", "--todo", str(todo)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "0 9 * * *" in out
+
+    def test_show_invalid_cron_returns_1(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        rc = main(["schedule", "show", "bad cron expr here", "--todo", str(todo)])
+        assert rc == 1
+
+    def test_list_empty_backend(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _fake_backend: FakeBackend,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``gsd schedule list`` with no entries prints the no-entries message."""
+        monkeypatch.chdir(tmp_path)
+        rc = main(["schedule", "list"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "No gsd-owned" in out
+
+    def test_list_with_entries(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _fake_backend: FakeBackend,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``gsd schedule list`` shows installed entries."""
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        main(["schedule", "add", "0 9 * * *", "--todo", str(todo)])
+        rc = main(["schedule", "list"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "0 9 * * *" in out
+
+    def test_remove_found_exits_zero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _fake_backend: FakeBackend,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``gsd schedule remove <id>`` removes the entry and exits 0."""
+        monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        main(["schedule", "add", "0 9 * * *", "--todo", str(todo), "--dry-run"])
+        # Manually install one entry so we can remove it.
+        from getstuffdone.schedule import ScheduleEntry
+
+        _fake_backend.add_entry(
+            ScheduleEntry(
+                schedule_id="testremove",
+                cron_expr="0 9 * * *",
+                todo_path=str(todo),
+                gsd_path="/usr/local/bin/gsd",
+                config_path=None,
+                timezone="UTC",
+            )
+        )
+        rc = main(["schedule", "remove", "testremove"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Removed" in out
+
+    def test_remove_not_found_returns_1(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _fake_backend: FakeBackend,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``gsd schedule remove`` for a missing id returns 1 with an error."""
+        monkeypatch.chdir(tmp_path)
+        rc = main(["schedule", "remove", "no-such-id"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "not found" in err
+
+    def test_no_subcommand_exits_zero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gsd schedule`` with no subcommand prints help and exits 0."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main(["schedule"])
+        assert exc_info.value.code == 0

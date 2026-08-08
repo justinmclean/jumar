@@ -25,13 +25,19 @@ from pathlib import Path
 import pytest
 
 from getstuffdone.schedule import (
+    CronBackend,
     CronExprError,
     FakeBackend,
+    LaunchdBackend,
     ScheduleEntry,
+    _cron_to_launchd_sci,
+    _expand_cron_field,
+    _gsd_executable,
     _insert_block,
     _parse_blocks,
     _remove_block,
     add_schedule,
+    default_backend,
     list_schedules,
     remove_schedule,
     show_entry,
@@ -571,3 +577,207 @@ class TestShowEntry:
         text = show_entry(entry)
         assert f"# >>> gsd {entry.schedule_id} >>>" in text
         assert f"# <<< gsd {entry.schedule_id} <<<" in text
+
+
+# ---------------------------------------------------------------------------
+# _validate_cron_field additional branches (step-over-range, plain-base-step)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateCronFieldBranches:
+    def test_step_over_range(self) -> None:
+        """Step notation with a range base: 1-5/2 — covers the '-' in base branch."""
+        validate_cron("1-5/2 * * * *")  # must not raise
+
+    def test_step_over_plain_base(self) -> None:
+        """Step notation with a plain integer base: 1/2."""
+        validate_cron("1/2 * * * *")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _insert_block: text with no trailing newline (line 202)
+# ---------------------------------------------------------------------------
+
+
+class TestInsertBlockNoNewline:
+    def test_no_trailing_newline_gets_separator(self) -> None:
+        """A current_text without a trailing newline must get one inserted."""
+        entry = _make_entry()
+        text = _insert_block("existing line without newline", entry)
+        assert "existing line without newline" in text
+        assert entry.schedule_id in text
+
+
+# ---------------------------------------------------------------------------
+# FakeBackend.name() and CronBackend.name()
+# ---------------------------------------------------------------------------
+
+
+class TestBackendNames:
+    def test_fake_backend_name(self) -> None:
+        assert FakeBackend().name() == "fake"
+
+    def test_cron_backend_name(self) -> None:
+        assert CronBackend().name() == "cron"
+
+
+# ---------------------------------------------------------------------------
+# _expand_cron_field
+# ---------------------------------------------------------------------------
+
+
+class TestExpandCronField:
+    def test_wildcard_returns_none(self) -> None:
+        assert _expand_cron_field("*", 0, 59, "minute") == [None]
+
+    def test_step_from_wildcard(self) -> None:
+        result = _expand_cron_field("*/15", 0, 59, "minute")
+        assert sorted(result) == [0, 15, 30, 45]
+
+    def test_step_from_range(self) -> None:
+        result = _expand_cron_field("1-5/2", 0, 59, "minute")
+        assert sorted(result) == [1, 3, 5]
+
+    def test_step_from_plain_base(self) -> None:
+        result = _expand_cron_field("10/20", 0, 59, "minute")
+        assert sorted(result) == [10]
+
+    def test_range(self) -> None:
+        result = _expand_cron_field("1-3", 0, 59, "minute")
+        assert sorted(result) == [1, 2, 3]
+
+    def test_list(self) -> None:
+        result = _expand_cron_field("1,3,5", 0, 59, "minute")
+        assert sorted(result) == [1, 3, 5]
+
+    def test_dow_alias(self) -> None:
+        result = _expand_cron_field("mon", 0, 7, "day-of-week")
+        assert result == [1]
+
+    def test_month_alias(self) -> None:
+        result = _expand_cron_field("jan", 1, 12, "month")
+        assert result == [1]
+
+    def test_plain_integer(self) -> None:
+        result = _expand_cron_field("5", 0, 59, "minute")
+        assert result == [5]
+
+
+# ---------------------------------------------------------------------------
+# _cron_to_launchd_sci
+# ---------------------------------------------------------------------------
+
+
+class TestCronToLaunchdSci:
+    def test_specific_time_weekdays(self) -> None:
+        sci = _cron_to_launchd_sci("0 9 * * 1-5")
+        assert len(sci) == 5
+        for e in sci:
+            assert e.get("Minute") == 0
+            assert e.get("Hour") == 9
+            assert e.get("Weekday") in range(1, 6)
+
+    def test_every_day_specific_time(self) -> None:
+        sci = _cron_to_launchd_sci("30 8 * * *")
+        assert len(sci) == 1
+        assert sci[0]["Minute"] == 30
+        assert sci[0]["Hour"] == 8
+
+    def test_first_of_month(self) -> None:
+        sci = _cron_to_launchd_sci("0 0 1 * *")
+        assert len(sci) == 1
+        assert sci[0]["Minute"] == 0
+        assert sci[0]["Hour"] == 0
+        assert sci[0]["Day"] == 1
+
+    def test_every_15_minutes(self) -> None:
+        sci = _cron_to_launchd_sci("*/15 * * * *")
+        assert len(sci) == 4
+        minutes = sorted(e["Minute"] for e in sci)
+        assert minutes == [0, 15, 30, 45]
+
+    def test_invalid_expression_returns_empty_dict(self) -> None:
+        sci = _cron_to_launchd_sci("not valid")
+        assert sci == [{}]
+
+
+# ---------------------------------------------------------------------------
+# LaunchdBackend
+# ---------------------------------------------------------------------------
+
+
+class TestLaunchdBackend:
+    def test_add_creates_plist(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry()
+        backend.add_entry(entry)
+        plist = tmp_path / f"com.gsd.{entry.schedule_id}.plist"
+        assert plist.exists()
+
+    def test_list_returns_installed_entry(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(schedule_id="test1234", timezone="UTC")
+        backend.add_entry(entry)
+        entries = backend.list_entries()
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.schedule_id == "test1234"
+        assert e.cron_expr == entry.cron_expr
+        assert e.todo_path == entry.todo_path
+
+    def test_list_nonexistent_dir_returns_empty(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path / "nonexistent")
+        assert backend.list_entries() == []
+
+    def test_remove_deletes_plist(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry()
+        backend.add_entry(entry)
+        found = backend.remove_entry(entry.schedule_id)
+        assert found
+        plist = tmp_path / f"com.gsd.{entry.schedule_id}.plist"
+        assert not plist.exists()
+
+    def test_remove_not_found_returns_false(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        assert not backend.remove_entry("nonexistent-id")
+
+    def test_name(self, tmp_path: Path) -> None:
+        assert LaunchdBackend(agents_dir=tmp_path).name() == "launchd"
+
+    def test_list_multiple_entries(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        e1 = _make_entry(schedule_id="aa111111", cron_expr="0 8 * * *")
+        e2 = _make_entry(schedule_id="bb222222", cron_expr="0 9 * * *")
+        backend.add_entry(e1)
+        backend.add_entry(e2)
+        entries = backend.list_entries()
+        ids = {e.schedule_id for e in entries}
+        assert ids == {"aa111111", "bb222222"}
+
+
+# ---------------------------------------------------------------------------
+# default_backend
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultBackend:
+    def test_override_launchd(self) -> None:
+        b = default_backend("launchd")
+        assert isinstance(b, LaunchdBackend)
+
+    def test_override_cron(self) -> None:
+        b = default_backend("cron")
+        assert isinstance(b, CronBackend)
+
+
+# ---------------------------------------------------------------------------
+# _gsd_executable
+# ---------------------------------------------------------------------------
+
+
+class TestGsdExecutable:
+    def test_returns_non_empty_string(self) -> None:
+        result = _gsd_executable()
+        assert isinstance(result, str)
+        assert len(result) > 0

@@ -11,7 +11,7 @@ help:  ## Show this help
 install:  ## Install the package with dev extras
 	$(PY) -m pip install -e ".[dev]"
 
-check: lint types test loop-test  ## Everything CI runs
+check: lint types cov loop-test  ## Everything CI runs
 
 test:  ## Run the test suite
 	$(PY) -m pytest -q
