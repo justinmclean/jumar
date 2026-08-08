@@ -237,12 +237,245 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Shared item runner — the single orchestration used by both `run` and `resume`
+# ---------------------------------------------------------------------------
+
+
+def _verifications_from_journal(
+    state: Any,
+    plan: Any,
+) -> list[Any]:
+    """Rebuild VerificationResults for subtasks that already passed.
+
+    ``complete()`` requires a passing verdict for every subtask (AC8.1).  On a
+    resumed run the earlier verdicts live only in the journal, so they are
+    reconstructed here — otherwise a resume that finds every subtask already
+    passed would hand ``complete()`` an empty list and never mark the item done.
+    """
+    from .models import CheckKind, Verdict, VerificationResult
+
+    rebuilt: list[VerificationResult] = []
+    for subtask in plan.subtasks:
+        verdict = state.subtask_verdicts.get(subtask.subtask_id)
+        if verdict != Verdict.passed.value:
+            continue
+        rebuilt.append(
+            VerificationResult(
+                subtask_id=subtask.subtask_id,
+                attempt_no=0,
+                verdict=Verdict.passed,
+                kind=CheckKind(subtask.check.kind),
+                evidence={"replayed_from_journal": True},
+                summary="passed in an earlier run (replayed from journal)",
+                evidence_path=None,
+                checked_at=state.now or "",
+            )
+        )
+    return rebuilt
+
+
+def run_item(
+    item: Any,
+    *,
+    config: Any,
+    journal: Any,
+    todo_path: Path,
+    run_dir: Path,
+    now: Any,
+    mode: str = "auto",
+    plan: Any | None = None,
+    already_passed: frozenset[str] = frozenset(),
+    prior_verifications: list[Any] | None = None,
+    resumed: bool = False,
+    stdin: Any | None = None,
+    stdout: Any | None = None,
+    _run_agent: Any | None = None,
+) -> int:
+    """Decompose, gate, then execute→verify→repair each subtask, then complete.
+
+    This is the whole outer loop for ONE item, shared verbatim by ``gsd run``
+    and ``gsd resume`` so the two commands cannot drift apart.
+
+    Returns the exit-status contribution: 0 when the item completed, was
+    dry-run, or was skipped by the human; 1 when it failed or was inconclusive.
+    """
+    from .complete import complete
+    from .decompose import DecomposeError, decompose
+    from .execute import execute
+    from .gate import GateDecision, GateError, GateMode, gate
+    from .journal import ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
+    from .models import Verdict
+    from .repair import RepairExhausted, repair
+    from .verify import VerifyContext, run_verify
+
+    cwd = todo_path.parent
+    non_interactive = mode != GateMode.approve
+
+    journal.append(
+        ITEM_SELECTED,
+        item_id=item.item_id,
+        payload={
+            "text": item.text,
+            "due": (item.schedule.due if item.schedule else None),
+            "is_overdue": bool(
+                item.schedule
+                and item.schedule.due is not None
+                and item.schedule.due < now.isoformat()
+            ),
+            "resumed": resumed,
+        },
+    )
+
+    # --- decompose (skipped when resuming with a plan already in the journal)
+    if plan is None:
+        try:
+            plan = decompose(
+                item,
+                config=config,
+                journal=journal,
+                cwd=cwd,
+                _run_agent=_run_agent,
+            )
+        except DecomposeError as exc:
+            journal.append(
+                ITEM_FAILED,
+                item_id=item.item_id,
+                payload={"failure_code": exc.failure_code.value},
+            )
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    # --- gate (capability check runs in every mode, AC4.3)
+    try:
+        decision = gate(
+            plan,
+            item,
+            mode=mode,
+            journal=journal,
+            stdin=stdin,
+            stdout=stdout,
+        )
+    except GateError as exc:
+        journal.append(
+            ITEM_FAILED,
+            item_id=item.item_id,
+            payload={"failure_code": exc.failure_code.value},
+        )
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if decision == GateDecision.dry_run:
+        return 0
+    if decision == GateDecision.skip:
+        return 0
+
+    # --- inner loop: one subtask at a time, verified before the next (AC5.1)
+    verifications: list[Any] = list(prior_verifications or [])
+    prior_evidence: list[Any] = list(verifications)
+
+    for subtask in plan.subtasks:
+        if subtask.subtask_id in already_passed:
+            continue  # AC-S1: never redo verified work
+
+        execute(
+            subtask,
+            item=item,
+            prior_evidence=prior_evidence,
+            config=config,
+            journal=journal,
+            cwd=cwd,
+            run_dir=run_dir,
+            attempt_no=0,
+            _run_agent=_run_agent,
+        )
+
+        ctx = VerifyContext(
+            cwd=cwd,
+            run_dir=run_dir,
+            evidence_head_bytes=config.evidence_head_bytes,
+            subtask_id=subtask.subtask_id,
+            attempt_no=0,
+            non_interactive=non_interactive,
+        )
+        result = run_verify(subtask.check, journal=journal, item_id=item.item_id, ctx=ctx)
+
+        # --- bounded repair on a non-pass (AC7.1–AC7.4)
+        if result.verdict != Verdict.passed:
+            try:
+                result = repair(
+                    subtask,
+                    first_result=result,
+                    item=item,
+                    prior_evidence=prior_evidence,
+                    config=config,
+                    journal=journal,
+                    cwd=cwd,
+                    run_dir=run_dir,
+                    _run_agent=_run_agent,
+                )
+            except RepairExhausted:
+                journal.append(
+                    ITEM_FAILED,
+                    item_id=item.item_id,
+                    payload={
+                        "failure_code": "repairs_exhausted",
+                        "failed_subtask_index": subtask.index,
+                    },
+                )
+                return 1
+
+        if result.verdict != Verdict.passed:
+            journal.append(
+                ITEM_FAILED,
+                item_id=item.item_id,
+                payload={
+                    "failure_code": "check_failed",
+                    "failed_subtask_index": subtask.index,
+                },
+            )
+            return 1
+
+        verifications.append(result)
+        prior_evidence.append(result)
+
+    # --- every subtask passed: flip the checkbox / advance recurrence (AC8.x)
+    completed = complete(
+        item,
+        plan,
+        todo_path=todo_path,
+        verifications=tuple(verifications),
+        config=config,
+        journal=journal,
+        cwd=cwd,
+        now=now,
+    )
+    if not completed:
+        journal.append(
+            ITEM_FAILED,
+            item_id=item.item_id,
+            payload={"failure_code": "check_failed"},
+        )
+        return 1
+
+    journal.append(ITEM_COMPLETED, item_id=item.item_id, payload={})
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # run subcommand
 # ---------------------------------------------------------------------------
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    """Implement ``gsd run [--dry-run | --approve] [--non-interactive]``."""
+def _cmd_run(
+    args: argparse.Namespace,
+    *,
+    _run_agent: object | None = None,
+) -> int:
+    """Implement ``gsd run [--dry-run | --approve] [--non-interactive]``.
+
+    Acquires the single-flight lock, ingests, selects one eligible item, and
+    hands it to :func:`run_item` — the same orchestration ``gsd resume`` uses.
+    """
     from .gate import GateMode, GateStartupError, check_startup_flags
 
     if getattr(args, "dry_run", False):
@@ -279,16 +512,69 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        # Journal the stale-lock reclaim if one happened.
-        if lock.reclaimed_info is not None:
-            from .journal import LOCK_RECLAIMED, Journal
+        from .clock import capture_now
+        from .ingest import IngestError, ingest
+        from .journal import LOCK_RECLAIMED, RUN_FINISHED, RUN_STARTED, Journal
+        from .report import build_report, format_summary, write_report
+        from .select import CycleError, select_next
 
-            journal_path = Path("runs") / run_id / "journal.jsonl"
-            journal = Journal(journal_path, run_id)
+        run_dir = Path("runs") / run_id
+        journal = Journal(run_dir / "journal.jsonl", run_id)
+        now = capture_now(config)
+
+        journal.append(
+            RUN_STARTED,
+            payload={
+                "now": now.isoformat(),
+                "tz": config.timezone,
+                "mode": str(mode),
+                "todo_path": str(todo_path),
+                "interactive": not non_interactive,
+                "trigger": "human",
+            },
+        )
+        if lock.reclaimed_info is not None:
             journal.append(LOCK_RECLAIMED, payload=lock.reclaimed_info)
 
-        print("gsd run: full pipeline not yet implemented — see IMPLEMENTATION_PLAN.md")
-        return 2
+        try:
+            result = ingest(todo_path, config)
+        except IngestError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        for w in result.warnings:
+            print(f"warning: {w.message}", file=sys.stderr)
+
+        try:
+            sel = select_next(result.items, now)
+        except CycleError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        if sel.selected is None:
+            # AC2.10 / AC9.4: nothing eligible is a success, not a failure.
+            print("Nothing eligible to work on.")
+            if sel.next_eligible_at:
+                print(f"Next eligible: {sel.next_eligible_at}")
+            journal.append(RUN_FINISHED, payload={"exit_status": 0})
+            return 0
+
+        status = run_item(
+            sel.selected,
+            config=config,
+            journal=journal,
+            todo_path=todo_path,
+            run_dir=run_dir,
+            now=now,
+            mode=mode,
+            _run_agent=_run_agent,
+        )
+
+        journal.append(RUN_FINISHED, payload={"exit_status": status})
+        report = build_report(run_dir)
+        write_report(report, run_dir)
+        print(format_summary(report))
+        return status
     finally:
         lock.release()
 
@@ -448,19 +734,11 @@ def _cmd_resume(
     from datetime import UTC, datetime
 
     from .config import load_config
-    from .execute import execute
     from .ingest import IngestError, ingest
-    from .journal import (
-        ITEM_COMPLETED,
-        ITEM_FAILED,
-        ITEM_SELECTED,
-        RUN_FINISHED,
-        Journal,
-    )
-    from .models import Plan, Verdict, VerificationResult
+    from .journal import RUN_FINISHED, Journal
+    from .models import Plan, Verdict
     from .report import build_report, format_summary, report_exit_status, write_report
     from .select import CycleError, select_next
-    from .verify import VerifyContext, run_verify
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
     run_dir = runs_dir / args.run_id
@@ -506,117 +784,73 @@ def _cmd_resume(
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    # AC-S4: eligibility evaluated against original now.
-    try:
-        sel = select_next(ingest_result.items, original_now, done_ids=done_and_failed)
-    except CycleError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    # Resume continues THIS run's item — it does not start a new one.  The item
+    # is whichever the journal recorded as selected; only when the run died
+    # before journalling a selection does resume fall back to choosing one, and
+    # then against the original now (AC-S4).
+    resumed_item_id: str | None = None
+    for entry in state.entries:
+        if entry.get("event") == "item_selected":
+            resumed_item_id = entry.get("item_id")
+            break
 
-    # No item selected — either everything done or only deferred.
-    if sel.selected is None:
+    item = None
+    if resumed_item_id is not None:
+        if resumed_item_id in done_and_failed:
+            # That item already reached a terminal state — report, do not
+            # pick up unrelated work under the guise of resuming.
+            report = build_report(run_dir)
+            write_report(report, run_dir)
+            print(format_summary(report))
+            return report_exit_status(report)
+        item = next(
+            (i for i in ingest_result.items if i.item_id == resumed_item_id),
+            None,
+        )
+
+    if item is None:
+        # AC-S4: eligibility evaluated against the original now.
+        try:
+            sel = select_next(ingest_result.items, original_now, done_ids=done_and_failed)
+        except CycleError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        item = sel.selected
+
+    # Nothing to resume — everything done, deferred, or the item is gone.
+    if item is None:
         report = build_report(run_dir)
         write_report(report, run_dir)
         print(format_summary(report))
         return report_exit_status(report)
 
-    item = sel.selected
-
-    # Journal that this item is being resumed (adds context to partial journals).
-    journal.append(
-        ITEM_SELECTED,
-        item_id=item.item_id,
-        payload={
-            "text": item.text,
-            "due": (item.schedule.due if item.schedule else None),
-            "is_overdue": (
-                (item.schedule.due is not None and item.schedule.due < state.now)
-                if item.schedule and state.now
-                else False
-            ),
-            "resumed": True,
-        },
-    )
-
-    # Find existing plan in the journal.
+    # Find an existing plan in the journal; run_item decomposes if there is none.
     plan: Plan | None = None
     for entry in state.entries:
         if entry.get("event") == "plan_created" and entry.get("item_id") == item.item_id:
             plan = _rebuild_plan(entry, item.item_id)
             break
 
-    if plan is None:
-        # No plan in journal — need to decompose first.
-        from .decompose import DecomposeError, decompose
+    # AC-S1: subtasks with a passed verdict are never re-executed; their
+    # verdicts are replayed so complete() sees a full passing set (AC8.1).
+    already_passed = frozenset(
+        sid for sid, v in state.subtask_verdicts.items() if v == Verdict.passed.value
+    )
+    prior = _verifications_from_journal(state, plan) if plan is not None else []
 
-        try:
-            plan = decompose(
-                item,
-                config=config,
-                journal=journal,
-                cwd=todo_path.parent,
-                _run_agent=_run_agent,
-            )
-        except DecomposeError as exc:
-            journal.append(
-                ITEM_FAILED,
-                item_id=item.item_id,
-                payload={"failure_code": exc.failure_code.value},
-            )
-            journal.append(RUN_FINISHED, payload={"exit_status": 1})
-            report = build_report(run_dir)
-            write_report(report, run_dir)
-            print(format_summary(report))
-            return 1
-
-    # Execute and verify remaining subtasks — skip those already passed (AC-S1).
-    prior_evidence: list[VerificationResult] = []
-    cwd = todo_path.parent
-    exit_status = 0
-
-    for subtask in plan.subtasks:
-        # AC-S1: skip subtasks that already have a passed verdict.
-        existing_verdict = state.subtask_verdicts.get(subtask.subtask_id)
-        if existing_verdict == Verdict.passed.value:
-            continue
-
-        execute(
-            subtask,
-            item=item,
-            prior_evidence=prior_evidence,
-            config=config,
-            journal=journal,
-            cwd=cwd,
-            run_dir=run_dir,
-            attempt_no=0,
-            _run_agent=_run_agent,
-        )
-
-        ctx = VerifyContext(
-            cwd=cwd,
-            run_dir=run_dir,
-            evidence_head_bytes=config.evidence_head_bytes,
-            subtask_id=subtask.subtask_id,
-            attempt_no=0,
-        )
-        result = run_verify(subtask.check, journal=journal, item_id=item.item_id, ctx=ctx)
-
-        if result.verdict == Verdict.passed:
-            prior_evidence.append(result)
-        else:
-            journal.append(
-                ITEM_FAILED,
-                item_id=item.item_id,
-                payload={
-                    "failure_code": "check_failed",
-                    "failed_subtask_index": subtask.index,
-                },
-            )
-            exit_status = 1
-            break
-    else:
-        # All subtasks passed.
-        journal.append(ITEM_COMPLETED, item_id=item.item_id, payload={})
+    exit_status = run_item(
+        item,
+        config=config,
+        journal=journal,
+        todo_path=todo_path,
+        run_dir=run_dir,
+        now=original_now,
+        plan=plan,
+        already_passed=already_passed,
+        prior_verifications=prior,
+        resumed=True,
+        _run_agent=_run_agent,
+    )
 
     journal.append(RUN_FINISHED, payload={"exit_status": exit_status})
     report = build_report(run_dir)

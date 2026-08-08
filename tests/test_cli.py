@@ -343,18 +343,28 @@ def test_capture_now_converts_to_utc() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_not_implemented(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``gsd run`` without a live pipeline returns 2 (not yet implemented)."""
+def test_run_missing_todo_file_returns_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``gsd run`` with no todo file is an actionable error, not a traceback."""
     monkeypatch.chdir(tmp_path)
     rc = main(["run"])
-    assert rc == 2
+    assert rc == 1
+    assert "todo.md" in capsys.readouterr().err
 
 
-def test_run_dry_run_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``gsd run --dry-run`` passes through gate check and reaches stub."""
+def test_run_dry_run_still_validates_the_todo_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``--dry-run`` clears the startup gate but still needs a readable todo file."""
     monkeypatch.chdir(tmp_path)
     rc = main(["run", "--dry-run"])
-    assert rc == 2
+    assert rc == 1
+    assert "todo.md" in capsys.readouterr().err
 
 
 def test_run_approve_non_interactive_startup_error(
@@ -367,16 +377,25 @@ def test_run_approve_non_interactive_startup_error(
     assert "error" in err.lower()
 
 
-def test_run_with_explicit_todo_arg(
+def test_run_honours_an_explicit_todo_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd run --todo <path>`` accepts an explicit todo path."""
+    """``--todo`` overrides config; the error names the path that was used.
+
+    Deliberately points at a path that does not exist: ``main()`` has no seam
+    for injecting a fake agent, so a test here must never reach decompose —
+    that would launch the real harness binary. Full-pipeline coverage lives in
+    tests/test_run.py, where the agent is injected.
+    """
     monkeypatch.chdir(tmp_path)
-    todo = tmp_path / "mytodo.md"
-    todo.write_text("- [ ] A task\n")
-    rc = main(["run", "--todo", str(todo)])
-    assert rc == 2  # not yet implemented, but reached the stub
+    missing = tmp_path / "mytodo.md"
+
+    rc = main(["run", "--todo", str(missing)])
+
+    assert rc == 1
+    assert "mytodo.md" in capsys.readouterr().err
 
 
 def test_run_already_running(
