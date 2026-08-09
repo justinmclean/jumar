@@ -16,6 +16,7 @@ AC7.4  On exhaustion: item is failed, later subtasks skipped, next item
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,8 @@ def repair(
     run_dir: Path,
     _run_agent: Any | None = None,
     _run_verify: Any | None = None,
+    on_attempt: Callable[[int, int], None] | None = None,
+    on_result: Callable[[VerificationResult], None] | None = None,
 ) -> VerificationResult:
     """Retry *subtask* up to ``config.max_repairs`` times after a non-pass.
 
@@ -144,6 +147,10 @@ def repair(
     run_dir:        Directory for artefact files.
     _run_agent:     Injectable harness callable (tests only).
     _run_verify:    Injectable verifier callable (tests only; default: run_verify).
+    on_attempt:     Called with (attempt_no, budget) before each repair runs.
+                    Display only — a progress reporter has no say in control
+                    flow, and must never be able to fail a run.
+    on_result:      Called with each repair attempt's VerificationResult.
     """
     if first_result.verdict == Verdict.passed:
         return first_result
@@ -173,6 +180,9 @@ def repair(
             },
         )
 
+        if on_attempt is not None:
+            on_attempt(attempt_no, config.max_repairs)
+
         repair_prompt = _build_repair_prompt(subtask, item, prior_evidence, last_result)
 
         execute(
@@ -195,8 +205,12 @@ def repair(
             evidence_head_bytes=config.evidence_head_bytes,
             subtask_id=subtask.subtask_id,
             attempt_no=attempt_no,
+            config=config,
         )
         last_result = run_verify_fn(original_check, journal=journal, item_id=item.item_id, ctx=ctx)
+
+        if on_result is not None:
+            on_result(last_result)
 
         if last_result.verdict == Verdict.passed:
             return last_result

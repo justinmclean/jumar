@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,44 @@ class ScheduleBackend(enum.StrEnum):
 # Strings that must never appear as Check.statement — the anti-"trust me" guard.
 _PLACEHOLDER_STATEMENTS: frozenset[str] = frozenset({"", "n/a", "none", "TODO", "verify manually"})
 
+# Interpreters that turn an argv into a shell string. A check of the form
+# ["bash", "-c", "grep … && grep …"] is argv-shaped and a shell command in
+# substance, which makes the project's "argv only, never shell=True" rule
+# decorative. Observed in a real run: 14 of 15 model-authored checks were
+# `bash -c`, defeating both the shell ban and the argv[0] allow list at once.
+_SHELL_WRAPPERS: frozenset[str] = frozenset(
+    {"bash", "sh", "zsh", "dash", "ksh", "fish", "csh", "tcsh"}
+)
+
+# Flags that hand a wrapper a program to interpret rather than a file to run.
+_SHELL_INLINE_FLAGS: frozenset[str] = frozenset({"-c", "-lc", "-ic", "--command"})
+
+# Programs whose exit status does not depend on the work being checked. A check
+# built on one of these cannot fail for any reason connected to the subtask, so
+# it proves nothing — it is "trust me" wearing an argv. `ls` and `test` are here
+# only in their operand-free forms, handled below.
+_VACUOUS_PROGRAMS: frozenset[str] = frozenset(
+    {
+        "true",
+        ":",
+        "echo",
+        "printf",
+        "pwd",
+        "date",
+        "sleep",
+        "yes",
+        "whoami",
+        "hostname",
+        "uname",
+        "id",
+        "env",
+        "clear",
+    }
+)
+
+# Programs that succeed unconditionally when given no operands.
+_VACUOUS_WITHOUT_OPERANDS: frozenset[str] = frozenset({"ls", "test", "["})
+
 
 # ---------------------------------------------------------------------------
 # Schedule shapes
@@ -160,9 +199,16 @@ class Check:
 
     Invariants enforced at construction time:
     - kind=command  =>  command is non-empty
+    - kind=command  =>  argv[0] is not a shell wrapper invoked with -c
+    - kind=command  =>  the check is capable of failing (no vacuous argv)
     - kind=file or kind=absence  =>  path is non-empty
     - kind=judge  =>  rationale is non-empty
     - statement is non-empty and is not one of the known placeholder strings
+
+    The shell-wrapper rule is the load-bearing one. Without it a model writes
+    ``["bash", "-c", "grep -q foo out.txt"]`` and every guarantee downstream —
+    ``shell=False``, the argv[0] allow list, the deny list — is bypassed by a
+    single argv element.
     """
 
     kind: CheckKind
@@ -180,6 +226,30 @@ class Check:
             raise ValueError(f"Check.statement is empty or a placeholder: {self.statement!r}")
         if self.kind is CheckKind.command and not self.command:
             raise ValueError("kind=command requires a non-empty command argv")
+        if self.kind is CheckKind.command and self.command:
+            argv0 = Path(self.command[0]).name
+            if argv0 in _SHELL_WRAPPERS and any(a in _SHELL_INLINE_FLAGS for a in self.command[1:]):
+                raise ValueError(
+                    f"kind=command refuses a shell wrapper: {' '.join(self.command[:2])!r}. "
+                    "A check must be a real argv, not a shell string — otherwise the "
+                    "argv[0] allow list and the no-shell rule are both bypassed. "
+                    "Express the check as the program itself, e.g. "
+                    '["grep", "-q", "pattern", "file"].'
+                )
+            if argv0 in _VACUOUS_PROGRAMS:
+                raise ValueError(
+                    f"kind=command refuses a check that cannot fail: {argv0!r} "
+                    "exits 0 regardless of whether the subtask succeeded. "
+                    "A check must be able to return non-zero when the work was "
+                    "not done."
+                )
+            operands = [a for a in self.command[1:] if not a.startswith("-")]
+            if argv0 in _VACUOUS_WITHOUT_OPERANDS and not operands:
+                raise ValueError(
+                    f"kind=command refuses a check that cannot fail: {argv0!r} "
+                    "with no operands always exits 0. Name the path or "
+                    "condition being asserted."
+                )
         if self.kind in (CheckKind.file, CheckKind.absence) and not self.path:
             raise ValueError(f"kind={self.kind.value} requires a non-empty path")
         if self.kind is CheckKind.judge and not self.rationale:

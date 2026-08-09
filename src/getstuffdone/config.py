@@ -17,7 +17,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, cast
 
 # ---------------------------------------------------------------------------
@@ -53,12 +53,89 @@ def _system_timezone() -> str:
     return "UTC"
 
 
+# `network` is granted by default: accuracy depends on reading authoritative
+# primary sources, and an agent that cannot fetch them fabricates them instead
+# — the worse failure. The boundary this policy expresses is therefore *send*,
+# not *fetch*. Read the honesty note below before treating it as a control.
 _DEFAULT_CAPABILITIES: frozenset[Capability] = frozenset(
-    {Capability.read_fs, Capability.write_fs, Capability.run_commands}
+    {
+        Capability.read_fs,
+        Capability.write_fs,
+        Capability.run_commands,
+        Capability.network,
+    }
 )
 
-_DEFAULT_ALLOW: tuple[str, ...] = ("python3", "pytest", "ruff", "git", "make")
-_DEFAULT_DENY: tuple[str, ...] = ("curl", "wget", "ssh", "scp")
+# Allow list for dispatched argv. Since `is_allowed()` is now actually called
+# by verify/command.py, this list is load-bearing: anything absent makes a
+# legitimate check return `inconclusive`. It therefore has to cover the
+# read-only primitives a verification check is normally written with, plus the
+# project's own toolchain and the fetchers.
+_DEFAULT_ALLOW: tuple[str, ...] = (
+    # toolchain
+    "python3",
+    "python",
+    "pytest",
+    "ruff",
+    "mypy",
+    "make",
+    "git",
+    # read-only verification primitives
+    "test",
+    "grep",
+    "egrep",
+    "fgrep",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "awk",
+    "sed",
+    "diff",
+    "find",
+    "stat",
+    "file",
+    "sha256sum",
+    "shasum",
+    "cmp",
+    "sort",
+    "uniq",
+    "tr",
+    "cut",
+    "jq",
+    # fetchers — network is a default capability
+    "curl",
+    "wget",
+)
+
+# Deny wins over allow. These are the *send* vectors: the boundary is outbound
+# transmission, not outbound reading.
+_DEFAULT_DENY: tuple[str, ...] = (
+    "mail",
+    "mailx",
+    "sendmail",
+    "ssmtp",
+    "msmtp",
+    "ssh",
+    "scp",
+    "sftp",
+    "rsync",
+)
+
+# HONESTY NOTE — read before relying on the lists above.
+#
+# `python3` is on the allow list and `network` is granted, so
+# `python3 -c "import smtplib; ..."` sends mail and `urllib` posts anywhere.
+# An argv[0] allow list cannot stop a determined agent; it is defence in depth,
+# not a boundary. The actual control is the execution environment: run gsd
+# inside a container or VM whose egress is restricted to the hosts the work
+# needs. Any unattended or scheduled run without that container is unbounded,
+# whatever these tuples say.
+#
+# What the list DOES buy, now that it is enforced: a check cannot quietly shell
+# out to something nobody expected, and `models.Check` refuses `bash -c`
+# wrappers outright so the list cannot be sidestepped with one argv element.
 
 # argv prefixes that are unconditionally refused, even if present in the allow list.
 _HARD_DENY: tuple[tuple[str, ...], ...] = (
@@ -201,6 +278,9 @@ def load_config(
 def is_allowed(argv: list[str], config: Config) -> bool:
     """Return True iff argv may be dispatched.
 
+    argv[0] is matched on its basename, so "/usr/bin/grep" and "grep" resolve
+    the same way.
+
     Rules applied in order (first match wins):
     1. Empty argv → denied.
     2. Matches a hard-deny prefix (git push, gh) → denied unconditionally.
@@ -211,12 +291,18 @@ def is_allowed(argv: list[str], config: Config) -> bool:
     if not argv:
         return False
 
+    # Compare on the BASENAME. `sys.executable` is an absolute path, and a
+    # model-authored check may equally write "/usr/bin/grep"; matching the raw
+    # string refused both. Note the trade-off this makes explicit: a binary
+    # named `git` anywhere on disk is treated as `git`. That is consistent with
+    # the honesty note above — the list is defence in depth, not a boundary.
+    cmd = PurePath(argv[0]).name or argv[0]
+    normalised = [cmd, *argv[1:]]
+
     # Hard deny: refuse unconditionally regardless of allow/deny lists.
     for pattern in _HARD_DENY:
-        if tuple(argv[: len(pattern)]) == pattern:
+        if tuple(normalised[: len(pattern)]) == pattern:
             return False
-
-    cmd = argv[0]
 
     if cmd in config.commands.deny:
         return False

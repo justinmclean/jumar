@@ -122,14 +122,35 @@ class Progress:
     def verifying(self, kind: Any) -> None:
         self._write(f"verifying ({kind}) … ")
 
-    def repairing(self, budget: int) -> None:
-        """Announce that repair is starting.
+    def check_failed(self, verdict: Any, summary: str | None = None) -> None:
+        """Report a non-passing check at the moment it happens.
 
-        ``repair()`` exposes no per-attempt callback, so the real attempt
-        number is not knowable here. Say what is true — the budget — rather
-        than printing a fixed "1/N" that implies progress it cannot observe.
+        Without this the terminal goes straight from ``verifying (file) …`` to
+        ``repairing …``, which never says the check failed and never says why —
+        the reason sits unprinted in the result until the whole repair budget
+        is spent. Emit it here, then let ``repairing()`` open the next line.
         """
-        self._write(f"repairing (up to {budget}) … ")
+        detail = f" — {summary}" if summary else ""
+        self._write(f"{verdict}{detail}\n")
+        self._open_line = False
+
+    def repairing(self, budget: int) -> None:
+        """Announce that the bounded repair loop is starting."""
+        self._write(f"  repairing (budget {budget}) …\n")
+        self._open_line = False
+
+    def repair_attempt(self, attempt_no: int, budget: int, description: str = "") -> None:
+        """Open the line for one repair attempt. ``attempt_no`` is 1-based."""
+        self._close_line()
+        suffix = f" {description}" if description else ""
+        self._write(f"  attempt {attempt_no}/{budget}{suffix} … ")
+        self._open_line = True
+
+    def repair_result(self, verdict: Any, summary: str | None = None) -> None:
+        """Close a repair attempt's line with its verdict."""
+        detail = f" — {summary}" if summary and str(verdict) != "passed" else ""
+        self._write(f"{verdict}{detail}\n")
+        self._open_line = False
 
     def verdict(self, verdict: Any, summary: str | None = None) -> None:
         detail = f" — {summary}" if summary and str(verdict) != "passed" else ""

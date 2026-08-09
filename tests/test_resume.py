@@ -88,7 +88,7 @@ def _plan_payload(item_id: str, *, n_subtasks: int = 2) -> dict[str, Any]:
             "check": {
                 "kind": "command",
                 "statement": f"Step {i + 1} passes",
-                "command": ["true"],
+                "command": ["test", "-d", "."],
                 "expect_status": 0,
                 "timeout_s": 60,
             },

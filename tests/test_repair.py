@@ -60,7 +60,7 @@ def _make_check(statement: str = "Command exits zero") -> Check:
     return Check(
         kind=CheckKind.command,
         statement=statement,
-        command=("true",),
+        command=("test", "-d", "."),
     )
 
 

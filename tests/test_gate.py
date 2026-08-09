@@ -46,7 +46,7 @@ from getstuffdone.models import (
 
 
 def _make_check() -> Check:
-    return Check(kind=CheckKind.command, statement="Step done", command=("true",))
+    return Check(kind=CheckKind.command, statement="Step done", command=("test", "-d", "."))
 
 
 def _make_harness() -> HarnessInfo:

@@ -57,16 +57,38 @@ _PLAN = json.dumps(
 
 _AGENT_CHATTER = "I wrote the file\nand said a second thing"
 
+# One subtask whose check cannot pass until the agent writes the right content.
+_REPAIR_PLAN = json.dumps(
+    {
+        "subtasks": [
+            {
+                "description": "Write marker.txt containing OK",
+                "capabilities": ["write_fs"],
+                "depends_on": [],
+                "check": {
+                    "kind": "file",
+                    "statement": "marker.txt contains OK",
+                    "path": "marker.txt",
+                    "pattern": "OK",
+                },
+            }
+        ]
+    }
+)
+
 
 def _result(stdout: str) -> AgentResult:
-    return AgentResult(
-        exit_status=0, stdout=stdout, stderr="", timed_out=False, agent_claim="done"
-    )
+    return AgentResult(exit_status=0, stdout=stdout, stderr="", timed_out=False, agent_claim="done")
 
 
 def _is_execution(prompt: str) -> bool:
     """Execution prompts open with this sentence; decomposition prompts do not."""
     return prompt.startswith("You are executing")
+
+
+def _is_decomposition(prompt: str) -> bool:
+    """Only the plan request asks for subtasks as JSON."""
+    return prompt.startswith("Decompose the following todo item")
 
 
 def honest_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
@@ -76,6 +98,32 @@ def honest_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
     # subtask 1's evidence, which mentions marker.txt.
     name = "second.txt" if "Subtask 2" in prompt else "marker.txt"
     (Path(cwd) / name).write_text("OK\n")
+    return _result(_AGENT_CHATTER)
+
+
+def _agent_that_needs_one_repair() -> Any:
+    """Writes the wrong content first, the right content on the first repair."""
+    state = {"executions": 0}
+
+    def agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        # A repair prompt is neither a decomposition nor the standard execution
+        # preamble — it opens with the failing verdict — so key off the plan
+        # request and treat everything else as work.
+        if _is_decomposition(prompt):
+            return _result(_REPAIR_PLAN)
+        state["executions"] += 1
+        text = "WRONG\n" if state["executions"] == 1 else "OK\n"
+        (Path(cwd) / "marker.txt").write_text(text)
+        return _result(_AGENT_CHATTER)
+
+    return agent
+
+
+def never_writes_the_pattern(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Always writes content the check cannot match — exhausts the budget."""
+    if _is_decomposition(prompt):
+        return _result(_REPAIR_PLAN)
+    (Path(cwd) / "marker.txt").write_text("WRONG\n")
     return _result(_AGENT_CHATTER)
 
 
@@ -132,9 +180,7 @@ def test_progress_names_each_subtask_and_its_verdict(
 # ---------------------------------------------------------------------------
 
 
-def test_json_suppresses_progress(
-    workspace: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_json_suppresses_progress(workspace: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """--json owns stdout; progress must not appear anywhere."""
     cli._cmd_run(_Args(json=True), _run_agent=honest_agent, _progress_force=None)
     captured = capsys.readouterr()
@@ -143,9 +189,7 @@ def test_json_suppresses_progress(
     assert "[1/2]" not in captured.out
 
 
-def test_non_tty_suppresses_progress(
-    workspace: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_non_tty_suppresses_progress(workspace: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A piped or scheduled run emits no progress chatter."""
     cli._cmd_run(_Args(), _run_agent=honest_agent, _progress_force=None)
     captured = capsys.readouterr()
@@ -159,9 +203,7 @@ def test_non_tty_suppresses_progress(
 # ---------------------------------------------------------------------------
 
 
-def test_verbose_echoes_agent_output(
-    workspace: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_verbose_echoes_agent_output(workspace: Path, capsys: pytest.CaptureFixture[str]) -> None:
     cli._cmd_run(_Args(verbose=True), _run_agent=honest_agent, _progress_force=True)
     err = capsys.readouterr().err
 
@@ -215,3 +257,69 @@ def test_missing_transcript_never_raises(tmp_path: Path) -> None:
         p = Progress(enabled=True, verbose=True, stream=fh)
         p.agent_transcript(str(tmp_path / "does-not-exist.txt"))
         p.agent_transcript(None)
+
+
+# ---------------------------------------------------------------------------
+# A failing check must say so, and say why, before repair starts
+# ---------------------------------------------------------------------------
+
+
+def test_a_failing_check_reports_the_reason_before_repairing(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The failure and its cause are printed at the moment they happen.
+
+    Before this, the terminal went straight from ``verifying (file) …`` to
+    ``repairing …`` — never saying the check failed, and never saying why. On a
+    long run that reads like a routine step rather than a problem.
+    """
+    cli._cmd_run(_Args(), _run_agent=_agent_that_needs_one_repair(), _progress_force=True)
+    err = capsys.readouterr().err
+
+    failed_at = err.index("failed")
+    repairing_at = err.index("repairing")
+    assert failed_at < repairing_at, "the failure must be reported before repair opens"
+    assert "does not match pattern" in err
+
+
+def test_each_repair_attempt_is_numbered_against_the_budget(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``attempt 1/2`` beats ``up to 2``: it shows progress through the budget."""
+    rc = cli._cmd_run(_Args(), _run_agent=_agent_that_needs_one_repair(), _progress_force=True)
+    err = capsys.readouterr().err
+
+    assert rc == 0
+    assert "attempt 1/2" in err
+
+
+def test_a_repaired_subtask_does_not_print_its_verdict_twice(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli._cmd_run(_Args(), _run_agent=_agent_that_needs_one_repair(), _progress_force=True)
+    err = capsys.readouterr().err
+
+    assert err.count("passed") == 1
+
+
+def test_every_attempt_is_shown_when_the_budget_is_exhausted(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli._cmd_run(_Args(), _run_agent=never_writes_the_pattern, _progress_force=True)
+    err = capsys.readouterr().err
+
+    assert rc == 1
+    assert "attempt 1/2" in err
+    assert "attempt 2/2" in err
+    assert "repairs exhausted" in err
+
+
+def test_repair_progress_is_suppressed_when_disabled(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The repair callbacks must respect the enable rule like everything else."""
+    cli._cmd_run(_Args(json=True), _run_agent=_agent_that_needs_one_repair())
+    err = capsys.readouterr().err
+
+    assert "attempt" not in err
+    assert "repairing" not in err

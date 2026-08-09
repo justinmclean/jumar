@@ -93,7 +93,7 @@ def _make_subtask(
         check=Check(
             kind=CheckKind.command,
             statement="Command exits zero",
-            command=("true",),
+            command=("test", "-d", "."),
         ),
         capabilities=capabilities,
         depends_on=(),

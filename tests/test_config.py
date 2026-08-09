@@ -57,8 +57,11 @@ def test_default_capabilities_are_read_write_run(tmp_path: Path) -> None:
     assert Capability.run_commands in cfg.capabilities
 
 
-def test_network_not_in_default_capabilities(tmp_path: Path) -> None:
-    assert Capability.network not in load_config(tmp_path).capabilities
+def test_network_is_a_default_capability(tmp_path: Path) -> None:
+    """Decided 2026-08-08: an agent that cannot fetch a primary source will
+    write from memory instead, which is the worse failure. The enforced
+    boundary moved from *fetch* to *send*; see `_DEFAULT_DENY`."""
+    assert Capability.network in load_config(tmp_path).capabilities
 
 
 def test_git_commit_not_in_default_capabilities(tmp_path: Path) -> None:
@@ -78,12 +81,17 @@ def test_default_allow_list(tmp_path: Path) -> None:
     assert "make" in allow
 
 
-def test_default_deny_list(tmp_path: Path) -> None:
+def test_default_deny_list_is_the_send_boundary(tmp_path: Path) -> None:
+    """Deny outbound *transmission*, not outbound reading."""
     deny = load_config(tmp_path).commands.deny
-    assert "curl" in deny
-    assert "wget" in deny
-    assert "ssh" in deny
-    assert "scp" in deny
+    for sender in ("mail", "mailx", "sendmail", "ssh", "scp", "sftp", "rsync"):
+        assert sender in deny, sender
+
+
+def test_fetchers_are_not_denied(tmp_path: Path) -> None:
+    deny = load_config(tmp_path).commands.deny
+    assert "curl" not in deny
+    assert "wget" not in deny
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +279,8 @@ def test_harness_config_defaults() -> None:
 def test_command_policy_defaults() -> None:
     p = CommandPolicy()
     assert "python3" in p.allow
-    assert "curl" in p.deny
+    assert "curl" in p.allow
+    assert "sendmail" in p.deny
 
 
 # ---------------------------------------------------------------------------
@@ -312,12 +321,24 @@ def test_git_diff_is_allowed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_curl_is_denied() -> None:
-    assert is_allowed(["curl", "https://example.com"], Config()) is False
+def test_curl_is_allowed() -> None:
+    assert is_allowed(["curl", "https://example.com"], Config()) is True
 
 
-def test_wget_is_denied() -> None:
-    assert is_allowed(["wget", "https://example.com"], Config()) is False
+def test_wget_is_allowed() -> None:
+    assert is_allowed(["wget", "https://example.com"], Config()) is True
+
+
+def test_sendmail_is_denied() -> None:
+    assert is_allowed(["sendmail", "-t"], Config()) is False
+
+
+def test_mail_is_denied() -> None:
+    assert is_allowed(["mail", "-s", "subject", "someone@example.com"], Config()) is False
+
+
+def test_rsync_is_denied() -> None:
+    assert is_allowed(["rsync", "-a", "out/", "host:/tmp"], Config()) is False
 
 
 def test_ssh_is_denied() -> None:
@@ -351,8 +372,11 @@ def test_bash_not_in_default_allow() -> None:
     assert is_allowed(["bash", "-c", "echo hi"], Config()) is False
 
 
-def test_python_not_in_default_allow() -> None:
-    assert is_allowed(["python", "script.py"], Config()) is False
+def test_python2_style_invocation_is_allowed() -> None:
+    """`python` is on the allow list alongside `python3`. This is deliberate
+    and it is why the allow list is defence in depth rather than a boundary:
+    `python -c "import smtplib"` sends mail. The container is the control."""
+    assert is_allowed(["python", "script.py"], Config()) is True
 
 
 # ---------------------------------------------------------------------------

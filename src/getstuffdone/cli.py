@@ -450,11 +450,16 @@ def run_item(
             subtask_id=subtask.subtask_id,
             attempt_no=0,
             non_interactive=non_interactive,
+            config=config,
         )
         result = run_verify(subtask.check, journal=journal, item_id=item.item_id, ctx=ctx)
 
         # --- bounded repair on a non-pass (AC7.1–AC7.4)
+        repaired = result.verdict != Verdict.passed
         if result.verdict != Verdict.passed:
+            # Say that it failed, and why, BEFORE the repair loop opens — not
+            # after the budget is spent.
+            prog.check_failed(result.verdict, getattr(result, "summary", None))
             prog.repairing(getattr(config, "max_repairs", 0))
             try:
                 result = repair(
@@ -467,9 +472,14 @@ def run_item(
                     cwd=cwd,
                     run_dir=run_dir,
                     _run_agent=_run_agent,
+                    on_attempt=prog.repair_attempt,
+                    on_result=lambda r: prog.repair_result(r.verdict, getattr(r, "summary", None)),
                 )
-            except RepairExhausted:
-                prog.verdict("repairs exhausted", getattr(result, "summary", None))
+            except RepairExhausted as exc:
+                prog.verdict(
+                    "repairs exhausted",
+                    getattr(exc.last_result, "summary", None),
+                )
                 journal.append(
                     ITEM_FAILED,
                     item_id=item.item_id,
@@ -494,7 +504,10 @@ def run_item(
             advance_failure_count(todo_path, item, config, journal)
             return 1
 
-        prog.verdict(result.verdict, getattr(result, "summary", None))
+        # A repaired subtask already printed its per-attempt verdict; don't
+        # print "passed" twice.
+        if not repaired:
+            prog.verdict(result.verdict, getattr(result, "summary", None))
         verifications.append(result)
         prior_evidence.append(result)
 

@@ -22,15 +22,52 @@ todo file → ingest → select ─┬─ time eligibility (@not-before / @due /
                                → complete item → report
 ```
 
-## Why this exists
+## What you get
 
-Handing "migrate the export script" to an agent produces *something*. Nothing
-checks that it works, and nothing notices that steps two through five were never
-done. The failure mode is confident, unverified, partial completion — so the
-whole design is built around refusing to advance on unproven work:
+**A run that fails loudly instead of succeeding vaguely.** Hand "migrate the
+export script" to an agent and you get *something*, plus a confident summary.
+Nothing checks that it works and nothing notices that steps two through five
+never happened. Here the checkbox stays unticked, the report names the subtask
+and the check that failed, and the exit status is non-zero. Confident,
+unverified, partial completion is the failure mode the whole design exists to
+refuse.
+
+**A forensic record of what actually happened.** Every run appends to
+`runs/<run-id>/journal.jsonl` — one line per event, strictly ordered, written
+before the next step starts. Days later you can reconstruct which check ran,
+what the evidence was, what the agent claimed versus what the verifier found,
+and how each repair attempt differed. `gsd report <run-id>` renders it;
+`gsd status` rolls it up per item across every run.
+
+**Something you can leave on a schedule.** A single-flight lock means a slow run
+never overlaps its successor — a second invocation exits 0 with
+`already_running`, not an error. Repeated failure advances `@failed=` on the
+item and parks it with `@paused=auto-failures` at the threshold, so a broken
+item stops re-spending its budget every firing instead of failing nightly
+forever. Recurrence is delegated to cron or launchd; there is no daemon and no
+resident watcher.
+
+**A plan before any agent runs.** `gsd plan --dry-run` decomposes the next
+eligible item and prints the subtasks and their checks without executing
+anything. On a vague item that breakdown is useful on its own, and it is cheap.
+
+**Pressure on you to define "done" first.** An item the system will accept has
+to say what proof looks like. A subtask with no executable acceptance check is
+rejected at planning time — "trust me" is not a check — so the specification
+work happens before the agent runs rather than during review. This is the least
+obvious benefit and often the largest.
+
+**Nothing leaves the machine.** The system never pushes and never opens a PR. It
+stops at a local commit and prints the commands for you to run yourself.
+
+## How the refusal is built
 
 - A subtask with no executable acceptance check is **rejected at planning time**.
-  "Trust me" is not a check.
+- A `command` check must be a real argv. A shell wrapper (`bash -c "…"`) is
+  refused outright, and so is an argv that cannot fail — `true`, `echo`, bare
+  `ls`. A check that always passes is not a check.
+- A `file` check **fails on a zero-byte file**. A download that returned no body
+  leaves the path present and empty, and `test -f` is happy with that.
 - Verification runs in a **fresh context** that never sees the executing agent's
   reasoning — only the world it left behind.
 - The judge verifier is prompted **adversarially**: its default answer is fail,
@@ -40,30 +77,39 @@ whole design is built around refusing to advance on unproven work:
 - A deadline changes only **queue position**. Being overdue never shortens a
   plan or skips verification — a test asserts `due` is unread by the decompose,
   execute, verify and repair paths.
-- The system **never pushes and never opens a PR**. It stops at a local commit.
+
+## What it does not do
+
+Checks are proposed by the same model that does the work, so they establish that
+an artefact exists and has the shape that was asked for. They do not establish
+that its *content* is correct. Verification is strongest where acceptance is
+mechanical — a test suite, an exit status, a file that must contain a specific
+value — and weakest on judgement work, where "a document exists and mentions the
+right things" is the most a check can assert. On that kind of task the system
+still enforces the process (sources fetched before drafting, nothing marked done
+that did not run) but a human reviewer remains the one who decides whether the
+reasoning is sound.
 
 ## Status
 
-Honest state of play, because a tool about verification should not overstate
-itself:
+Everything below is built, tested and merged.
 
-| Command | State |
+| Command | What it does |
 |---|---|
-| `gsd plan --dry-run` | **Works.** Ingests, selects, prints the eligible item plus deferred/blocked. No agent calls. |
-| `gsd report <run-id>` | **Works.** Builds `report.md` from a run journal; exit 1 if anything failed. |
-| `gsd resume <run-id>` | **Works.** Replays the journal and runs the full execute→verify→complete loop from the first unverified subtask. |
-| `gsd run` | **Stub** — exits 2. Flag validation is live, the pipeline is not yet wired. |
-| `gsd schedule`, `gsd doctor` | **Stubs** — exit 2. |
+| `gsd plan` | Ingest, select, decompose, print. `--dry-run` stops before execution. |
+| `gsd run` | The full pipeline for the next eligible item. |
+| `gsd resume <run-id>` | Replay the journal and continue from the first unverified subtask. |
+| `gsd report <run-id>` | Render a run report. Exit 1 if anything failed. |
+| `gsd status` | Item-centric view across the todo file and every run journal. |
+| `gsd schedule add\|list\|remove\|show` | Install and inspect cron/launchd entries. |
+| `gsd doctor` | Check config, harness binary, allow list, schedules, todo file. |
 
-Every pipeline *module* is built and tested: `ingest`, `select`, `clock`,
-`recurrence`, `decompose`, `gate`, `execute`, `repair`, `complete`, `report`,
-`journal`, `harness`, and all five verifiers (`command`, `file`, `absence`,
-`judge`, `manual`). What's missing is the wiring for `gsd run`, plus `lock.py`,
-`schedule.py`, `doctor`, and CI. See `IMPLEMENTATION_PLAN.md`.
+`--json` is available on `plan`, `report` and `status`; `--verbose` streams the
+agent's output during `run`. Progress goes to stderr so stdout stays clean, and
+is suppressed under `--json` or when stderr is not a TTY, so scheduled runs stay
+quiet. CI runs `make check` with a per-module coverage floor.
 
-Because `gsd resume` already orchestrates the whole loop, the fastest path to a
-working `gsd run` is to lift that orchestration into a shared function — see
-**Known gaps** below.
+Known gaps are tracked in **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**.
 
 ## Install
 
@@ -82,6 +128,8 @@ gsd --version
 cp todo.example.md todo.md      # todo.md is git-ignored by default
 $EDITOR todo.md
 gsd plan --dry-run              # see what it would pick, and why
+gsd run --approve               # confirm each subtask before it runs
+gsd status                      # where everything stands
 ```
 
 Full worked examples, the flag reference, and the config reference are in
@@ -112,6 +160,8 @@ never treated as work.
 | `@not-before=` | Eligibility gate. Before this instant the item is *deferred*. |
 | `@due=` | Advisory deadline. Affects ordering and reporting only. |
 | `@every=` | Recurrence: `weekday`, `1d`, `2w`, `mon,thu`. |
+| `@failed=` | Consecutive failure count. Written by the system, cleared on success. |
+| `@paused=` | Parked; never selected. Written by the system at the failure threshold. |
 
 An indented task list under an item is **your** breakdown and is used verbatim;
 the model is only asked to supply acceptance checks for steps that lack one.
@@ -176,28 +226,25 @@ shared module and you'll spend the saved time untangling it.
 
 ## Security posture
 
-- The agent CLI runs with its unattended flag — that bypasses the **agent**
-  permission layer, not an OS sandbox. Run it inside a sandbox with no push
-  credentials in the environment.
-- `network` is **not** a default capability; `curl`, `wget`, `ssh`, `scp` are on
-  a standing deny list; `git push` and `gh` are hard-denied in every dispatched
-  argv.
-- Every subprocess is argv with `shell=False`. No shell-string interpolation.
+The enforced boundary is **send, not fetch**. An agent that cannot reach a
+primary source writes from memory instead, which is the worse outcome.
+
+- `network` **is** a default capability, and `curl`/`wget` are on the allow list.
+- The deny list is the outbound-transmission vectors: `mail`, `mailx`,
+  `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`, `rsync`. `git push` and
+  `gh` are hard-denied in every dispatched argv, matched on the argv basename so
+  an absolute path does not slip past.
+- The allow list is consulted **before** a process is spawned. A refused argv is
+  `inconclusive` and never runs.
+- Every subprocess is argv with `shell=False`, and `models.Check` refuses
+  `bash -c` wrappers so the list cannot be sidestepped with one array element.
 - Secrets come from the environment or a git-ignored `.env`, never the repo.
 
-## Known gaps
-
-- **`gsd run` is not wired**, and there is no work item for it in
-  `IMPLEMENTATION_PLAN.md` — the plan jumps from the verifiers to `lock.py`.
-  `_cmd_resume` in `cli.py` already contains the full orchestration; the fix is
-  to extract it into a shared `run_item()` that both `run` and `resume` call,
-  rather than writing it twice.
-- `lock.py` (single-flight) and `schedule.py` (cron/launchd) are specified in
-  `specs/02-functional-spec.md` §Stage 10 but not built. Until the lock exists,
-  do not install a recurring run.
-- `gsd doctor` and CI are unbuilt.
-- The build loop has no single-flight lock of its own, so a scheduled loop must
-  not overlap its own run window.
+With `python3` on the allow list and the network reachable, none of the above
+stops a determined agent — it is defence in depth, not a sandbox. The real
+control is the execution environment: run gsd inside a container or VM with
+restricted egress and no push credentials. The agent CLI runs with its
+unattended flag, which bypasses the *agent's* permission prompts, not the OS.
 
 ## Licence
 

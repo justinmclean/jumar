@@ -57,7 +57,11 @@ def _make_harness() -> HarnessInfo:
 
 
 def _make_check() -> Check:
-    return Check(kind=CheckKind.command, statement="Command exits zero", command=("true",))
+    return Check(
+        kind=CheckKind.command,
+        statement="Command exits zero",
+        command=("test", "-d", "."),
+    )
 
 
 def _make_subtask(index: int = 0, item_id: str = "write-tests-abc12345") -> Subtask:

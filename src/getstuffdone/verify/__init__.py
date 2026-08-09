@@ -21,7 +21,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
+
+if TYPE_CHECKING:
+    from ..config import Config
 
 from ..journal import VERIFICATION, Journal
 from ..models import Check, CheckKind, HarnessInfo, VerificationResult
@@ -46,6 +49,10 @@ class VerifyContext:
     # Injectable agent runner for tests (default: harness.run_agent).
     judge_run_agent: Any | None = field(default=None, compare=False, hash=False)
     non_interactive: bool = False
+    # Resolved run config. Optional so existing call sites keep working; when
+    # absent the command verifier cannot consult the argv allow list and says
+    # so rather than silently running whatever it was handed.
+    config: Config | None = None
 
 
 # ---------------------------------------------------------------------------

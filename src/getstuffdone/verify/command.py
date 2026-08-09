@@ -5,6 +5,9 @@ Runs the ``Check.command`` argv list with ``shell=False``, captures
 stdout/stderr, and compares the exit status to ``check.expect_status``.
 
 Rules:
+- An argv[0] refused by the configured allow/deny policy yields
+  ``inconclusive`` and **no process is spawned**. Not ``failed``: the check did
+  not run, so nothing was learned about the work. Not ``passed``, obviously.
 - A binary not found on PATH yields ``inconclusive``, not ``failed`` (AC6.3).
 - An exit status different from ``expect_status`` yields ``failed`` (AC6.1).
 - An expected exit status match (plus optional ``expect_stdout`` regex) yields
@@ -36,6 +39,30 @@ def verify_command(check: Check, ctx: VerifyContext) -> VerificationResult:
     argv: list[str] = list(check.command)
     checked_at = stamp()
     t0 = time.monotonic()
+
+    # Argv policy is consulted BEFORE the process is spawned. A check's argv is
+    # model-chosen, so without this the verifier — the half of the system meant
+    # to be trustworthy — runs whatever the decomposition proposed.
+    # A context without a config falls back to the DEFAULT policy, never to
+    # allow-all: a missing wire-up must not silently disable the boundary.
+    from ..config import Config, is_allowed
+
+    policy = ctx.config if ctx.config is not None else Config()
+    if not is_allowed(argv, policy):
+        return VerificationResult(
+            subtask_id=ctx.subtask_id,
+            attempt_no=ctx.attempt_no,
+            verdict=Verdict.inconclusive,
+            kind=CheckKind.command,
+            evidence={
+                "argv": argv,
+                "error": "capability_denied",
+                "reason": f"{argv[0]!r} is not permitted by the configured command policy",
+            },
+            summary=f"Refused by command policy, not run: {argv[0]!r}",
+            evidence_path=None,
+            checked_at=checked_at,
+        )
 
     stdout_bytes: bytes
     stderr_bytes: bytes

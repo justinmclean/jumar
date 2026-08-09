@@ -117,7 +117,7 @@ def _valid_response(n: int = 1) -> str:
             "check": {
                 "kind": "command",
                 "statement": f"Step {i + 1} exits zero",
-                "command": ["true"],
+                "command": ["test", "-d", "."],
                 "expect_status": 0,
             },
             "capabilities": ["run_commands"],
@@ -173,7 +173,11 @@ def test_capabilities_clamped_to_item_grants(journal: Journal, cfg: Config, tmp_
             "subtasks": [
                 {
                     "description": "Step 1",
-                    "check": {"kind": "command", "statement": "done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": ["run_commands", "network"],  # network not granted
                     "depends_on": [],
                 }
@@ -298,7 +302,11 @@ def test_placeholder_statement_rejected_as_missing_check(
                 "subtasks": [
                     {
                         "description": "Step",
-                        "check": {"kind": "command", "statement": placeholder, "command": ["true"]},
+                        "check": {
+                            "kind": "command",
+                            "statement": placeholder,
+                            "command": ["test", "-d", "."],
+                        },
                         "capabilities": [],
                         "depends_on": [],
                     }
@@ -361,7 +369,7 @@ def test_authored_descriptions_override_model_descriptions(
                     "check": {
                         "kind": "command",
                         "statement": "First done",
-                        "command": ["true"],
+                        "command": ["test", "-d", "."],
                     },
                     "capabilities": [],
                     "depends_on": [],
@@ -371,7 +379,7 @@ def test_authored_descriptions_override_model_descriptions(
                     "check": {
                         "kind": "command",
                         "statement": "Second done",
-                        "command": ["true"],
+                        "command": ["test", "-d", "."],
                     },
                     "capabilities": [],
                     "depends_on": [0],
@@ -394,7 +402,11 @@ def test_authored_source_label(journal: Journal, cfg: Config, tmp_path: Path) ->
             "subtasks": [
                 {
                     "description": "x",
-                    "check": {"kind": "command", "statement": "done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [],
                 }
@@ -416,7 +428,11 @@ def test_authored_count_mismatch_is_retriable(
             "subtasks": [
                 {
                     "description": "x",
-                    "check": {"kind": "command", "statement": "done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [],
                 }
@@ -428,13 +444,21 @@ def test_authored_count_mismatch_is_retriable(
             "subtasks": [
                 {
                     "description": "x",
-                    "check": {"kind": "command", "statement": "A done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "A done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [],
                 },
                 {
                     "description": "x",
-                    "check": {"kind": "command", "statement": "B done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "B done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [0],
                 },
@@ -534,13 +558,21 @@ def test_two_node_cycle_rejected(journal: Journal, cfg: Config, tmp_path: Path) 
             "subtasks": [
                 {
                     "description": "Step A",
-                    "check": {"kind": "command", "statement": "A done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "A done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [1],  # A → B
                 },
                 {
                     "description": "Step B",
-                    "check": {"kind": "command", "statement": "B done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "B done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [0],  # B → A  → cycle
                 },
@@ -562,7 +594,11 @@ def test_self_cycle_rejected(journal: Journal, cfg: Config, tmp_path: Path) -> N
             "subtasks": [
                 {
                     "description": "Step A",
-                    "check": {"kind": "command", "statement": "A done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "A done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [0],  # self-reference
                 }
@@ -585,25 +621,41 @@ def test_diamond_dag_accepted(journal: Journal, cfg: Config, tmp_path: Path) -> 
             "subtasks": [
                 {
                     "description": "Root",
-                    "check": {"kind": "command", "statement": "Root done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "Root done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [],
                 },
                 {
                     "description": "Left",
-                    "check": {"kind": "command", "statement": "Left done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "Left done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [0],
                 },
                 {
                     "description": "Right",
-                    "check": {"kind": "command", "statement": "Right done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "Right done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [0],
                 },
                 {
                     "description": "Merge",
-                    "check": {"kind": "command", "statement": "Merge done", "command": ["true"]},
+                    "check": {
+                        "kind": "command",
+                        "statement": "Merge done",
+                        "command": ["test", "-d", "."],
+                    },
                     "capabilities": [],
                     "depends_on": [1, 2],
                 },

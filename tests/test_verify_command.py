@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from getstuffdone.clock import stamp
-from getstuffdone.config import Config
+from getstuffdone.config import CommandPolicy, Config
 from getstuffdone.execute import execute
 from getstuffdone.journal import (
     ATTEMPT_FINISHED,
@@ -56,13 +56,29 @@ def journal(tmp_path: Path) -> Journal:
     return Journal(tmp_path / "journal.jsonl", "run-test")
 
 
-def _ctx(tmp_path: Path, subtask_id: str = "item#0", attempt_no: int = 0) -> VerifyContext:
+def _ctx(
+    tmp_path: Path,
+    subtask_id: str = "item#0",
+    attempt_no: int = 0,
+    allow: tuple[str, ...] | None = None,
+) -> VerifyContext:
+    """A verify context.
+
+    `allow` extends the default argv allow list. `verify_command` consults the
+    policy *before* spawning, and falls back to the default policy when no
+    config is supplied, so a test that needs an off-list binary to reach the
+    subprocess must say so.
+    """
+    config = None
+    if allow is not None:
+        config = Config(commands=CommandPolicy(allow=CommandPolicy().allow + allow))
     return VerifyContext(
         cwd=tmp_path,
         run_dir=tmp_path,
         evidence_head_bytes=4000,
         subtask_id=subtask_id,
         attempt_no=attempt_no,
+        config=config,
     )
 
 
@@ -172,23 +188,42 @@ def test_expect_stdout_no_match_fails(tmp_path: Path) -> None:
 
 def test_missing_binary_yields_inconclusive(tmp_path: Path) -> None:
     check = _command_check("__no_such_binary_gsd_test__")
-    ctx = _ctx(tmp_path)
+    ctx = _ctx(tmp_path, allow=("__no_such_binary_gsd_test__",))
     result = verify_command(check, ctx)
     assert result.verdict == Verdict.inconclusive
 
 
 def test_missing_binary_evidence_has_error_field(tmp_path: Path) -> None:
     check = _command_check("__no_such_binary_gsd_test__")
-    ctx = _ctx(tmp_path)
+    ctx = _ctx(tmp_path, allow=("__no_such_binary_gsd_test__",))
     result = verify_command(check, ctx)
     assert result.evidence.get("error") == "binary_not_found"
 
 
 def test_missing_binary_evidence_path_is_none(tmp_path: Path) -> None:
     check = _command_check("__no_such_binary_gsd_test__")
-    ctx = _ctx(tmp_path)
+    ctx = _ctx(tmp_path, allow=("__no_such_binary_gsd_test__",))
     result = verify_command(check, ctx)
     assert result.evidence_path is None
+
+
+def test_off_list_binary_is_refused_before_the_spawn(tmp_path: Path) -> None:
+    """Policy precedes execution, so an off-list argv never reaches the OS.
+
+    This is the distinction between the two inconclusive paths: `binary_not_found`
+    means we tried and the binary was absent; `capability_denied` means we did
+    not try.
+    """
+    check = _command_check("__no_such_binary_gsd_test__")
+    result = verify_command(check, _ctx(tmp_path))
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence.get("error") == "capability_denied"
+
+
+def test_an_absolute_path_is_matched_on_its_basename(tmp_path: Path) -> None:
+    """`sys.executable` is absolute; matching the raw string refused it."""
+    result = verify_command(_command_check(sys.executable, "-c", "pass"), _ctx(tmp_path))
+    assert result.verdict == Verdict.passed
 
 
 # ---------------------------------------------------------------------------

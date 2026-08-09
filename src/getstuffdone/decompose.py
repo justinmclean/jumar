@@ -102,6 +102,23 @@ _RULES = [
     "- Use `kind=judge` ONLY when no executable check is possible;"
     " it MUST include a non-empty `rationale` explaining why.",
     "- `kind=command` requires `command` (a JSON argv list, never a shell string).",
+    "- `kind=command` MUST NOT be a shell wrapper:"
+    ' ["bash", "-c", "..."] (or sh/zsh/dash -c) is REJECTED.'
+    " Express the check as the program itself,"
+    ' e.g. ["grep", "-q", "Article 50", "sources/ai-act.html"].',
+    "- The check MUST be able to FAIL. An argv that exits 0 regardless of the"
+    " work — `true`, `echo`, `date`, bare `ls` — is REJECTED. Ask yourself:"
+    " what would make this check return non-zero? If nothing would, it is not a check.",
+    "- A `pattern` is a REGEX and must tolerate surface variation. Do not"
+    " demand one exact spelling of something you will also be writing:"
+    ' prefer "Art(icle)?\\s*2\\(12\\)" over "Art 2(12)". Anchor on the fact,'
+    " not on your own phrasing of it — a brittle pattern fails a correct"
+    " document and wastes the repair budget on rewording.",
+    "- `kind=file` FAILS on a zero-byte file. A download that returned no body"
+    " leaves the path present and empty, so assert content, not existence:"
+    " give `pattern` with a phrase that can only appear in the real document.",
+    "- Check the OUTCOME, not the artefact of your own effort. `grep -q draft"
+    " notes.md` proves you typed a word; it does not prove the work is right.",
     "- `kind=file` or `kind=absence` requires `path`.",
     "- `depends_on` must list 0-based subtask indices and must form a DAG (no cycles).",
     "- `capabilities` must be a subset of the granted capabilities.",
