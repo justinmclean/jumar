@@ -8,6 +8,7 @@ may call ``datetime.now()`` or ``datetime.utcnow()`` directly.
 
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime
 
 from getstuffdone.config import Config
@@ -27,6 +28,22 @@ def capture_now(config: Config, *, _now: datetime | None = None) -> datetime:
     if _now is not None:
         return _now.astimezone(UTC)
     return datetime.now(UTC)
+
+
+def make_run_id(now: datetime, *, _suffix: str | None = None) -> str:
+    """Generate a sortable run id from *now*: ``YYYYMMDD-HHMM-<4 hex chars>``.
+
+    Parameters
+    ----------
+    now:
+        The run's eligibility instant (from :func:`capture_now`).
+    _suffix:
+        Injectable 4-character suffix for tests.  If omitted, 4 random hex
+        chars are generated via :mod:`secrets`.
+    """
+    dt = now.astimezone(UTC)
+    suffix = _suffix if _suffix is not None else secrets.token_hex(2)
+    return f"{dt.strftime('%Y%m%d-%H%M')}-{suffix}"
 
 
 def stamp(*, _now: datetime | None = None) -> str:
