@@ -10,10 +10,17 @@ never weaken a check to get green.
 
 ## Status — 2026-08-10
 
-Phases 0–8 complete and merged to main (including failure-backoff-and-park,
-gsd-status, json-output, run-progress-output, and all Phase 6c hollow-check
-defences). Four work items are built on local branches awaiting merge (Phase
-6b + Phase 9).
+All planned phases through Phase 9 are merged to main, along with all four
+previously in-flight branches (S2 enforce-the-send-boundary, S3
+capability-honesty, M1 per-stage-model-selection, M2 wire-the-judge-harness).
+No local work-item branches remain.
+
+**Uncommitted working-tree changes on `main`:** `cli.py`, `report.py`, and
+`tests/test_run.py` carry a partial implementation of R1
+(`resume-can-retry-a-failed-item`): the `--retry-failed` flag, the retry path
+in `_cmd_resume`, last-write-wins in `build_report`, and three tests. The build
+beat should pick this up first, commit it on the `resume-can-retry-a-failed-item`
+branch, and validate with `make check`.
 
 ### Completed (merged to main)
 
@@ -46,23 +53,14 @@ defences). Four work items are built on local branches awaiting merge (Phase
 - **checks-must-be-falsifiable** — `Check.__post_init__` refuses `kind=command` whose argv[0] cannot fail for any reason connected to the work (`true`, `echo`, `date`, `ls` with no operands, etc.). Tests in `tests/test_hollow_checks.py` (proposed AC3.8).
 - **fetch-failure-must-fail-the-subtask** — `verify/file.py` returns `failed` for a zero-byte path with `file_is_empty` evidence before any pattern matching; `content_head` included in evidence on pattern miss. Tests in `tests/test_hollow_checks.py` (proposed AC6.8).
 - **enforce-command-allowlist** — `verify/command.py` calls `is_allowed()` before `subprocess.run`; denied argv yields `inconclusive` with `capability_denied` and spawns no process; `VerifyContext` carries `config`; default policy applies when config absent. Tests in `tests/test_hollow_checks.py` (proposed AC6.9 = S1).
+- **enforce-the-send-boundary** — deny send vectors (`mail`, `mailx`, `sendmail`, `ssh`, `scp`, `sftp`, `rsync`) everywhere gsd dispatches a process; fix `git -C … push` bypass; gate unrestricted harnesses behind `allow_unrestricted_harness = true`. (S2)
+- **capability-honesty** — `Capability` is a declared-subset check, not a runtime sandbox; sweep all remaining statements into agreement and add a test asserting the gate's actual contract. (S3)
+- **per-stage-model-selection** — `HarnessConfig.for_stage()` with `[harness.<stage>]` overrides in gsd.toml; resolved model journalled in every `HarnessInfo`. (M1)
+- **wire-the-judge-harness** — pass `harness=` and `judge_timeout_s` at both `VerifyContext` construction sites (`run_item` and `repair.py`) so `kind=judge` checks actually reach the judge verifier in a real run. (M2)
 
 ### In-flight (local branches — not yet pushed)
 
-- **enforce-the-send-boundary** (`enforce-the-send-boundary` branch) — deny send
-  vectors (`mail`, `mailx`, `sendmail`, `ssh`, `scp`, `sftp`, `rsync`) everywhere
-  gsd dispatches a process; fix `git -C … push` bypass; gate unrestricted harnesses
-  behind `allow_unrestricted_harness = true`. (S2)
-- **capability-honesty** (`capability-honesty` branch) — `Capability` is a
-  declared-subset check, not a runtime sandbox; sweep all remaining statements into
-  agreement and add a test asserting the gate's actual contract. (S3)
-- **per-stage-model-selection** (`per-stage-model-selection` branch) — `HarnessConfig.for_stage()`
-  with `[harness.<stage>]` overrides in gsd.toml; resolved model journalled in
-  every `HarnessInfo`. (M1)
-- **wire-the-judge-harness** (`wire-the-judge-harness` branch) — pass `harness=` and
-  `judge_timeout_s` at both `VerifyContext` construction sites (`run_item` and
-  `repair.py`) so `kind=judge` checks actually reach the judge verifier in a real
-  run. (M2)
+None.
 
 ---
 
@@ -88,6 +86,55 @@ C1. **thread-check-rejection-reason** — `_build_check` in `decompose.py` catch
    "unrecognised kind" text or similar, not a bare `None`.
    *Closes:* follow-up from enforce-command-allowlist / Phase 6c.
    *Branch slug:* `thread-check-rejection-reason`
+
+### Phase 11 — a failed run must be retryable
+
+R1. **resume-can-retry-a-failed-item** — **Gap, found the hard way on
+   2026-08-09.** `_cmd_resume` short-circuits when the resumed item is in
+   `state.items_done | state.items_failed`: it rebuilds the report from the
+   journal, prints it, and exits without executing anything. So `resume`
+   continues an *interrupted* run but cannot retry a *failed* one.
+
+   When a run fails because of a **bug in gsd** — as it did, twice, on the
+   unwired judge harness (Phase 9 M2) — the fix is worthless to that run. The
+   only way forward is `gsd run` from scratch, re-executing every subtask that
+   already passed. Resume also prints the old report verbatim, so it looks
+   exactly like the fix did not work.
+
+   Add an explicit retry path — `gsd resume <run-id> --retry-failed` — that
+   re-enters `run_item` from the first subtask without a passing verdict,
+   keeping the passed ones replayed from the journal. Do **not** change the
+   default: the current behaviour is right for the case it was written for, and
+   silently retrying a terminal failure would make `resume` non-idempotent.
+
+   Two things it must get right:
+   - The retry appends to the same journal, so `item_failed` is no longer the
+     last word on that item. `report.py` must take the **latest** terminal event
+     per item, not the first, or the report will contradict the run.
+   - `advance_failure_count` already ran when the item failed. A retry must not
+     double-count, and a subsequent success must clear `@failed=` as usual.
+
+   **NOTE — pre-existing working-tree code:** `cli.py`, `report.py`, and
+   `tests/test_run.py` on `main` already contain a partial implementation of
+   this item (unstaged). The build beat should commit these changes on the
+   `resume-can-retry-a-failed-item` branch without discarding them; validate
+   that `make check` passes and that all three new tests in `test_run.py` pass.
+   Verify that `advance_failure_count` is not double-counted on retry and that
+   `@failed=` is cleared on subsequent success.
+
+   *Validation:* `make check` + `pytest tests/test_resume.py -q` — a journal
+   ending in `item_failed` resumes under `--retry-failed` and re-executes only
+   the unverified subtasks; the same journal without the flag still reports and
+   exits; passed subtasks never re-invoke the agent; the report reflects the
+   retry outcome, not the original failure.
+   *Closes:* gap in AC-S1/AC-S4 — proposed AC-S5. USER-side spec amendment.
+   *Branch slug:* `resume-can-retry-a-failed-item`
+
+   *Related, smaller:* `resume` resolves `--runs-dir` relative to the current
+   working directory (default `runs`), so a bare run id only works from the
+   directory the run was launched in. Either record the absolute runs directory
+   in the journal too, or say so in the error — the current message ("no journal
+   found at runs/<id>/journal.jsonl") does not hint that the path is relative.
 
 ### Phase 10 — dependency integrity
 
@@ -123,100 +170,6 @@ D1. **validate-depends-targets-at-ingest** — **Bug.** A `@depends=` naming an
    across todo files would make one file's eligibility depend on another file's
    run history — a much larger change to the model. Two related lists should
    state their run order in prose. Do not plan this without a concrete need.
-
-### Phase 11 — a failed run must be retryable
-
-R1. **resume-can-retry-a-failed-item** — **Gap, found the hard way on
-   2026-08-09.** `_cmd_resume` short-circuits when the resumed item is in
-   `state.items_done | state.items_failed`: it rebuilds the report from the
-   journal, prints it, and exits without executing anything. So `resume`
-   continues an *interrupted* run but cannot retry a *failed* one.
-
-   When a run fails because of a **bug in gsd** — as it did, twice, on the
-   unwired judge harness (Phase 9 M2) — the fix is worthless to that run. The
-   only way forward is `gsd run` from scratch, re-executing every subtask that
-   already passed. Resume also prints the old report verbatim, so it looks
-   exactly like the fix did not work.
-
-   Add an explicit retry path — `gsd resume <run-id> --retry-failed` — that
-   re-enters `run_item` from the first subtask without a passing verdict,
-   keeping the passed ones replayed from the journal. Do **not** change the
-   default: the current behaviour is right for the case it was written for, and
-   silently retrying a terminal failure would make `resume` non-idempotent.
-
-   Two things it must get right:
-   - The retry appends to the same journal, so `item_failed` is no longer the
-     last word on that item. `report.py` must take the **latest** terminal event
-     per item, not the first, or the report will contradict the run.
-   - `advance_failure_count` already ran when the item failed. A retry must not
-     double-count, and a subsequent success must clear `@failed=` as usual.
-
-   *Validation:* `make check` + `pytest tests/test_resume.py -q` — a journal
-   ending in `item_failed` resumes under `--retry-failed` and re-executes only
-   the unverified subtasks; the same journal without the flag still reports and
-   exits; passed subtasks never re-invoke the agent; the report reflects the
-   retry outcome, not the original failure.
-   *Closes:* gap in AC-S1/AC-S4 — proposed AC-S5. USER-side spec amendment.
-   *Branch slug:* `resume-can-retry-a-failed-item`
-
-   *Related, smaller:* `resume` resolves `--runs-dir` relative to the current
-   working directory (default `runs`), so a bare run id only works from the
-   directory the run was launched in. Either record the absolute runs directory
-   in the journal too, or say so in the error — the current message ("no journal
-   found at runs/<id>/journal.jsonl") does not hint that the path is relative.
-
-### Phase 12 — run ids a human can type
-
-F1. **friendly-run-ids** — `run_id` is `str(uuid.uuid4())`
-   (`cli.py:210`, `cli.py:582`), so every reference to a run looks like
-   `9c23ddee-8263-477b-a98a-99efff7540b6`. It is unique and it is useless: you
-   cannot type it, cannot tell two apart at a glance, cannot tell *when* a run
-   happened or *what it was about*, and `ls runs/` sorts them in an order with
-   no meaning. Every `resume` and `report` invocation becomes a copy-paste from
-   scrollback — and if the scrollback is gone, an `ls -t` and a guess.
-
-   **Design constraint to respect, not fight.** The id is minted *before*
-   `ingest()` and `select_next()` — the run directory and journal must exist so
-   that `run_started` can record the captured `now` before anything else
-   happens. So the selected item's slug is **not knowable** when the id is
-   chosen. Do not try to rename the directory after selection: the journal is
-   already open, and a rename breaks resume-by-id for anything that recorded
-   the original.
-
-   Four changes, in increasing order of effort. The first two are most of the
-   benefit:
-
-   1. **Accept an unambiguous prefix** wherever a run id is taken (`resume`,
-      `report`). `gsd resume 9c23` should work. Ambiguous prefix ⇒ error listing
-      the candidates. This alone makes the current ids tolerable and works on
-      every run that already exists.
-   2. **Accept `latest`** as a run id, resolving to the most recently started
-      run in the runs directory. `gsd resume latest --retry-failed` is the
-      command this whole phase exists to enable.
-   3. **Change the format** to `<YYYYMMDD>-<HHMM>-<4 random chars>`, e.g.
-      `20260809-1543-a3f9`, derived from the journalled `now` — via `clock.py`,
-      not the wall clock, or it breaks the one-clock rule and every frozen-clock
-      test. Sorts chronologically under a plain `ls`, greps by date, and the
-      random tail keeps two runs in the same minute distinct.
-   4. **Record the item in a run index.** Since the slug cannot go in the
-      directory name, write `runs/index.tsv` — one line per run: id, started,
-      item_id, status — appended at `run_started` and updated at `run_finished`.
-      That is what lets `gsd status` and a future `gsd runs` answer "which run
-      was the ASF one?" without opening twelve journals.
-
-   **Backwards compatibility is not optional.** Existing runs are uuid-named and
-   must stay resumable. Prefix matching gives that for free; do not add a
-   migration that renames anything.
-
-   *Validation:* `make check` + `pytest tests/test_resume.py tests/test_report.py -q`
-   — a new run id matches `^\d{8}-\d{4}-[a-z0-9]{4}$`; two runs started in the
-   same minute get distinct ids; an existing uuid-named run still resolves;
-   an unambiguous prefix resolves and an ambiguous one errors naming the
-   candidates; `latest` resolves to the most recent by `run_started`, not by
-   filesystem mtime; the id in the report header matches the directory.
-   *Closes:* new behaviour — USER-side spec amendment alongside the run-journal
-   contract in `specs/03-data-model.md`.
-   *Branch slug:* `friendly-run-ids`
 
 ### Phase 13 — rename the project
 
@@ -280,9 +233,62 @@ N2. **rename-everything** — one branch, one commit, mechanical. Do it **before
    `plan`/`update` beat or a human edit, **not** a `build` iteration.
    *Branch slug:* `rename-everything`
 
-   Sequencing note: do N1 and N2 **after** the current in-flight branches merge
-   and **before** Phase 12's `friendly-run-ids`, so the new id format ships
-   under the final name.
+   Sequencing note: N1 and N2 are now unblocked (all in-flight branches merged
+   as of 2026-08-10). Do N2 **before** Phase 12's `friendly-run-ids`, so the
+   new id format ships under the final name.
+
+### Phase 12 — run ids a human can type
+
+F1. **friendly-run-ids** — `run_id` is `str(uuid.uuid4())`
+   (`cli.py:210`, `cli.py:582`), so every reference to a run looks like
+   `9c23ddee-8263-477b-a98a-99efff7540b6`. It is unique and it is useless: you
+   cannot type it, cannot tell two apart at a glance, cannot tell *when* a run
+   happened or *what it was about*, and `ls runs/` sorts them in an order with
+   no meaning. Every `resume` and `report` invocation becomes a copy-paste from
+   scrollback — and if the scrollback is gone, an `ls -t` and a guess.
+
+   **Design constraint to respect, not fight.** The id is minted *before*
+   `ingest()` and `select_next()` — the run directory and journal must exist so
+   that `run_started` can record the captured `now` before anything else
+   happens. So the selected item's slug is **not knowable** when the id is
+   chosen. Do not try to rename the directory after selection: the journal is
+   already open, and a rename breaks resume-by-id for anything that recorded
+   the original.
+
+   Four changes, in increasing order of effort. The first two are most of the
+   benefit:
+
+   1. **Accept an unambiguous prefix** wherever a run id is taken (`resume`,
+      `report`). `gsd resume 9c23` should work. Ambiguous prefix ⇒ error listing
+      the candidates. This alone makes the current ids tolerable and works on
+      every run that already exists.
+   2. **Accept `latest`** as a run id, resolving to the most recently started
+      run in the runs directory. `gsd resume latest --retry-failed` is the
+      command this whole phase exists to enable.
+   3. **Change the format** to `<YYYYMMDD>-<HHMM>-<4 random chars>`, e.g.
+      `20260809-1543-a3f9`, derived from the journalled `now` — via `clock.py`,
+      not the wall clock, or it breaks the one-clock rule and every frozen-clock
+      test. Sorts chronologically under a plain `ls`, greps by date, and the
+      random tail keeps two runs in the same minute distinct.
+   4. **Record the item in a run index.** Since the slug cannot go in the
+      directory name, write `runs/index.tsv` — one line per run: id, started,
+      item_id, status — appended at `run_started` and updated at `run_finished`.
+      That is what lets `gsd status` and a future `gsd runs` answer "which run
+      was the ASF one?" without opening twelve journals.
+
+   **Backwards compatibility is not optional.** Existing runs are uuid-named and
+   must stay resumable. Prefix matching gives that for free; do not add a
+   migration that renames anything.
+
+   *Validation:* `make check` + `pytest tests/test_resume.py tests/test_report.py -q`
+   — a new run id matches `^\d{8}-\d{4}-[a-z0-9]{4}$`; two runs started in the
+   same minute get distinct ids; an existing uuid-named run still resolves;
+   an unambiguous prefix resolves and an ambiguous one errors naming the
+   candidates; `latest` resolves to the most recent by `run_started`, not by
+   filesystem mtime; the id in the report header matches the directory.
+   *Closes:* new behaviour — USER-side spec amendment alongside the run-journal
+   contract in `specs/03-data-model.md`.
+   *Branch slug:* `friendly-run-ids`
 
 ---
 
