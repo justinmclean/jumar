@@ -686,3 +686,139 @@ def test_json_with_prose_prefix_extracted(journal: Journal, cfg: Config, tmp_pat
     runner = _fake_runner([prefixed])
     plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
     assert len(plan.subtasks) == 1
+
+
+# ---------------------------------------------------------------------------
+# M1 — per-stage model selection
+# ---------------------------------------------------------------------------
+
+
+def _capturing_runner(
+    responses: list[str | None],
+) -> tuple[Any, list[HarnessInfo]]:
+    """Return a (runner, captured_harnesses) pair for inspecting the harness passed in."""
+    captured: list[HarnessInfo] = []
+    call_count = [0]
+
+    def runner(
+        prompt: str,
+        *,
+        cwd: Path,
+        capabilities: Any,
+        timeout_s: int,
+        harness: HarnessInfo,
+    ) -> _FakeResult:
+        captured.append(harness)
+        idx = call_count[0]
+        call_count[0] += 1
+        if idx >= len(responses):
+            return _FakeResult(exit_status=1, stdout="")
+        resp = responses[idx]
+        if resp is None:
+            return _FakeResult(exit_status=1, stdout="")
+        return _FakeResult(exit_status=0, stdout=resp)
+
+    return runner, captured
+
+
+def test_decompose_stage_override_model_reaches_runner(journal: Journal, tmp_path: Path) -> None:
+    """The model resolved for the 'decompose' stage is passed to the agent runner."""
+    from getstuffdone.config import HarnessConfig
+
+    cfg = Config(harness=HarnessConfig(agent="claude", model="sonnet", decompose_model="opus"))
+    runner, harnesses = _capturing_runner([_valid_response(1)])
+    _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert len(harnesses) == 1
+    assert harnesses[0].model == "opus"
+    assert harnesses[0].agent == "claude"
+
+
+def test_decompose_stage_override_model_reaches_journal(journal: Journal, tmp_path: Path) -> None:
+    """The resolved model appears in the plan_created journal entry."""
+    from getstuffdone.config import HarnessConfig
+
+    cfg = Config(harness=HarnessConfig(agent="claude", model="sonnet", decompose_model="opus"))
+    runner = _fake_runner([_valid_response(1)])
+    _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    state = journal.replay()
+    plan_events = [e for e in state.entries if e["event"] == PLAN_CREATED]
+    assert plan_events, "plan_created not journalled"
+    assert plan_events[0]["payload"]["harness"]["model"] == "opus"
+
+
+def test_no_decompose_override_falls_back_to_top_level(journal: Journal, tmp_path: Path) -> None:
+    """Without a decompose override, the top-level model is used."""
+    from getstuffdone.config import HarnessConfig
+
+    cfg = Config(harness=HarnessConfig(agent="claude", model="flash"))
+    runner, harnesses = _capturing_runner([_valid_response(1)])
+    _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert harnesses[0].model == "flash"
+
+
+def test_decompose_override_does_not_affect_execute_stage(tmp_path: Path) -> None:
+    """A decompose-model override must not change the model used in execute.py."""
+    from getstuffdone.config import HarnessConfig
+    from getstuffdone.execute import execute
+    from getstuffdone.models import Capability, Check, CheckKind, Subtask, SubtaskStatus
+
+    captured: list[HarnessInfo] = []
+
+    def runner(  # noqa: E501
+        prompt: str,
+        *,
+        cwd: Path,
+        capabilities: Any,
+        timeout_s: int,
+        harness: HarnessInfo,
+    ) -> Any:
+        captured.append(harness)
+        return _FakeResult(exit_status=0, stdout="done", agent_claim="done")
+
+    from getstuffdone.journal import Journal as _J
+    from getstuffdone.models import ItemStatus, TodoItem
+
+    jrn = _J(tmp_path / "j.jsonl", "r1")
+    cfg = Config(harness=HarnessConfig(agent="claude", model="sonnet", decompose_model="opus"))
+
+    item = TodoItem(
+        item_id="x",
+        text="t",
+        raw_line="- [ ] t",
+        line_no=1,
+        status=ItemStatus.pending,
+        context=(),
+        authored_subtasks=(),
+        meta={},
+        priority=None,
+        depends=(),
+        capabilities=frozenset({Capability.run_commands}),
+        schedule=None,
+    )
+    subtask = Subtask(
+        subtask_id="x#0",
+        index=0,
+        description="do",
+        check=Check(kind=CheckKind.command, statement="test dir", command=("test", "-d", ".")),
+        capabilities=frozenset({Capability.run_commands}),
+        depends_on=(),
+        status=SubtaskStatus.pending,
+        attempts=(),
+    )
+
+    execute(
+        subtask,
+        item=item,
+        prior_evidence=[],
+        config=cfg,
+        journal=jrn,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+    )
+
+    assert len(captured) == 1
+    assert captured[0].model == "sonnet"  # execute stage: no override → top-level

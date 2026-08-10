@@ -144,6 +144,11 @@ _HARD_DENY: tuple[tuple[str, ...], ...] = (
 )
 
 
+# Stage names that may appear as sub-tables under [harness] in gsd.toml.
+# An unrecognised sub-table key is a startup error — not a silent no-op —
+# so that a typo in gsd.toml does not silently fail to apply the override.
+_VALID_HARNESS_STAGES: frozenset[str] = frozenset({"decompose", "execute", "judge"})
+
 # ---------------------------------------------------------------------------
 # Sub-configs
 # ---------------------------------------------------------------------------
@@ -151,10 +156,44 @@ _HARD_DENY: tuple[tuple[str, ...], ...] = (
 
 @dataclass(frozen=True)
 class HarnessConfig:
-    """Agent and model selection for the decompose / judge harness."""
+    """Agent and model selection for the decompose / execute / judge stages.
+
+    The top-level ``agent`` and ``model`` are the defaults for every stage.
+    Per-stage overrides (``decompose_model``, ``judge_model``, …) let high-
+    leverage stages (decompose, judge) use a stronger model while the bulk
+    of execution uses a cheaper one.  Call ``for_stage("decompose")`` to get
+    the resolved pair for that stage.
+
+    ``None`` for a per-stage field means "inherit the top-level value".
+    """
 
     agent: str = "claude"
     model: str = "sonnet"
+    # Per-stage overrides — None inherits the top-level value.
+    decompose_agent: str | None = None
+    decompose_model: str | None = None
+    execute_agent: str | None = None
+    execute_model: str | None = None
+    judge_agent: str | None = None
+    judge_model: str | None = None
+
+    def for_stage(self, stage: str) -> HarnessConfig:
+        """Return the resolved ``HarnessConfig`` for *stage*.
+
+        Resolution order: stage override → top-level default.
+        The returned config has all per-stage fields cleared (no nesting).
+        Raises ``ValueError`` for unrecognised stage names.
+        """
+        if stage not in _VALID_HARNESS_STAGES:
+            raise ValueError(
+                f"Unknown harness stage {stage!r}; valid stages: {sorted(_VALID_HARNESS_STAGES)}"
+            )
+        a: str | None = getattr(self, f"{stage}_agent")
+        m: str | None = getattr(self, f"{stage}_model")
+        return HarnessConfig(
+            agent=a if a is not None else self.agent,
+            model=m if m is not None else self.model,
+        )
 
 
 @dataclass(frozen=True)
@@ -239,10 +278,42 @@ def load_config(
 
     # Nested sections come from the file only (no CLI flag counterparts).
     harness_raw: dict[str, Any] = raw.get("harness", {})
-    harness = HarnessConfig(
-        agent=str(harness_raw.get("agent", "claude")),
-        model=str(harness_raw.get("model", "sonnet")),
-    )
+    harness_agent = str(harness_raw.get("agent", "claude"))
+    harness_model = str(harness_raw.get("model", "sonnet"))
+
+    # Validate: every key under [harness] must be a scalar key or a stage name.
+    _harness_scalar_keys: frozenset[str] = frozenset({"agent", "model"})
+    unknown_harness_keys = {
+        k for k in harness_raw if k not in _harness_scalar_keys | _VALID_HARNESS_STAGES
+    }
+    if unknown_harness_keys:
+        raise ValueError(
+            f"Unknown key(s) under [harness] in gsd.toml: {sorted(unknown_harness_keys)}. "
+            f"Valid stage names: {sorted(_VALID_HARNESS_STAGES)}."
+        )
+
+    # Parse per-stage overrides.
+    stage_kwargs: dict[str, str | None] = {}
+    for _stage in sorted(_VALID_HARNESS_STAGES):
+        stage_raw: Any = harness_raw.get(_stage)
+        if stage_raw is None:
+            stage_kwargs[f"{_stage}_agent"] = None
+            stage_kwargs[f"{_stage}_model"] = None
+            continue
+        if not isinstance(stage_raw, dict):
+            raise ValueError(
+                f"[harness.{_stage}] must be a TOML table, got {type(stage_raw).__name__!r}"
+            )
+        unknown_stage_keys = {k for k in stage_raw if k not in {"agent", "model"}}
+        if unknown_stage_keys:
+            raise ValueError(
+                f"Unknown key(s) under [harness.{_stage}]: {sorted(unknown_stage_keys)}; "
+                "only 'agent' and 'model' are valid inside a stage table."
+            )
+        stage_kwargs[f"{_stage}_agent"] = str(stage_raw["agent"]) if "agent" in stage_raw else None
+        stage_kwargs[f"{_stage}_model"] = str(stage_raw["model"]) if "model" in stage_raw else None
+
+    harness = HarnessConfig(agent=harness_agent, model=harness_model, **stage_kwargs)
 
     commands_raw: dict[str, Any] = raw.get("commands", {})
     commands = CommandPolicy(
