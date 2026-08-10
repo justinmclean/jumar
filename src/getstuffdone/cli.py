@@ -84,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     resume_p.add_argument(
         "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
     )
+    resume_p.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help=(
+            "Re-run an item the journal records as failed, continuing from the "
+            "first subtask without a passing verdict. Passed subtasks are "
+            "replayed, never re-executed."
+        ),
+    )
 
     # report
     report_p = subs.add_parser("report", help="Show the report for a completed run.")
@@ -935,9 +944,17 @@ def _cmd_resume(
             resumed_item_id = entry.get("item_id")
             break
 
+    # `--retry-failed` reopens a terminally FAILED item. A *completed* item is
+    # never reopened: it is done, and re-running it would undo the one guarantee
+    # the journal provides. The default stays report-and-exit so that resuming
+    # twice is idempotent.
+    retry_failed = bool(getattr(args, "retry_failed", False))
+    # Exclude items that subsequently completed: once in items_done, always done.
+    reopenable = (state.items_failed - state.items_done) if retry_failed else frozenset()
+
     item = None
     if resumed_item_id is not None:
-        if resumed_item_id in done_and_failed:
+        if resumed_item_id in done_and_failed and resumed_item_id not in reopenable:
             # That item already reached a terminal state — report, do not
             # pick up unrelated work under the guise of resuming.
             report = build_report(run_dir)
@@ -978,6 +995,16 @@ def _cmd_resume(
         sid for sid, v in state.subtask_verdicts.items() if v == Verdict.passed.value
     )
     prior = _verifications_from_journal(state, plan) if plan is not None else []
+
+    if retry_failed and resumed_item_id in state.items_failed:
+        journal.append(
+            "retry_started",
+            item_id=item.item_id,
+            payload={
+                "reason": "operator retried a failed item",
+                "resuming_after": sorted(already_passed),
+            },
+        )
 
     exit_status = run_item(
         item,

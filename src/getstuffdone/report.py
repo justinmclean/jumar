@@ -218,6 +218,12 @@ def build_report(run_dir: Path) -> RunReport:
 
         elif event == "item_completed" and item_id:
             item_status[item_id] = "done"
+            # A retried item may have an earlier `item_failed` in the same
+            # journal. Status is last-write-wins, so clear the failure detail
+            # too — otherwise the report reads "done" while still naming the
+            # failure code and subtask from the attempt that was superseded.
+            item_failure_code.pop(item_id, None)
+            item_failed_subtask_idx.pop(item_id, None)
 
         elif event == "item_failed" and item_id:
             item_status[item_id] = "failed"
