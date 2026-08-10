@@ -178,20 +178,64 @@ N1. **choose-the-name** — `GetStuffDone` names the aspiration, and the
    to get stuff done. What this one does is **refuse to advance on unproven
    work**, and the name should point at the mechanism.
 
-   Candidates already checked for collisions (2026-08-09): **Ratchet** is taken
-   on PyPI *and* `getratchet.dev` is an AI-agent accountability product —
-   someone reached for the same metaphor for the same problem. **Assay** collides
-   with `brandon-rhodes/assay`, a Python testing framework. **Belay** and
-   **Piton** are taken on PyPI. **Detent** (the catch that holds a mechanism in a
-   defined position until deliberately released) and **Pawl** (the tooth that
-   permits motion one way and blocks the other) both appear free. Detent reads
-   better aloud; that matters for something typed and spoken.
+   **Collision checks run 2026-08-10** (PyPI JSON API, GitHub profile pages,
+   domain fetch — all verified directly):
 
-   Before committing: check PyPI, the GitHub org, and the `.dev` domain
-   **directly**. Absence from search results is weak evidence.
+   Previously identified as free (2026-08-09 plan note) — **now both taken**:
 
-   *Deliverable:* a decision, recorded here with the collision checks that were
-   actually run. Not a code change.
+   - **Detent** — TAKEN: `pypi.org/project/detent` v1.2.0 exists; summary: "A
+     verification runtime that intercepts AI coding agent file writes, runs them
+     through a configurable verification pipeline, and rolls back atomically on
+     failure." A direct conceptual competitor that reached for the same name.
+   - **Pawl** — TAKEN: `pypi.org/project/pawl` v0.1.1 exists; summary:
+     "Python API Wrapper - LinkedIn."
+
+   Also taken (checked 2026-08-10): `sprag`, `attest`, `turnstile`, `proven`,
+   `vouch`, `latch`, `warrant`, `ratify`, `backstop`, `notch`, `surety`,
+   `indexer`, `escapement`, `holdfast`, `escrow`, `steplock`, `certus`, `sentry`,
+   `snick`, `foothold`, `lockstep`, `cleat`, `clack`, `clicker`, `stampede`,
+   `tollgate`, `proof`, `rein`, `bridle`, `stepwise`, `ascender`, `prusik`
+   (notably: prusik v0.202.0 is "evidence-based build harness for autonomous
+   coding agents — phase gates that demand captured proof" — another convergent
+   competitor).
+
+   **Available on PyPI (404 confirmed 2026-08-10):**
+
+   - **jumar** — A Jumar is a mechanical rope ascender: a clamp that slides
+     forward on a rope but locks against backward slip. One-way motion, each
+     advance committed before the next. Exact ratchet metaphor. `jumar run`,
+     `jumar plan`, `jumar resume` all flow naturally. *GitHub:* a personal user
+     `github.com/jumar` exists (keyboard hobbyist in Montreal, no org conflict).
+     *jumar.dev:* ECONNREFUSED — needs direct registrar check before committing.
+   - **proofstep** — "proof step" as used in formal verification (Lean, Coq):
+     each step in a proof must be verified before the next is accepted. Accurate
+     and precise. `proofstep run` is slightly awkward; `pst` could alias it.
+     *GitHub:* `github.com/proofstep` returned 404 (not found). *proofstep.dev:*
+     ECONNREFUSED — needs direct registrar check.
+   - **pall** — archaic form of "pawl"; free on PyPI. *pall.dev:* for sale on
+     GoDaddy. Not recommended: strong English connotations of gloom ("casting a
+     pall") that clash with a productivity tool.
+   - **prograde** — free on PyPI; GitHub user exists; means "forward motion"
+     (astronomy). Doesn't convey the verification gate. Not recommended.
+
+   **Disqualified despite PyPI availability:**
+   - `wicket` — Apache Wicket (Java web framework) is too prominent an
+     association; GitHub user exists with no repos.
+   - `cadence` — Cadence Design Systems owns `github.com/cadence` and
+     `cadence.com`.
+   - `stepstone` — `github.com/stepstone` is the German job-board company.
+   - `ratch` — free on PyPI; `ratch.dev` is registered (decommissioned service,
+     live landing page from Purrso).
+
+   **Decision: jumar**, with the condition that the human checks
+   `jumar.dev` directly at a domain registrar before N2 begins. If jumar.dev
+   is taken, `proofstep` is the fallback (check `proofstep.dev` too). The human
+   must also confirm that the GitHub personal user at `github.com/jumar` does not
+   create a branding conflict — the usual pattern is to create `github.com/jumar-dev`
+   or `github.com/jumar-run` as the org.
+
+   *Deliverable:* this recorded decision with the collision checks actually run.
+   Not a code change.
 
 N2. **rename-everything** — one branch, one commit, mechanical. Do it **before
    anything is published**; the cost roughly doubles once a package name exists
