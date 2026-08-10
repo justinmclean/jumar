@@ -19,7 +19,9 @@ Behaviour
 
 Capability check runs first, independently of mode.  A subtask that claims
 a capability not granted to its parent item is refused before any mode
-dispatch, naming the subtask and the denied capability (AC4.3).
+dispatch, naming the subtask and the denied capability (AC4.3).  The check
+is a declared-subset test only (``subtask.capabilities ⊆ item.capabilities``):
+it does not sandbox the agent's process or restrict OS calls at runtime.
 """
 
 from __future__ import annotations
