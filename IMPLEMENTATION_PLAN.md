@@ -8,153 +8,49 @@ item = one branch = one PR.
 REMINDER (AGENTS.md): build iterations never modify files under `specs/`, and
 never weaken a check to get green.
 
-## Status — 2026-08-08
+## Status — 2026-08-10
 
-All phases through Phase 6 are fully merged to main (Phases 0–6 complete).
-All three remaining work items (Phases 7–8) are built and live on local
-branches — none have been pushed or merged yet. There are no open spec gaps
-beyond the three USER-side spec amendments noted in the manual follow-ups
-section below.
-
-The build beat has nothing to pick up. The next action is the human merging
-the three local branches in priority order.
+Phases 0–8 complete and merged to main (including failure-backoff-and-park,
+gsd-status, json-output, and run-progress-output).
 
 ### Completed (merged to main)
 
-- **models-and-invariants** — all shapes in `specs/03-data-model.md`, Check
-  invariants enforced at construction. Closed: AC3.1 (model half), AC3.4.
-- **config-and-capabilities** — `config.py`: `gsd.toml` loading, capability
-  set, argv allow/deny policy, `is_allowed()`. Closed: config contract.
-- **journal-append-and-replay** — `journal.py`: append-only `journal.jsonl`
-  with strictly-increasing `seq`, replay, corrupt-line tolerance.
-  Closed: AC-S1, AC-S2, AC-S3, AC-S4.
-- **ingest-markdown-todos** — `ingest.py`: GFM task list parsing, nested
-  authored subtasks, `@key=value` metadata, schedule tokens, stable
-  `item_id`, tolerant parse warnings. Closed: AC1.1–AC1.10.
-- **select-next-item** — `select.py`: time eligibility, dependency gate, cycle
-  detection, overdue/priority/due/file-order sort. Closed: AC2.1–AC2.10.
-- **cli-plan-dry-run** — `cli.py`: `gsd plan --dry-run` ingests, selects, and
-  prints; `clock.py` as the single injectable `now` source; `run_started`
-  journalled with captured `now` and tz. Closed: read-only CLI path;
-  clock.py contract from `specs/04`.
-- **harness-argv** — `harness.py`: agent-CLI abstraction for all six harnesses,
-  pure argv construction, scrubbed environment, hard deny of `git push` / `gh`.
-  Closed: AC8.4 at harness level; `specs/04` §Harness contract.
-- **decompose-with-required-checks** — `decompose.py`: structured plan request
-  via the harness, defensive JSON parse, one retry on any retriable rejection,
-  hard rejections (missing check, placeholder statement, plan too long, `judge`
-  without `rationale`, cyclic `depends_on`), full plan journalled before return.
-  Closed: AC3.1–AC3.6.
-- **gate-modes** — `gate.py`: `--dry-run` / `--approve` / `--auto` mode
-  dispatch, pre-execution capability refusal naming the subtask and capability,
-  `--approve --non-interactive` startup error before ingest.
-  Closed: AC4.1–AC4.4.
-- **execute-and-verify-command** — `execute.py` + `verify/__init__.py`
-  (registry) + `verify/command.py`: one subtask dispatched per execute call,
-  wall-clock timeout termination, evidence capture, agent claim stored as a
-  claim only; `command` verifier; dummy-kind registry test.
-  Closed: AC5.1–AC5.5, AC6.1, AC6.3, AC6.6, AC6.7.
-- **verify-file-and-absence** — `verify/file.py`: `file` kind (path exists,
-  optional pattern match, hash in evidence) and `absence` kind (path/glob gone),
-  both registered in the verifier registry. Closed: AC6.2.
-- **repair-bounded** — `repair.py`: up to `max_repairs` retry attempts, failing
-  evidence injected into the repair prompt, rejection of any repair that mutates
-  its subtask's `check`, terminal state on budget exhaustion, `--halt-on-fail`
-  support. Closed: AC7.1–AC7.4.
-- **complete-item** — `complete.py`: checkbox flip byte-preserving (only the
-  target line changes), optional per-item branch commit with item text as
-  subject, no push and no PR ever invoked. Closed: AC8.1–AC8.4.
-- **report-and-resume** — `report.py` + `gsd resume <run-id>` CLI command:
-  per-run report written to `runs/<run-id>/report.md`, summary to stdout, exit
-  status 0 on clean run and 1 on any failure, partial report from an interrupted
-  journal (clearly marked), deferred-only runs exit 0 and name the next
-  eligibility instant, overdue items listed as overdue even when they completed.
-  Resume replays the journal and continues from the first unverified subtask.
-  Closed: AC9.1–AC9.5, AC-S1, AC-S4.
-- **verify-judge-adversarial** — `verify/judge.py`: fresh context only
-  (asserted by inspecting the assembled prompt), default-fail framing, structured
-  `{verdict, reason, artefacts_shown}`, unparseable response ⇒ `inconclusive`.
-  Closed: AC6.4.
-- **verify-manual** — `verify/manual.py`: interactive confirm at the prompt;
-  under `--non-interactive` yields `inconclusive`, never auto-pass.
-  Closed: AC6.5.
-- **clock-and-recurrence** — `recurrence.py`: next-occurrence arithmetic for
-  `@every=` rules including DST-gap and DST-fold deterministic resolution.
-  Extended `complete.py` to advance a completed recurring item's `@not-before=`
-  token in place; missed occurrence advances to the single next occurrence after
-  `now`, not a backlog; failed recurring item's schedule left untouched.
-  Closed: AC8.5–AC8.7.
-- **lock-single-flight** — `lock.py`: PID-stamped lock file keyed to the
-  todo path, live-lock check exits 0 with `already_running`, stale-lock
-  reclaim journalled and run proceeds. Wired into `cli.py`'s `gsd run` before
-  ingest. Closed: AC10.5, AC10.6.
-- **schedule-os-backends** — `schedule.py`: `gsd schedule add/list/remove/show`
-  with `crontab` (Linux/BSD) and `launchd` plist (macOS) backends; marker-
-  delimited entries; `add` prints before writing; absolute paths and
-  `--non-interactive` in installed command; invalid cron expressions rejected;
-  timezone recorded and printed. Closed: AC10.1–AC10.4, AC10.7–AC10.9.
-- **gsd-doctor** — `doctor.py` + `gsd doctor` CLI command: config validity,
-  harness binary on PATH, allow-list sanity, installed schedule entries
-  readable, todo file parseable. Actionable error per failure.
-  Closed: Phase 6 doctor requirement.
-- **ci-and-coverage-floor** — GitHub Actions workflow running `make check` on
-  push; per-module coverage floor at 90% enforced (per the testing strategy in
-  `specs/04`).
-  Closed: `specs/04` §Testing strategy coverage floor.
-
----
-
-## In-flight (local branches — not yet pushed or merged)
-
-These items are built and committed on local branches. The build beat must not
-re-implement them. The human must push and merge them in priority order.
-
-### Phase 7 — unattended hardening
-
-**failure-backoff-and-park** *(branch: `failure-backoff-and-park`, 1 commit
-ahead of main)* — Cross-run failure escalation: `@failed=N` token advance on
-terminal failure, `@paused=auto-failures` appended at `max_consecutive_failures`
-threshold (new config key, default 3), `select.py` treats `@paused=` items as
-ineligible (Parked category), byte-preserving todo-file writes, `--dry-run`
-leaves file unchanged, successful completion removes `@failed=`. A failed
-recurring item's schedule stays untouched (AC8.7 unchanged).
-*Validation:* `make check` + `pytest tests/test_backoff.py -q`
-*Closes:* new behaviour (proposed AC2.11, AC8.8 — USER-side spec amendment).
-
-### Phase 8 — operator visibility
-
-**gsd-status** *(branch: `gsd-status`, 1 commit ahead of main)* — `status.py`
-+ `gsd status` CLI command: item-centric view across the todo file and all run
-journals. Per-item line: state, last attempt outcome, consecutive-failure count,
-next eligibility instant for deferred items. Derived via `journal.py` replay;
-corrupt journals degrade gracefully; read-only (no run directory created); exit
-0 always.
-*Validation:* `make check` + `pytest tests/test_status.py -q`
-*Closes:* new behaviour (proposed AC11.x — USER-side spec amendment).
-
-**json-output** *(branch: `json-output`, 1 commit ahead of main)* — `--json`
-flag on `gsd plan`, `gsd status`, and `gsd report`: same facts as human
-rendering as a single JSON document on stdout; warnings to stderr; schema from
-existing dataclasses in `models.py` / `report.py`; ISO-8601 UTC timestamps;
-exit-status contract unchanged.
-*Validation:* `make check` + `pytest tests/test_json_output.py -q`
-*Closes:* new behaviour (USER-side spec amendment alongside status contract).
+- **models-and-invariants** — data model shapes, Check invariants at construction (AC3.1 model, AC3.4).
+- **config-and-capabilities** — `config.py`: gsd.toml loading, capability set, is_allowed() (config contract).
+- **journal-append-and-replay** — `journal.py`: append-only journal, strictly-increasing seq, replay, corrupt-line tolerance (AC-S1–S4).
+- **ingest-markdown-todos** — `ingest.py`: GFM task list, nested subtasks, @metadata, schedule tokens, stable item_id (AC1.1–1.10).
+- **select-next-item** — `select.py`: eligibility, dependency gate, cycle detection, sort (AC2.1–2.10).
+- **cli-plan-dry-run** — `cli.py`: gsd plan --dry-run, clock.py injectable now, run_started journalled (CLI read-only path).
+- **harness-argv** — `harness.py`: agent-CLI abstraction, scrubbed env, hard deny of git push/gh (AC8.4; specs/04 §Harness).
+- **decompose-with-required-checks** — `decompose.py`: structured plan, one retry, hard rejections, full plan journalled (AC3.1–3.6).
+- **gate-modes** — `gate.py`: --dry-run/--approve/--auto dispatch, capability refusal, startup error (AC4.1–4.4).
+- **execute-and-verify-command** — `execute.py` + `verify/command.py`: subtask dispatch, wall-clock timeout, evidence, command verifier (AC5.1–5.5, AC6.1, AC6.3, AC6.6, AC6.7).
+- **verify-file-and-absence** — `verify/file.py`: file (exists + pattern + hash) and absence (path/glob gone) verifiers (AC6.2).
+- **repair-bounded** — `repair.py`: bounded repair retries, evidence injection, terminal state on budget exhaustion, --halt-on-fail (AC7.1–7.4).
+- **complete-item** — `complete.py`: byte-preserving checkbox flip, optional branch commit, no push/PR (AC8.1–8.4).
+- **report-and-resume** — `report.py` + gsd resume: per-run report, exit status, partial/deferred/overdue handling, journal replay + continue (AC9.1–9.5, AC-S1, AC-S4).
+- **verify-judge-adversarial** — `verify/judge.py`: fresh context, default-fail, structured verdict, inconclusive on unparseable (AC6.4).
+- **verify-manual** — `verify/manual.py`: interactive confirm, inconclusive under --non-interactive (AC6.5).
+- **clock-and-recurrence** — `recurrence.py`: next-occurrence arithmetic, DST resolution; complete.py advances @not-before= in place (AC8.5–8.7).
+- **lock-single-flight** — `lock.py`: PID-stamped lock keyed to todo path, live/stale detection; wired into gsd run (AC10.5, AC10.6).
+- **schedule-os-backends** — `schedule.py`: gsd schedule add/list/remove/show with crontab + launchd backends (AC10.1–10.4, AC10.7–10.9).
+- **gsd-doctor** — `doctor.py` + gsd doctor: config validity, harness PATH, allow-list sanity, schedule readability, todo parseability (Phase 6 doctor).
+- **ci-and-coverage-floor** — GitHub Actions on push, 90% per-module coverage floor (specs/04 §Testing).
+- **failure-backoff-and-park** — `backoff.py`: @failed=N advance, @paused=auto-failures at threshold, Parked select category (proposed AC2.11, AC8.8).
+- **gsd-status** — `status.py` + gsd status: item-centric view across todo and journals (proposed AC11.x).
+- **json-output** — --json flag on gsd plan/status/report, ISO-8601 UTC timestamps, schema from existing dataclasses.
+- **run-progress-output** — `progress.py`: stderr stage lines per subtask, --verbose agent stdout, suppressed under --json/non-TTY (proposed AC5.6).
 
 ---
 
 ## Work items (priority order)
 
-NOTE: the "In-flight" section above is stale — `failure-backoff-and-park`,
-`gsd-status` and `json-output` are all merged to main as of 2026-08-08.
-
 ### Phase 6b — enforce the security controls that are only documented
 
-**Highest priority.** Re-added by hand for the third time: a `plan` beat
-regenerates this file from `specs/`, and these findings came from a code audit
-rather than from a spec, so every regeneration drops them. **The durable fix is
-to add them to `specs/02-functional-spec.md` as acceptance criteria** — a
-USER-side edit, since build iterations may not touch specs. Until that happens,
-expect to re-add this section after each plan beat.
+**Highest priority.** These findings came from a code audit rather than from a
+spec, so every `plan` beat regeneration drops them. **The durable fix is to add
+them to `specs/02-functional-spec.md` as acceptance criteria** — a USER-side
+edit. Until that happens, expect to re-add this section after each plan beat.
 
 S1. **enforce-command-allowlist** — `config.is_allowed()` is defined,
    documented in `specs/`, `README.md`, `USAGE.md` and `AGENTS.md`, and
@@ -186,29 +82,6 @@ S3. **capability-honesty** — DECIDED: `Capability` is a declaration, not a
    other statement agree, and add a test asserting the gate's actual contract
    (declared-subset check) rather than the containment previously implied.
 
-### Phase 8b — make a run observable
-
-P1. **run-progress-output** — `gsd run` currently prints **nothing** between
-   the gate and the final summary: `run_item`, `execute.py`, `repair.py` and
-   every verifier are silent, and the agent subprocess runs with
-   `capture_output=True` so its output never reaches the terminal. With a
-   15-subtask item and a 900 s per-subtask timeout that is potentially hours of
-   blank terminal with no way to distinguish working from wedged. Emit one line
-   per stage transition to **stderr** (so stdout stays clean for `--json`):
-   subtask index and count, description, then the verdict — e.g.
-   `[3/15] Write marker.txt … verifying … passed`. Include repair attempts
-   (`repairing (1/2)`) and the final per-item outcome. Add `--verbose` to
-   stream the agent's captured stdout as it arrives. Suppress all of it under
-   `--json` and when stderr is not a TTY, so scheduled runs stay quiet.
-   *Validation:* `make check` + `pytest tests/test_run_progress.py -q` — a
-   progress line per subtask on stderr and **none on stdout**; nothing emitted
-   under `--json`; `--verbose` includes agent output; a scheduled
-   (`--non-interactive`, non-TTY) run emits no progress chatter.
-   *Closes:* no existing AC — `specs/02` §Stage 5 says nothing about progress
-   output, which is exactly why this was never built. Proposed AC5.6 is a
-   USER-side spec amendment.
-   *Branch slug:* `run-progress-output`
-
 ### Phase 6c — checks that cannot be hollow
 
 **Ahead of any further trial runs.** Source: a real run of `agents-md-legal`
@@ -219,16 +92,10 @@ written from the model's memory of the AI Act.
 Nothing in the pipeline was broken. Every stage did what it was specified to
 do. The **checks** were hollow, and a verification system whose checks are
 authored by the same model that does the work has no defence against that
-unless the check *shape* is constrained. Details of the run:
-
-- 14 of 15 checks were `["bash", "-c", "grep -q … file"]`. That is a shell
-  string wearing an argv: it defeats `shell=False`, the argv[0] allow list and
-  the deny list simultaneously, with one array element.
-- The AI Act fetch returned HTTP 202 with no body. `curl` wrote a 0-byte file
-  and exited 0. The check was `test -f`, which passed.
-- Several checks grepped a single word out of a file the executing agent had
-  just written, which proves the agent typed the word, not that the work is
-  correct.
+unless the check *shape* is constrained. Key failures: 14 of 15 checks were
+`["bash", "-c", "grep -q … file"]` (defeating argv allow/deny simultaneously);
+the AI Act fetch returned HTTP 202 with a 0-byte file (curl exited 0, `test -f`
+passed); several checks grepped a word the executing agent had just written.
 
 H1. **reject-shell-wrapper-checks** — `Check.__post_init__` refuses
    `kind=command` whose `argv[0]` basename is a shell (`bash`, `sh`, `zsh`,
@@ -288,27 +155,21 @@ second attempt much more likely to succeed. Small, worth doing.
 
 ### Phase 9 — model selection per stage
 
-Prices checked 2026-08-09 against `platform.claude.com/docs/en/about-claude/pricing`
-(per MTok, input/output): Fable 5 $10/$50, Opus 5 $5/$25, Sonnet 5 $2/$10 —
-**introductory, rising to $3/$15 on 1 Sept 2026** — Haiku 4.5 $1/$5. Re-check
-before acting on the arithmetic below; these move.
+Prices checked 2026-08-09 (per MTok, input/output): Fable 5 $10/$50,
+Opus 5 $5/$25, Sonnet 5 $2/$10 (**rising to $3/$15 on 1 Sept 2026**),
+Haiku 4.5 $1/$5. Re-check before acting on the arithmetic; these move.
 
-The observation driving both items: **spend and leverage sit in different
-stages.** A 15-subtask item produces ~70k output tokens, almost all of it in
-`execute`. `decompose` is one call of a few thousand tokens — and it authors
-every check for the whole item. Every failure in the 2026-08-08/09 trial runs
-was a decomposition failure (shell-wrapper checks, `test -f` on a zero-byte
-file, `Art 2(12)` against a draft saying `Article 2(12)`); the drafts
-themselves were serviceable. Paying frontier rates for the plan call costs
-cents and decides whether the following 70k tokens are verified or theatre.
-Paying them for the drafting bulk is where the money actually goes.
+The observation: **spend and leverage sit in different stages.** A 15-subtask
+item produces ~70k output tokens, almost all in `execute`. `decompose` is one
+call of a few thousand tokens — and it authors every check for the whole item.
+Every failure in the 2026-08-08/09 trial runs was a decomposition failure;
+the drafts themselves were serviceable.
 
 M1. **per-stage-model-selection** — `HarnessConfig` carries a single
    `agent`/`model` pair, consumed identically by `decompose.py`, `execute.py`,
    `verify/judge.py` and (via `execute`) `repair.py`. There is no way to
-   express "plan with Opus, draft with Sonnet", which is the configuration the
-   cost/leverage split calls for. Add optional per-stage overrides falling back
-   to the top-level default:
+   express "plan with Opus, draft with Sonnet". Add optional per-stage overrides
+   falling back to the top-level default:
 
    ```toml
    [harness]
@@ -324,16 +185,15 @@ M1. **per-stage-model-selection** — `HarnessConfig` carries a single
 
    Resolution is `stage override → [harness] default → built-in default`, and
    the **resolved** model must be recorded in the `HarnessInfo` journalled with
-   each plan and attempt, so a run's report says which model did which stage.
-   Today `HarnessInfo` is built from `config.harness` at four call sites; they
-   become one `config.harness.for_stage("decompose")` lookup.
+   each plan and attempt. Today `HarnessInfo` is built from `config.harness` at
+   four call sites; they become one `config.harness.for_stage("decompose")`
+   lookup.
 
    Independence matters as much as capability for the judge. An adversarial
    verifier running the same model that produced the artefact shares its blind
-   spots — Sonnet judging Sonnet's own prose is the weakest link in the design.
-   The config should make "judge on a different model from execute" expressible;
-   whether to *warn* when they match is a judgement call, and the answer is
-   probably no — a warning nobody can act on is noise.
+   spots. The config should make "judge on a different model from execute"
+   expressible; whether to *warn* when they match is probably no — a warning
+   nobody can act on is noise.
    *Validation:* `make check` + `pytest tests/test_config.py tests/test_decompose.py -q`
    — a stage override is used for that stage only; an absent override falls back;
    the resolved model reaches the journalled `HarnessInfo`; an unknown stage key
@@ -351,11 +211,9 @@ M2. **wire-the-judge-harness** — **Bug, and it makes `kind=judge` useless in a
    this: the judge tests build a `VerifyContext` with a harness by hand, so the
    verifier is correct in isolation and unreachable in practice.
 
-   This is the verifier the decompose prompt names as the fallback "when no
-   executable check is possible", so on judgement-heavy items it is the one
-   most likely to be chosen. Build the `HarnessInfo` from config (per M1, the
-   judge stage's resolved model) and pass it at both call sites. Also pass
-   `judge_timeout_s` from config rather than the dataclass default.
+   Build the `HarnessInfo` from config (per M1, the judge stage's resolved
+   model) and pass it at both call sites. Also pass `judge_timeout_s` from
+   config rather than the dataclass default.
    *Validation:* `make check` + `pytest tests/test_run.py -q` — an end-to-end
    run whose plan contains a `judge` check reaches the judge verifier with a
    harness and does **not** return `no_harness_configured`. The existing
@@ -384,29 +242,185 @@ D1. **validate-depends-targets-at-ingest** — **Bug.** A `@depends=` naming an
 
    Validate at ingest: every `@depends=` target must resolve to an item in the
    same file. An unresolvable target is a startup error naming the item, the
-   missing id, and the line number — the same treatment cycles already get.
-   Include a "did you mean" suggestion when a target is within a small edit
-   distance of a real `@id=`; a typo is the overwhelmingly likely cause and the
-   suggestion costs nothing.
+   missing id, and the line number. Include a "did you mean" suggestion when a
+   target is within a small edit distance of a real `@id=`; a typo is the
+   overwhelmingly likely cause.
 
    *Validation:* `make check` + `pytest tests/test_ingest.py tests/test_select.py -q`
    — an unresolvable `@depends=` exits non-zero before any agent call, names the
-   missing id and the line; a valid forward reference to an item **later in the
-   file** still resolves (order must not matter); an item that depends on a
-   `- [x]` completed item is still eligible; the existing cycle error is
-   unchanged.
-   *Closes:* gap in AC2.x — the dependency gate is specified for satisfied and
-   unsatisfied targets but not for absent ones. USER-side spec amendment
-   (proposed AC2.12).
+   missing id and the line; a valid forward reference to an item later in the
+   file still resolves (order must not matter); an item that depends on a `- [x]`
+   completed item is still eligible; the existing cycle error is unchanged.
+   *Closes:* gap in AC2.x — proposed AC2.12. USER-side spec amendment.
    *Branch slug:* `validate-depends-targets-at-ingest`
 
    **Deliberately not doing: cross-file dependencies.** `@depends=` resolving
-   across todo files would need `done_ids` populated from run journals in
-   `plan` and `run`, which today only `resume` does — and it would make one
-   file's eligibility depend on another file's run history, which is a much
-   larger change to the model than it first appears. Two related lists should
-   state their run order in prose and be run by hand in that order. Do not plan
-   this without a concrete need.
+   across todo files would make one file's eligibility depend on another file's
+   run history — a much larger change to the model. Two related lists should
+   state their run order in prose. Do not plan this without a concrete need.
+
+### Phase 11 — a failed run must be retryable
+
+R1. **resume-can-retry-a-failed-item** — **Gap, found the hard way on
+   2026-08-09.** `_cmd_resume` short-circuits when the resumed item is in
+   `state.items_done | state.items_failed`: it rebuilds the report from the
+   journal, prints it, and exits without executing anything. So `resume`
+   continues an *interrupted* run but cannot retry a *failed* one.
+
+   When a run fails because of a **bug in gsd** — as it did, twice, on the
+   unwired judge harness (Phase 9 M2) — the fix is worthless to that run. The
+   only way forward is `gsd run` from scratch, re-executing every subtask that
+   already passed. Resume also prints the old report verbatim, so it looks
+   exactly like the fix did not work.
+
+   Add an explicit retry path — `gsd resume <run-id> --retry-failed` — that
+   re-enters `run_item` from the first subtask without a passing verdict,
+   keeping the passed ones replayed from the journal. Do **not** change the
+   default: the current behaviour is right for the case it was written for, and
+   silently retrying a terminal failure would make `resume` non-idempotent.
+
+   Two things it must get right:
+   - The retry appends to the same journal, so `item_failed` is no longer the
+     last word on that item. `report.py` must take the **latest** terminal event
+     per item, not the first, or the report will contradict the run.
+   - `advance_failure_count` already ran when the item failed. A retry must not
+     double-count, and a subsequent success must clear `@failed=` as usual.
+
+   *Validation:* `make check` + `pytest tests/test_resume.py -q` — a journal
+   ending in `item_failed` resumes under `--retry-failed` and re-executes only
+   the unverified subtasks; the same journal without the flag still reports and
+   exits; passed subtasks never re-invoke the agent; the report reflects the
+   retry outcome, not the original failure.
+   *Closes:* gap in AC-S1/AC-S4 — proposed AC-S5. USER-side spec amendment.
+   *Branch slug:* `resume-can-retry-a-failed-item`
+
+   *Related, smaller:* `resume` resolves `--runs-dir` relative to the current
+   working directory (default `runs`), so a bare run id only works from the
+   directory the run was launched in. Either record the absolute runs directory
+   in the journal too, or say so in the error — the current message ("no journal
+   found at runs/<id>/journal.jsonl") does not hint that the path is relative.
+
+### Phase 12 — run ids a human can type
+
+F1. **friendly-run-ids** — `run_id` is `str(uuid.uuid4())`
+   (`cli.py:220`, `cli.py:611`), so every reference to a run looks like
+   `9c23ddee-8263-477b-a98a-99efff7540b6`. It is unique and it is useless: you
+   cannot type it, cannot tell two apart at a glance, cannot tell *when* a run
+   happened or *what it was about*, and `ls runs/` sorts them in an order with
+   no meaning. Every `resume` and `report` invocation becomes a copy-paste from
+   scrollback — and if the scrollback is gone, an `ls -t` and a guess.
+
+   **Design constraint to respect, not fight.** The id is minted *before*
+   `ingest()` and `select_next()` — the run directory and journal must exist so
+   that `run_started` can record the captured `now` before anything else
+   happens. So the selected item's slug is **not knowable** when the id is
+   chosen. Do not try to rename the directory after selection: the journal is
+   already open, and a rename breaks resume-by-id for anything that recorded
+   the original.
+
+   Four changes, in increasing order of effort. The first two are most of the
+   benefit:
+
+   1. **Accept an unambiguous prefix** wherever a run id is taken (`resume`,
+      `report`). `gsd resume 9c23` should work. Ambiguous prefix ⇒ error listing
+      the candidates. This alone makes the current ids tolerable and works on
+      every run that already exists.
+   2. **Accept `latest`** as a run id, resolving to the most recently started
+      run in the runs directory. `gsd resume latest --retry-failed` is the
+      command this whole phase exists to enable.
+   3. **Change the format** to `<YYYYMMDD>-<HHMM>-<4 random chars>`, e.g.
+      `20260809-1543-a3f9`, derived from the journalled `now` — via `clock.py`,
+      not the wall clock, or it breaks the one-clock rule and every frozen-clock
+      test. Sorts chronologically under a plain `ls`, greps by date, and the
+      random tail keeps two runs in the same minute distinct.
+   4. **Record the item in a run index.** Since the slug cannot go in the
+      directory name, write `runs/index.tsv` — one line per run: id, started,
+      item_id, status — appended at `run_started` and updated at `run_finished`.
+      That is what lets `gsd status` and a future `gsd runs` answer "which run
+      was the ASF one?" without opening twelve journals.
+
+   **Backwards compatibility is not optional.** Existing runs are uuid-named and
+   must stay resumable. Prefix matching gives that for free; do not add a
+   migration that renames anything.
+
+   *Validation:* `make check` + `pytest tests/test_resume.py tests/test_report.py -q`
+   — a new run id matches `^\d{8}-\d{4}-[a-z0-9]{4}$`; two runs started in the
+   same minute get distinct ids; an existing uuid-named run still resolves;
+   an unambiguous prefix resolves and an ambiguous one errors naming the
+   candidates; `latest` resolves to the most recent by `run_started`, not by
+   filesystem mtime; the id in the report header matches the directory.
+   *Closes:* new behaviour — USER-side spec amendment alongside the run-journal
+   contract in `specs/03-data-model.md`.
+   *Branch slug:* `friendly-run-ids`
+
+### Phase 13 — rename the project
+
+N1. **choose-the-name** — `GetStuffDone` names the aspiration, and the
+   aspiration is the least distinctive thing about it. Every task runner claims
+   to get stuff done. What this one does is **refuse to advance on unproven
+   work**, and the name should point at the mechanism.
+
+   Candidates already checked for collisions (2026-08-09): **Ratchet** is taken
+   on PyPI *and* `getratchet.dev` is an AI-agent accountability product —
+   someone reached for the same metaphor for the same problem. **Assay** collides
+   with `brandon-rhodes/assay`, a Python testing framework. **Belay** and
+   **Piton** are taken on PyPI. **Detent** (the catch that holds a mechanism in a
+   defined position until deliberately released) and **Pawl** (the tooth that
+   permits motion one way and blocks the other) both appear free. Detent reads
+   better aloud; that matters for something typed and spoken.
+
+   Before committing: check PyPI, the GitHub org, and the `.dev` domain
+   **directly**. Absence from search results is weak evidence.
+
+   *Deliverable:* a decision, recorded here with the collision checks that were
+   actually run. Not a code change.
+
+N2. **rename-everything** — one branch, one commit, mechanical. Do it **before
+   anything is published**; the cost roughly doubles once a package name exists
+   on an index and a schedule exists on someone's machine.
+
+   Measured surface as at 2026-08-09 — `gsd` / `getstuffdone` / `GetStuffDone`
+   respectively: `src/` 145/54/37, `tests/` 145/239/29, `specs/` 28/15/9,
+   `tools/` 0/6/13. Plus `README.md`, `USAGE.md`, `AGENTS.md`, `Makefile`,
+   `pyproject.toml`, `.gitignore`, and the four `tools/spec-loop/` prompt files.
+
+   Identifiers that are **not** just prose and must each be decided deliberately:
+
+   - `pyproject.toml`: `name = "getstuffdone"`, the `[project.scripts]` entry
+     point, and the `[tool.gsd]` config table name.
+   - The package directory `src/getstuffdone/`.
+   - The CLI verb itself — `gsd run` becomes `<name> run`.
+   - `config.py`: the `gsd.toml` filename and the `[gsd]` section header.
+     **This one breaks every existing config file.** Support the old name for a
+     release with a deprecation notice, or accept the break and say so in the
+     README — but decide, do not discover.
+   - `lock.py`: `_LOCK_FILENAME = ".gsd.lock"`. A rename means a run in progress
+     under the old name is invisible to the new one.
+   - `schedule.py`: `_META_PREFIX = "# gsd-meta: "` and the launchd label
+     `com.gsd.<id>.plist`. **This is the load-bearing one.** Installed cron and
+     launchd entries are found by those markers. Rename them and every
+     already-installed schedule becomes both orphaned and broken.
+
+     Handle it explicitly: `<name> doctor` should detect old-marker entries and
+     name them, and the release notes must say "run `gsd schedule remove` for
+     each entry **before** upgrading, then reinstall". Do **not** have the new
+     binary rewrite entries it did not author — AGENTS.md forbids touching
+     crontab lines outside our own markers.
+
+   Deliberately **not** renamed: existing `runs/` directories and journal
+   contents. They are an append-only historical record.
+
+   *Validation:* `make check` + a grep gate — `grep -ri 'gsd\|getstuffdone\|
+   GetStuffDone' src tests specs tools *.md *.toml Makefile` returns only
+   deliberate historical references. Add that grep to CI so the old name cannot
+   creep back in.
+   *Closes:* nothing — pure rename. `specs/` are touched, so this is a
+   `plan`/`update` beat or a human edit, **not** a `build` iteration.
+   *Branch slug:* `rename-everything`
+
+   Sequencing note: do N1 and N2 **after** the current in-flight branches merge
+   and **before** Phase 12's `friendly-run-ids`, so the new id format ships
+   under the final name.
 
 ---
 
@@ -414,19 +428,14 @@ D1. **validate-depends-targets-at-ingest** — **Bug.** A `@depends=` naming an
 
 - **Verification is not optional and not deferrable.** No work item may ship a
   stage that performs work ahead of the check that proves it worked.
-  `execute-and-verify-command` (now merged) was deliberately two modules in one
-  branch for this reason; the same rule applies to any future item that adds an
-  execution path.
 - **A check may never be weakened to pass.** Not a test, not an AC, not a
   subtask's own `Check` at runtime (that is what AC7.3 exists to enforce).
 - **The enforced boundary is *send*, not *fetch*** (decided 2026-08-08).
-  `network` IS a default capability and `curl`/`wget` are allowed — an agent
-  that cannot fetch a primary source writes from memory instead, which is the
-  worse failure and is exactly what happened on 2026-08-08. `mail`, `mailx`,
-  `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`, `rsync` are denied, and
-  `git push` / `gh` stay hard-denied in every dispatched argv. Do not plan a
-  work item that relaxes the send boundary — and do not plan one that claims
-  the allow list is a sandbox: with `python3` allowed and the network
+  `network` IS a default capability and `curl`/`wget` are allowed. `mail`,
+  `mailx`, `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`, `rsync` are
+  denied, and `git push` / `gh` stay hard-denied in every dispatched argv. Do
+  not plan a work item that relaxes the send boundary — and do not plan one that
+  claims the allow list is a sandbox: with `python3` allowed and the network
   reachable it is defence in depth, and the container is the control.
 - **No `shell=True`.** Every subprocess is argv. Do not plan a shell-string
   escape hatch.
@@ -444,24 +453,19 @@ D1. **validate-depends-targets-at-ingest** — **Bug.** A `@depends=` naming an
 - Confirm which agent CLI is on PATH before the first loop run
   (`SPEC_LOOP_AGENT`, default `claude`).
 - Run the loop inside a sandbox with no push credentials in the environment.
-- Do not install a recurring schedule against a real todo list until
-  `failure-backoff-and-park` has landed — until then a failing item is
-  re-attempted (and its agent budget re-spent) on every firing.
 - When `failure-backoff-and-park` lands, add the proposed AC2.11 (select
   excludes `@paused=` items, reported as Parked) and AC8.8 (failed terminal
   state advances `@failed=`; threshold appends `@paused=auto-failures`) to
-  `specs/02-functional-spec.md` — the loop may not edit specs itself.
+  `specs/02-functional-spec.md`.
 - When `gsd-status` / `json-output` land, add the corresponding contract
-  sections (proposed AC11.x) to `specs/02-functional-spec.md` — same rule.
+  sections (proposed AC11.x) to `specs/02-functional-spec.md`.
 - Add AC5.6 (progress output on stderr; silent under `--json` and off-TTY) to
-  `specs/02-functional-spec.md` §Stage 5 — `run-progress-output` is merged and
-  has no AC behind it.
+  `specs/02-functional-spec.md` §Stage 5.
 - Add the Phase 6c check-shape rules to `specs/02-functional-spec.md` §Stage 3
   and §Stage 6 as acceptance criteria (proposed AC3.7 shell wrapper refused,
   AC3.8 check must be falsifiable, AC6.8 zero-byte file fails, AC6.9 denied
   argv is `inconclusive` and spawns nothing). Until they are in `specs/`, the
-  `plan` beat will keep dropping Phase 6b/6c from this file — that has now
-  happened four times.
+  `plan` beat will keep dropping Phase 6b/6c from this file.
 - Add a `[harness.<stage>]` section to the config reference in `USAGE.md` when
   M1 lands, and record the model-selection guidance (plan high, draft cheap,
   judge independent) somewhere a user will find it.
