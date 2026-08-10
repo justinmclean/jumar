@@ -150,14 +150,14 @@ def test_priority_parsed_into_meta_and_priority_field(tmp_path: Path) -> None:
 
 
 def test_depends_parsed_into_meta_and_depends_field(tmp_path: Path) -> None:
-    result = _todo(tmp_path, "- [ ] Task @depends=abc\n")
+    result = _todo(tmp_path, "- [ ] Task @depends=abc\n- [ ] Dep @id=abc\n")
     item = result.items[0]
     assert item.meta["depends"] == "abc"
     assert item.depends == ("abc",)
 
 
 def test_multiple_meta_tokens(tmp_path: Path) -> None:
-    result = _todo(tmp_path, "- [ ] Task @priority=1 @depends=abc\n")
+    result = _todo(tmp_path, "- [ ] Task @priority=1 @depends=abc\n- [ ] Dep @id=abc\n")
     item = result.items[0]
     assert item.meta["priority"] == "1"
     assert item.meta["depends"] == "abc"
@@ -177,7 +177,10 @@ def test_meta_tokens_stripped_from_text(tmp_path: Path) -> None:
 
 
 def test_depends_comma_separated(tmp_path: Path) -> None:
-    result = _todo(tmp_path, "- [ ] Task @depends=a,b,c\n")
+    result = _todo(
+        tmp_path,
+        "- [ ] Task @depends=a,b,c\n- [ ] A @id=a\n- [ ] B @id=b\n- [ ] C @id=c\n",
+    )
     assert result.items[0].depends == ("a", "b", "c")
 
 
@@ -485,3 +488,66 @@ def test_raw_line_preserved(tmp_path: Path) -> None:
     line = "- [ ] My task @priority=1\n"
     result = _todo(tmp_path, line)
     assert result.items[0].raw_line == line
+
+
+# ---------------------------------------------------------------------------
+# AC2.12 — @depends= targets validated at ingest (proposed)
+# ---------------------------------------------------------------------------
+
+
+def test_unresolvable_depends_raises_ingest_error(tmp_path: Path) -> None:
+    with pytest.raises(IngestError, match="does not exist"):
+        _todo(tmp_path, "- [ ] Task @depends=missing-id\n")
+
+
+def test_unresolvable_depends_names_missing_id(tmp_path: Path) -> None:
+    with pytest.raises(IngestError, match="missing-id"):
+        _todo(tmp_path, "- [ ] Task @depends=missing-id\n")
+
+
+def test_unresolvable_depends_names_line_number(tmp_path: Path) -> None:
+    with pytest.raises(IngestError, match=r"Line 2"):
+        _todo(tmp_path, "# Header\n- [ ] Task @depends=ghost\n")
+
+
+def test_unresolvable_depends_suggests_close_match(tmp_path: Path) -> None:
+    # "setup-task" is a close match for "setur-task"
+    with pytest.raises(IngestError, match="did you mean"):
+        _todo(
+            tmp_path,
+            "- [ ] Task @depends=setup-taks\n- [ ] Setup @id=setup-task\n",
+        )
+
+
+def test_resolvable_depends_does_not_raise(tmp_path: Path) -> None:
+    # Both items present — must parse cleanly.
+    result = _todo(
+        tmp_path,
+        "- [ ] First @id=first\n- [ ] Second @depends=first\n",
+    )
+    assert len(result.items) == 2
+
+
+def test_forward_reference_resolves(tmp_path: Path) -> None:
+    # Item B appears before item A in the file (forward reference); must still resolve.
+    result = _todo(
+        tmp_path,
+        "- [ ] B @depends=item-a\n- [ ] A @id=item-a\n",
+    )
+    assert len(result.items) == 2
+    assert result.items[0].depends == ("item-a",)
+
+
+def test_depends_on_completed_item_is_valid(tmp_path: Path) -> None:
+    # A dependency on a [x] checked item exists in the file; not an error.
+    result = _todo(
+        tmp_path,
+        "- [x] Done @id=done-task\n- [ ] Next @depends=done-task\n",
+    )
+    assert len(result.items) == 2
+
+
+def test_unresolvable_depends_blocks_before_any_agent_call(tmp_path: Path) -> None:
+    # Error is raised by ingest(), which runs before select() or any execution stage.
+    with pytest.raises(IngestError):
+        _todo(tmp_path, "- [ ] Task @id=my-task @depends=nonexistent\n")

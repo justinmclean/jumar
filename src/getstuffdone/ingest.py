@@ -12,6 +12,7 @@ ingest()      – parse a todo file and return IngestResult.
 from __future__ import annotations
 
 import contextlib
+import difflib
 import hashlib
 import re
 import zoneinfo
@@ -125,6 +126,7 @@ def ingest(path: Path, config: Config) -> IngestResult:
     items: list[TodoItem] = []
     warnings: list[ParseWarning] = []
     _parse_lines(lines, tz, config, items, warnings)
+    _validate_depends(items)
     return IngestResult(items=items, warnings=warnings)
 
 
@@ -196,6 +198,32 @@ def _parse_lines(
 
     if current is not None:
         _finalize(current, tz, config, items, warnings)
+
+
+# ---------------------------------------------------------------------------
+# Dependency validation
+# ---------------------------------------------------------------------------
+
+
+def _closest_id(target: str, known_ids: set[str]) -> str | None:
+    matches = difflib.get_close_matches(target, known_ids, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def _validate_depends(items: list[TodoItem]) -> None:
+    """Raise IngestError if any @depends= target names an item not in this file."""
+    by_id: set[str] = {item.item_id for item in items}
+    for item in items:
+        for dep_id in item.depends:
+            if dep_id not in by_id:
+                msg = (
+                    f"Line {item.line_no}: {item.item_id!r} depends on "
+                    f"{dep_id!r} which does not exist in this file"
+                )
+                suggestion = _closest_id(dep_id, by_id)
+                if suggestion:
+                    msg += f" (did you mean {suggestion!r}?)"
+                raise IngestError(msg)
 
 
 # ---------------------------------------------------------------------------
