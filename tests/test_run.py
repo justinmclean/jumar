@@ -78,6 +78,7 @@ class _Args:
         self.non_interactive = True
         self.run_id: str | None = None
         self.runs_dir: str | None = None
+        self.retry_failed = False
         self.__dict__.update(kw)
 
 
@@ -264,3 +265,154 @@ def test_a_judge_check_reaches_the_judge_with_a_harness(
     # The judge ran in a fresh context: it never saw the executing agent's
     # reasoning, only the world it left behind (AC6.4).
     assert "wrote notes.md" not in seen[0]
+
+
+# ---------------------------------------------------------------------------
+# A failed item can be retried without redoing the work that passed (R1)
+# ---------------------------------------------------------------------------
+
+_TWO_STEP_PLAN = json.dumps(
+    {
+        "subtasks": [
+            {
+                "description": "Write a.txt",
+                "capabilities": ["write_fs"],
+                "depends_on": [],
+                "check": {
+                    "kind": "file",
+                    "statement": "a.txt contains A",
+                    "path": "a.txt",
+                    "pattern": "A",
+                },
+            },
+            {
+                "description": "Write b.txt",
+                "capabilities": ["write_fs"],
+                "depends_on": [],
+                "check": {
+                    "kind": "file",
+                    "statement": "b.txt contains B",
+                    "path": "b.txt",
+                    "pattern": "B",
+                },
+            },
+        ]
+    }
+)
+
+
+def _is_plan_request(prompt: str) -> bool:
+    """Only the plan request opens this way.
+
+    ``_is_decompose_prompt`` keys on the word "subtasks", which also appears in
+    an *execution* prompt ("Do not proceed to subsequent subtasks") — fine for
+    agents that write the file either way, wrong for one asserting it was never
+    asked to decompose.
+    """
+    return prompt.startswith("Decompose the following todo item")
+
+
+def _first_passes_second_fails(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    if _is_plan_request(prompt):
+        return _result(_TWO_STEP_PLAN)
+    if "a.txt" in prompt:
+        (Path(cwd) / "a.txt").write_text("A\n")
+        return _result("wrote a.txt")
+    return _result("all done!", claim="all done!")  # writes nothing
+
+
+def test_retry_failed_reruns_only_the_unverified_subtask(workspace: Path) -> None:
+    """The point of the flag: fix the cause, redo the failure, keep the rest.
+
+    Before this, a failed item could not be resumed at all — `_cmd_resume`
+    short-circuited on any terminal state and reprinted the old report, so a
+    run that failed because of a bug in gsd had to be redone in full once the
+    bug was fixed.
+    """
+    assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
+    run_id = next(iter((workspace / "runs").iterdir())).name
+
+    calls: list[str] = []
+
+    def fixes_the_second(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            raise AssertionError("retry re-decomposed instead of replaying the plan")
+        calls.append(prompt)
+        (Path(cwd) / "b.txt").write_text("B\n")
+        return _result("wrote b.txt")
+
+    rc = cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=fixes_the_second)
+
+    assert rc == 0
+    assert len(calls) == 1, "the passed subtask was re-executed"
+    assert all("a.txt" not in c for c in calls)
+    assert workspace.joinpath("todo.md").read_text().startswith("- [x]")
+
+
+def test_retry_failed_clears_the_stale_failure_from_the_report(workspace: Path) -> None:
+    """Status is last-write-wins; the failure detail must not outlive it."""
+    assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
+    run_id = next(iter((workspace / "runs").iterdir())).name
+
+    def fixes_it(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            return _result(_TWO_STEP_PLAN)
+        (Path(cwd) / "b.txt").write_text("B\n")
+        return _result("wrote b.txt")
+
+    cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=fixes_it)
+    report = (workspace / "runs" / run_id / "report.md").read_text()
+
+    assert "repairs_exhausted" not in report
+
+
+def test_without_the_flag_a_failed_item_still_only_reports(workspace: Path) -> None:
+    """The default must stay idempotent — resuming twice is not two attempts."""
+    assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
+    run_id = next(iter((workspace / "runs").iterdir())).name
+
+    def exploding(*_a: Any, **_kw: Any) -> AgentResult:
+        raise AssertionError("resume without --retry-failed re-invoked the agent")
+
+    assert cli._cmd_resume(_Args(run_id=run_id), _run_agent=exploding) == 1
+
+
+def test_retry_failed_never_reopens_a_completed_item(workspace: Path) -> None:
+    """Done is done. The flag reopens failures, not successes."""
+    assert cli._cmd_run(_Args(), _run_agent=honest_agent) == 0
+    run_id = next(iter((workspace / "runs").iterdir())).name
+
+    def exploding(*_a: Any, **_kw: Any) -> AgentResult:
+        raise AssertionError("a completed item was reopened by --retry-failed")
+
+    assert cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=exploding) == 0
+
+
+def test_retry_failed_does_not_reopen_an_item_completed_on_a_prior_retry(
+    workspace: Path,
+) -> None:
+    """An item that failed then succeeded on retry must not be reopenable again.
+
+    After a successful retry the journal holds both item_failed and
+    item_completed for the same item.  The naive reopenable set (items_failed)
+    would include it; the correct set is items_failed - items_done.
+    """
+    # First run: second subtask fails.
+    assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
+    run_id = next(iter((workspace / "runs").iterdir())).name
+
+    def fixes_the_second(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            raise AssertionError("retry re-decomposed instead of replaying the plan")
+        (Path(cwd) / "b.txt").write_text("B\n")
+        return _result("wrote b.txt")
+
+    # First retry: succeeds.
+    rc = cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=fixes_the_second)
+    assert rc == 0
+
+    def exploding(*_a: Any, **_kw: Any) -> AgentResult:
+        raise AssertionError("a completed item was reopened by a second --retry-failed")
+
+    # Second retry attempt: must NOT re-execute — item is already done.
+    assert cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=exploding) == 0
