@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .models import HarnessInfo
 
 SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
 
@@ -443,6 +444,16 @@ def run_item(
         prog.agent_transcript(getattr(attempt, "transcript_path", None))
         prog.verifying(subtask.check.kind)
 
+        # The judge verifier needs a harness or it returns
+        # `no_harness_configured` — inconclusive — for every judge check, which
+        # then burns the repair budget and fails the item. Build it from config
+        # and pass it, here and in repair.py.
+        judge_harness = HarnessInfo(
+            agent=config.harness.agent,
+            model=config.harness.model,
+            harness=config.harness.agent,
+            invoked_as=config.harness.agent,
+        )
         ctx = VerifyContext(
             cwd=cwd,
             run_dir=run_dir,
@@ -451,6 +462,13 @@ def run_item(
             attempt_no=0,
             non_interactive=non_interactive,
             config=config,
+            harness=judge_harness,
+            judge_timeout_s=getattr(config, "subtask_timeout_s", 300),
+            # Honour the run's injected runner. Without this the judge always
+            # calls the default harness — which in a test means spawning the
+            # real agent binary, and in production means the judge silently
+            # ignores whatever runner the caller configured.
+            judge_run_agent=_run_agent,
         )
         result = run_verify(subtask.check, journal=journal, item_id=item.item_id, ctx=ctx)
 
@@ -472,6 +490,8 @@ def run_item(
                     cwd=cwd,
                     run_dir=run_dir,
                     _run_agent=_run_agent,
+                    judge_harness=judge_harness,
+                    judge_run_agent=_run_agent,
                     on_attempt=prog.repair_attempt,
                     on_result=lambda r: prog.repair_result(r.verdict, getattr(r, "summary", None)),
                 )
