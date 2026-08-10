@@ -206,3 +206,61 @@ def test_resume_of_a_completed_run_never_reinvokes_the_agent(
 
     rc = cli._cmd_resume(_Args(run_id=run_id), _run_agent=exploding_agent)
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# The judge verifier must be reachable from a real run (M2)
+# ---------------------------------------------------------------------------
+
+_JUDGE_PLAN = json.dumps(
+    {
+        "subtasks": [
+            {
+                "description": "Write notes.md",
+                "capabilities": ["write_fs"],
+                "depends_on": [],
+                "check": {
+                    "kind": "judge",
+                    "statement": "notes.md reads as a coherent summary",
+                    "rationale": "no executable check can assess prose quality",
+                },
+            }
+        ]
+    }
+)
+
+
+def test_a_judge_check_reaches_the_judge_with_a_harness(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: `run_item` built VerifyContext without `harness=`, so every
+    judge check returned `no_harness_configured` — inconclusive — burned the
+    repair budget and failed the item. The verifier passed its own unit tests
+    the whole time because those build a context with a harness by hand.
+    """
+    seen: list[str] = []
+
+    def agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        # Route on the prompt's opening, not on keywords: an *execution* prompt
+        # for a judge-checked subtask also contains the word "judge", and a
+        # repair prompt opens differently again.
+        if prompt.startswith("You are a strict"):
+            seen.append(prompt)
+            return _result(
+                '{"verdict": "pass", "reason": "notes.md is a coherent summary", '
+                '"artefacts_shown": ["notes.md"]}'
+            )
+        if _is_decompose_prompt(prompt):
+            return _result(_JUDGE_PLAN)
+        (Path(cwd) / "notes.md").write_text("a summary\n")
+        return _result("wrote notes.md")
+
+    rc = cli._cmd_run(_Args(), _run_agent=agent)
+    err = capsys.readouterr().err
+
+    assert "no_harness_configured" not in err
+    assert seen, "the judge verifier was never reached with a usable harness"
+    assert rc == 0
+    # The judge ran in a fresh context: it never saw the executing agent's
+    # reasoning, only the world it left behind (AC6.4).
+    assert "wrote notes.md" not in seen[0]

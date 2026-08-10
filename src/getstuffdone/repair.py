@@ -23,7 +23,7 @@ from typing import Any
 from .config import Config
 from .execute import execute
 from .journal import REPAIR_STARTED, Journal
-from .models import Check, Subtask, TodoItem, Verdict, VerificationResult
+from .models import Check, HarnessInfo, Subtask, TodoItem, Verdict, VerificationResult
 from .verify import VerifyContext
 from .verify import run_verify as _default_run_verify
 
@@ -124,6 +124,8 @@ def repair(
     run_dir: Path,
     _run_agent: Any | None = None,
     _run_verify: Any | None = None,
+    judge_harness: HarnessInfo | None = None,
+    judge_run_agent: Any | None = None,
     on_attempt: Callable[[int, int], None] | None = None,
     on_result: Callable[[VerificationResult], None] | None = None,
 ) -> VerificationResult:
@@ -147,6 +149,10 @@ def repair(
     run_dir:        Directory for artefact files.
     _run_agent:     Injectable harness callable (tests only).
     _run_verify:    Injectable verifier callable (tests only; default: run_verify).
+    judge_harness:  Harness for kind=judge re-verification. Without it the judge
+                    verifier returns `no_harness_configured` on every attempt,
+                    so a judge check can never be repaired into a pass.
+    judge_run_agent: Injectable runner for kind=judge re-verification.
     on_attempt:     Called with (attempt_no, budget) before each repair runs.
                     Display only — a progress reporter has no say in control
                     flow, and must never be able to fail a run.
@@ -206,6 +212,9 @@ def repair(
             subtask_id=subtask.subtask_id,
             attempt_no=attempt_no,
             config=config,
+            harness=judge_harness,
+            judge_timeout_s=getattr(config, "subtask_timeout_s", 300),
+            judge_run_agent=judge_run_agent,
         )
         last_result = run_verify_fn(original_check, journal=journal, item_id=item.item_id, ctx=ctx)
 
