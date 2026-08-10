@@ -11,7 +11,9 @@ never weaken a check to get green.
 ## Status — 2026-08-10
 
 Phases 0–8 complete and merged to main (including failure-backoff-and-park,
-gsd-status, json-output, and run-progress-output).
+gsd-status, json-output, run-progress-output, and all Phase 6c hollow-check
+defences). Four work items are built on local branches awaiting merge (Phase
+6b + Phase 9).
 
 ### Completed (merged to main)
 
@@ -40,189 +42,52 @@ gsd-status, json-output, and run-progress-output).
 - **gsd-status** — `status.py` + gsd status: item-centric view across todo and journals (proposed AC11.x).
 - **json-output** — --json flag on gsd plan/status/report, ISO-8601 UTC timestamps, schema from existing dataclasses.
 - **run-progress-output** — `progress.py`: stderr stage lines per subtask, --verbose agent stdout, suppressed under --json/non-TTY (proposed AC5.6).
+- **reject-shell-wrapper-checks** — `Check.__post_init__` refuses `kind=command` with a shell (`bash`, `sh`, `zsh`, etc.) plus inline-program flag (`-c`, `--command`); a wrapper running a file stays legal. Tests in `tests/test_hollow_checks.py` (proposed AC3.7).
+- **checks-must-be-falsifiable** — `Check.__post_init__` refuses `kind=command` whose argv[0] cannot fail for any reason connected to the work (`true`, `echo`, `date`, `ls` with no operands, etc.). Tests in `tests/test_hollow_checks.py` (proposed AC3.8).
+- **fetch-failure-must-fail-the-subtask** — `verify/file.py` returns `failed` for a zero-byte path with `file_is_empty` evidence before any pattern matching; `content_head` included in evidence on pattern miss. Tests in `tests/test_hollow_checks.py` (proposed AC6.8).
+- **enforce-command-allowlist** — `verify/command.py` calls `is_allowed()` before `subprocess.run`; denied argv yields `inconclusive` with `capability_denied` and spawns no process; `VerifyContext` carries `config`; default policy applies when config absent. Tests in `tests/test_hollow_checks.py` (proposed AC6.9 = S1).
+
+### In-flight (local branches — not yet pushed)
+
+- **enforce-the-send-boundary** (`enforce-the-send-boundary` branch) — deny send
+  vectors (`mail`, `mailx`, `sendmail`, `ssh`, `scp`, `sftp`, `rsync`) everywhere
+  gsd dispatches a process; fix `git -C … push` bypass; gate unrestricted harnesses
+  behind `allow_unrestricted_harness = true`. (S2)
+- **capability-honesty** (`capability-honesty` branch) — `Capability` is a
+  declared-subset check, not a runtime sandbox; sweep all remaining statements into
+  agreement and add a test asserting the gate's actual contract. (S3)
+- **per-stage-model-selection** (`per-stage-model-selection` branch) — `HarnessConfig.for_stage()`
+  with `[harness.<stage>]` overrides in gsd.toml; resolved model journalled in
+  every `HarnessInfo`. (M1)
+- **wire-the-judge-harness** (`wire-the-judge-harness` branch) — pass `harness=` and
+  `judge_timeout_s` at both `VerifyContext` construction sites (`run_item` and
+  `repair.py`) so `kind=judge` checks actually reach the judge verifier in a real
+  run. (M2)
 
 ---
 
 ## Work items (priority order)
 
-### Phase 6b — enforce the security controls that are only documented
+### Phase 6c follow-up — make check-rejection actionable in the retry
 
-**Highest priority.** These findings came from a code audit rather than from a
-spec, so every `plan` beat regeneration drops them. **The durable fix is to add
-them to `specs/02-functional-spec.md` as acceptance criteria** — a USER-side
-edit. Until that happens, expect to re-add this section after each plan beat.
+C1. **thread-check-rejection-reason** — `_build_check` in `decompose.py` catches
+   `ValueError` from `Check.__post_init__` and returns `None`. The retry prompt
+   then says only "missing check" rather than naming the rule that was broken
+   (shell wrapper, cannot fail, zero-byte, etc.). A second attempt from a model
+   that doesn't know what it did wrong tends to produce the same shape.
 
-S1. **enforce-command-allowlist** — `config.is_allowed()` is defined,
-   documented in `specs/`, `README.md`, `USAGE.md` and `AGENTS.md`, and
-   **called from nowhere**; `doctor.py` reads the lists only to report them.
-   Call it in `verify/command.py` before `subprocess.run`, refusing a
-   disallowed argv as **`inconclusive`** (never `failed`, never `passed`) with
-   `capability_denied` in the evidence. A `command` check's argv is
-   model-chosen, so today the verifier executes whatever the decomposition
-   proposes. `VerifyContext` does not carry `config`; thread it.
-   *Validation:* `make check` + `pytest tests/test_verify_command.py -q` — a
-   denied argv yields `inconclusive` and **spawns no process** (assert with a
-   runner spy); an allowed argv still runs; the refusal reaches the journal.
+   Propagate the `ValueError` message into the retry context: instead of
+   returning `None`, return the exception message so the caller can include it
+   in the "retry because:" field of the decompose prompt. The fix is entirely
+   within `decompose.py` — no change to `models.py` or the Check invariants.
 
-S2. **enforce-the-send-boundary** — `network` is granted by default (decided
-   2026-08-08), so the enforced boundary is *send*, not *fetch*. Deny `mail`,
-   `mailx`, `sendmail`, `ssh`, `scp`, `sftp` wherever gsd dispatches a process,
-   and re-express the `git push` / `gh` denial so `git -C … push` and
-   `bash -c 'git push'` do not defeat it. Harnesses that cannot express tool
-   restrictions (`codex`, `cursor`, `gemini`, `kiro`) must be gated behind an
-   explicit `allow_unrestricted_harness = true` or dropped from
-   `SUPPORTED_HARNESSES`. Keep shipping the caveat with the code: with
-   `python3` allowed and the network reachable this cannot stop a determined
-   agent; the container is the control.
-   *Validation:* `make check` + `pytest tests/test_harness_argv.py -q` —
-   argv-level only, no agent launched.
-
-S3. **capability-honesty** — DECIDED: `Capability` is a declaration, not a
-   sandbox, and `specs/03-data-model.md` says so. Remaining sweep: make every
-   other statement agree, and add a test asserting the gate's actual contract
-   (declared-subset check) rather than the containment previously implied.
-
-### Phase 6c — checks that cannot be hollow
-
-**Ahead of any further trial runs.** Source: a real run of `agents-md-legal`
-on 2026-08-08. Fifteen subtasks, fifteen passes, item reported success — and
-two of the three source documents had never been downloaded. The drafts were
-written from the model's memory of the AI Act.
-
-Nothing in the pipeline was broken. Every stage did what it was specified to
-do. The **checks** were hollow, and a verification system whose checks are
-authored by the same model that does the work has no defence against that
-unless the check *shape* is constrained. Key failures: 14 of 15 checks were
-`["bash", "-c", "grep -q … file"]` (defeating argv allow/deny simultaneously);
-the AI Act fetch returned HTTP 202 with a 0-byte file (curl exited 0, `test -f`
-passed); several checks grepped a word the executing agent had just written.
-
-H1. **reject-shell-wrapper-checks** — `Check.__post_init__` refuses
-   `kind=command` whose `argv[0]` basename is a shell (`bash`, `sh`, `zsh`,
-   `dash`, `ksh`, `fish`, `csh`, `tcsh`) **and** which passes an inline-program
-   flag (`-c`, `-lc`, `-ic`, `--command`). A wrapper running a *file*
-   (`["bash", "script.sh"]`) is still an argv and stays legal. The rejection
-   message names the offending prefix and shows the argv form. Mirrored as an
-   explicit rule in the decompose prompt so plans do not have to fail first.
-   *Validation:* `make check` + `pytest tests/test_hollow_checks.py -q`
-
-H2. **checks-must-be-falsifiable** — `Check.__post_init__` refuses a
-   `kind=command` whose `argv[0]` cannot fail for any reason connected to the
-   work: `true`, `:`, `echo`, `printf`, `pwd`, `date`, `sleep`, `yes`,
-   `whoami`, `hostname`, `uname`, `id`, `env`, `clear`; plus `ls`, `test` and
-   `[` when given no operands (flags are not operands). Decompose prompt gains
-   the corresponding rule, phrased as a question the planner must answer —
-   *what would make this check return non-zero?*
-
-   **Deliberately NOT implemented, and this is the honest part:** the observed
-   `grep -q <single word>` pattern is *not* rejected. There is no lexical test
-   that separates `grep -q OK marker.txt` (a legitimate check) from
-   `grep -q draft notes.md` (proof that a word was typed) without false
-   positives that would refuse real checks — and refusing real checks pushes
-   the planner toward `kind=judge`, which is weaker. The mitigations shipped
-   instead are the decompose-prompt rule "check the outcome, not the artefact
-   of your own effort" and the zero-byte rule in H3. **The residual risk is
-   real and unclosed:** a determined-to-be-agreeable planner can still author a
-   check that passes without the work being right. The judge verifier is where
-   a future fix belongs — grade the *check* adversarially at plan time, not
-   just the result at verify time. Do not close this item silently.
-
-H3. **fetch-failure-must-fail-the-subtask** — `verify/file.py` returns
-   `failed` for a path that exists but is 0 bytes, with `size_bytes: 0` and
-   `error: file_is_empty` in the evidence, before any pattern matching. A
-   failed download is the canonical producer of this state. Decompose prompt
-   gains: assert content via `pattern`, not existence.
-
-H4. **enforce-command-allowlist** *(completes S1 below)* — `is_allowed()` is
-   now called by `verify/command.py` before `subprocess.run`. A denied argv is
-   `inconclusive` with `capability_denied` evidence and **spawns no process**
-   (asserted by monkeypatching `subprocess.run` to raise). `VerifyContext`
-   gained `config: Config | None`, threaded from `cli.py` and `repair.py`; a
-   context without config falls back to the default policy, never to allow-all.
-
-   Policy change landed with it, per the 2026-08-08 decision: `network` is a
-   default capability, `curl`/`wget` moved from deny to allow, and the deny
-   list is now the *send* vectors (`mail`, `mailx`, `sendmail`, `ssmtp`,
-   `msmtp`, `ssh`, `scp`, `sftp`, `rsync`). Six tests in `test_config.py`
-   asserted the superseded policy and were **inverted, not deleted** — they now
-   assert the new contract, and `test_python2_style_invocation_is_allowed`
-   carries the reason the list is defence in depth rather than a boundary.
-
-*Follow-up not done here:* `_build_check` returns `None` for a rejected check,
-so the retry prompt says "missing check" rather than naming the rule that was
-broken. Threading the `ValueError` message into the retry would make the
-second attempt much more likely to succeed. Small, worth doing.
-
-### Phase 9 — model selection per stage
-
-Prices checked 2026-08-09 (per MTok, input/output): Fable 5 $10/$50,
-Opus 5 $5/$25, Sonnet 5 $2/$10 (**rising to $3/$15 on 1 Sept 2026**),
-Haiku 4.5 $1/$5. Re-check before acting on the arithmetic; these move.
-
-The observation: **spend and leverage sit in different stages.** A 15-subtask
-item produces ~70k output tokens, almost all in `execute`. `decompose` is one
-call of a few thousand tokens — and it authors every check for the whole item.
-Every failure in the 2026-08-08/09 trial runs was a decomposition failure;
-the drafts themselves were serviceable.
-
-M1. **per-stage-model-selection** — `HarnessConfig` carries a single
-   `agent`/`model` pair, consumed identically by `decompose.py`, `execute.py`,
-   `verify/judge.py` and (via `execute`) `repair.py`. There is no way to
-   express "plan with Opus, draft with Sonnet". Add optional per-stage overrides
-   falling back to the top-level default:
-
-   ```toml
-   [harness]
-   agent = "claude"
-   model = "sonnet"          # default for every stage
-
-   [harness.decompose]
-   model = "opus"            # authors the checks; highest leverage per token
-
-   [harness.judge]
-   model = "opus"            # see M2 and the independence note below
-   ```
-
-   Resolution is `stage override → [harness] default → built-in default`, and
-   the **resolved** model must be recorded in the `HarnessInfo` journalled with
-   each plan and attempt. Today `HarnessInfo` is built from `config.harness` at
-   four call sites; they become one `config.harness.for_stage("decompose")`
-   lookup.
-
-   Independence matters as much as capability for the judge. An adversarial
-   verifier running the same model that produced the artefact shares its blind
-   spots. The config should make "judge on a different model from execute"
-   expressible; whether to *warn* when they match is probably no — a warning
-   nobody can act on is noise.
-   *Validation:* `make check` + `pytest tests/test_config.py tests/test_decompose.py -q`
-   — a stage override is used for that stage only; an absent override falls back;
-   the resolved model reaches the journalled `HarnessInfo`; an unknown stage key
-   in `gsd.toml` is a startup error, not a silent no-op.
-   *Closes:* new behaviour — USER-side spec amendment alongside the harness
-   contract in `specs/04-technical-plan.md`.
-   *Branch slug:* `per-stage-model-selection`
-
-M2. **wire-the-judge-harness** — **Bug, and it makes `kind=judge` useless in a
-   real run.** `run_item` in `cli.py` constructs `VerifyContext` without
-   `harness=`, and so does `repair.py`. `verify/judge.py` returns
-   `inconclusive` with `no_harness_configured` when `ctx.harness is None` — so
-   every judge check in a `gsd run` is inconclusive by construction, routes
-   straight to repair, exhausts the budget and fails the item. Nothing detects
-   this: the judge tests build a `VerifyContext` with a harness by hand, so the
-   verifier is correct in isolation and unreachable in practice.
-
-   Build the `HarnessInfo` from config (per M1, the judge stage's resolved
-   model) and pass it at both call sites. Also pass `judge_timeout_s` from
-   config rather than the dataclass default.
-   *Validation:* `make check` + `pytest tests/test_run.py -q` — an end-to-end
-   run whose plan contains a `judge` check reaches the judge verifier with a
-   harness and does **not** return `no_harness_configured`. The existing
-   isolated judge tests stay as they are.
-   *Closes:* AC6.4 in practice — currently satisfied at unit level only.
-   *Branch slug:* `wire-the-judge-harness`
-
-   Do M2 before M1 if only one gets done. M1 is tuning; M2 is a verifier that
-   silently never runs.
+   *Validation:* `make check` + `pytest tests/test_decompose.py -q` — a plan
+   containing a shell-wrapper check produces a retry prompt that includes the
+   specific rule violation text; the retry prompt for a missing check still
+   works (backwards-compatible path). An unknown kind returns the existing
+   "unrecognised kind" text or similar, not a bare `None`.
+   *Closes:* follow-up from enforce-command-allowlist / Phase 6c.
+   *Branch slug:* `thread-check-rejection-reason`
 
 ### Phase 10 — dependency integrity
 
@@ -303,7 +168,7 @@ R1. **resume-can-retry-a-failed-item** — **Gap, found the hard way on
 ### Phase 12 — run ids a human can type
 
 F1. **friendly-run-ids** — `run_id` is `str(uuid.uuid4())`
-   (`cli.py:220`, `cli.py:611`), so every reference to a run looks like
+   (`cli.py:210`, `cli.py:582`), so every reference to a run looks like
    `9c23ddee-8263-477b-a98a-99efff7540b6`. It is unique and it is useless: you
    cannot type it, cannot tell two apart at a glance, cannot tell *when* a run
    happened or *what it was about*, and `ls runs/` sorts them in an order with
@@ -410,10 +275,7 @@ N2. **rename-everything** — one branch, one commit, mechanical. Do it **before
    Deliberately **not** renamed: existing `runs/` directories and journal
    contents. They are an append-only historical record.
 
-   *Validation:* `make check` + a grep gate — `grep -ri 'gsd\|getstuffdone\|
-   GetStuffDone' src tests specs tools *.md *.toml Makefile` returns only
-   deliberate historical references. Add that grep to CI so the old name cannot
-   creep back in.
+   *Validation:* `make check` + a grep gate — `grep -ri 'gsd\|getstuffdone\|GetStuffDone' src tests specs tools *.md *.toml Makefile` returns only deliberate historical references. Add that grep to CI so the old name cannot creep back in.
    *Closes:* nothing — pure rename. `specs/` are touched, so this is a
    `plan`/`update` beat or a human edit, **not** a `build` iteration.
    *Branch slug:* `rename-everything`
@@ -465,10 +327,15 @@ N2. **rename-everything** — one branch, one commit, mechanical. Do it **before
   and §Stage 6 as acceptance criteria (proposed AC3.7 shell wrapper refused,
   AC3.8 check must be falsifiable, AC6.8 zero-byte file fails, AC6.9 denied
   argv is `inconclusive` and spawns nothing). Until they are in `specs/`, the
-  `plan` beat will keep dropping Phase 6b/6c from this file.
+  `plan` beat will keep re-deriving them as gaps.
 - Add a `[harness.<stage>]` section to the config reference in `USAGE.md` when
   M1 lands, and record the model-selection guidance (plan high, draft cheap,
   judge independent) somewhere a user will find it.
 - Amend the security posture section of `specs/`, `README.md` and `USAGE.md`
   to the send-boundary policy; they still say `network` is not a default
   capability and that `curl`/`wget` are denied.
+- When `resume-can-retry-a-failed-item` lands, add proposed AC-S5 to
+  `specs/02-functional-spec.md` §Cross-cutting.
+- When `friendly-run-ids` lands, update the `Run.run_id` format note in
+  `specs/03-data-model.md` §Run to match the new `<YYYYMMDD>-<HHMM>-<4 chars>`
+  format and document prefix-matching and `latest` resolution.
