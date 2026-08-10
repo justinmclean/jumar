@@ -276,6 +276,123 @@ def test_harness_config_defaults() -> None:
     assert h.model == "sonnet"
 
 
+# ---------------------------------------------------------------------------
+# HarnessConfig.for_stage() — per-stage resolution
+# ---------------------------------------------------------------------------
+
+
+def test_for_stage_returns_top_level_when_no_override() -> None:
+    h = HarnessConfig(agent="claude", model="sonnet")
+    assert h.for_stage("decompose").model == "sonnet"
+    assert h.for_stage("decompose").agent == "claude"
+
+
+def test_for_stage_uses_stage_model_override() -> None:
+    h = HarnessConfig(agent="claude", model="sonnet", decompose_model="opus")
+    assert h.for_stage("decompose").model == "opus"
+    assert h.for_stage("decompose").agent == "claude"  # unset → top-level
+
+
+def test_for_stage_uses_stage_agent_override() -> None:
+    h = HarnessConfig(agent="claude", model="sonnet", execute_agent="gemini")
+    assert h.for_stage("execute").agent == "gemini"
+    assert h.for_stage("execute").model == "sonnet"  # unset → top-level
+
+
+def test_for_stage_override_is_stage_specific() -> None:
+    """An override for decompose must not bleed into judge or execute."""
+    h = HarnessConfig(agent="claude", model="sonnet", decompose_model="opus")
+    assert h.for_stage("judge").model == "sonnet"
+    assert h.for_stage("execute").model == "sonnet"
+
+
+def test_for_stage_both_agent_and_model_overridden() -> None:
+    h = HarnessConfig(agent="claude", model="sonnet", judge_agent="gemini", judge_model="ultra")
+    r = h.for_stage("judge")
+    assert r.agent == "gemini"
+    assert r.model == "ultra"
+
+
+def test_for_stage_unknown_stage_raises() -> None:
+    h = HarnessConfig()
+    with pytest.raises(ValueError, match="Unknown harness stage"):
+        h.for_stage("ingest")
+
+
+def test_for_stage_result_has_no_per_stage_fields() -> None:
+    """The resolved config is a flat leaf — no stage overrides propagated."""
+    h = HarnessConfig(agent="claude", model="sonnet", decompose_model="opus")
+    resolved = h.for_stage("decompose")
+    assert resolved.decompose_model is None
+    assert resolved.judge_model is None
+
+
+# ---------------------------------------------------------------------------
+# load_config — per-stage harness override from gsd.toml
+# ---------------------------------------------------------------------------
+
+
+def test_load_harness_stage_override_from_gsd_toml(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "gsd.toml",
+        """\
+        [gsd.harness]
+        agent = "claude"
+        model = "sonnet"
+
+        [gsd.harness.decompose]
+        model = "opus"
+    """,
+    )
+    h = load_config(tmp_path).harness
+    assert h.decompose_model == "opus"
+    assert h.decompose_agent is None  # not set in TOML → None
+    assert h.model == "sonnet"  # top-level unchanged
+    assert h.for_stage("decompose").model == "opus"
+    assert h.for_stage("execute").model == "sonnet"  # no execute override
+
+
+def test_load_harness_stage_override_only_agent(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "gsd.toml",
+        """\
+        [gsd.harness.judge]
+        agent = "gemini"
+    """,
+    )
+    h = load_config(tmp_path).harness
+    assert h.judge_agent == "gemini"
+    assert h.judge_model is None
+    assert h.for_stage("judge").agent == "gemini"
+    assert h.for_stage("judge").model == "sonnet"  # falls back to top-level default
+
+
+def test_unknown_harness_stage_key_is_startup_error(tmp_path: Path) -> None:
+    """A typo in a stage name must raise, not silently ignore the override."""
+    _write(
+        tmp_path / "gsd.toml",
+        """\
+        [gsd.harness.ingest]
+        model = "opus"
+    """,
+    )
+    with pytest.raises(ValueError, match="Unknown key"):
+        load_config(tmp_path)
+
+
+def test_unknown_key_inside_stage_table_is_error(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "gsd.toml",
+        """\
+        [gsd.harness.decompose]
+        model = "opus"
+        temperature = 0.5
+    """,
+    )
+    with pytest.raises(ValueError, match="Unknown key"):
+        load_config(tmp_path)
+
+
 def test_command_policy_defaults() -> None:
     p = CommandPolicy()
     assert "python3" in p.allow

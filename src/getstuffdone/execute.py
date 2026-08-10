@@ -125,11 +125,12 @@ def execute(
     """
     runner = _run_agent if _run_agent is not None else _default_run_agent
 
+    resolved = config.harness.for_stage("execute")
     harness_info = HarnessInfo(
-        agent=config.harness.agent,
-        model=config.harness.model,
-        harness=config.harness.agent,
-        invoked_as=config.harness.agent,
+        agent=resolved.agent,
+        model=resolved.model,
+        harness=resolved.agent,
+        invoked_as=resolved.agent,
     )
 
     prompt = (
