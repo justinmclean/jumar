@@ -664,3 +664,81 @@ def test_agent_result_is_frozen() -> None:
 
     with pytest.raises(FrozenInstanceError):
         r.exit_status = 1  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# UNRESTRICTED_HARNESSES — exported constant
+# ---------------------------------------------------------------------------
+
+
+def test_unrestricted_harnesses_does_not_include_claude() -> None:
+    """claude is the only harness that can express --disallowedTools."""
+    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+
+    assert "claude" not in UNRESTRICTED_HARNESSES
+
+
+def test_unrestricted_harnesses_includes_all_non_claude() -> None:
+    """Every harness other than claude is unrestricted."""
+    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+
+    non_claude = SUPPORTED_HARNESSES - {"claude"}
+    assert non_claude == UNRESTRICTED_HARNESSES
+
+
+# ---------------------------------------------------------------------------
+# check_harness_policy — startup gate for unrestricted harnesses
+# ---------------------------------------------------------------------------
+
+
+def test_unrestricted_harness_without_flag_raises_startup_error() -> None:
+    """Using codex/cursor/etc. without allow_unrestricted_harness is a startup error."""
+    from getstuffdone.gate import GateStartupError, check_harness_policy
+    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+
+    for harness in UNRESTRICTED_HARNESSES:
+        with pytest.raises(GateStartupError, match="allow_unrestricted_harness"):
+            check_harness_policy(harness, allow_unrestricted_harness=False)
+
+
+def test_unrestricted_harness_with_flag_is_permitted() -> None:
+    """allow_unrestricted_harness = true clears the gate."""
+    from getstuffdone.gate import check_harness_policy
+    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+
+    for harness in UNRESTRICTED_HARNESSES:
+        check_harness_policy(harness, allow_unrestricted_harness=True)  # must not raise
+
+
+def test_claude_is_always_permitted() -> None:
+    """claude enforces tool-level denials and never requires the flag."""
+    from getstuffdone.gate import check_harness_policy
+
+    check_harness_policy("claude", allow_unrestricted_harness=False)  # must not raise
+
+
+def test_check_harness_policy_error_names_the_harness() -> None:
+    """The error message must name the offending harness for actionable output."""
+    from getstuffdone.gate import GateStartupError, check_harness_policy
+
+    with pytest.raises(GateStartupError, match="codex"):
+        check_harness_policy("codex", allow_unrestricted_harness=False)
+
+
+# ---------------------------------------------------------------------------
+# git -C . push bypass detection — argv-level
+# ---------------------------------------------------------------------------
+
+
+def test_git_c_push_is_denied_by_is_allowed() -> None:
+    """git -C /path push must not bypass the hard-deny via flag interleaving."""
+    from getstuffdone.config import Config, is_allowed
+
+    assert is_allowed(["git", "-C", "/repo", "push", "origin", "main"], Config()) is False
+
+
+def test_git_c_non_push_is_still_allowed() -> None:
+    """git -C with a non-push subcommand must pass the policy."""
+    from getstuffdone.config import Config, is_allowed
+
+    assert is_allowed(["git", "-C", ".", "status"], Config()) is True

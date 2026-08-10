@@ -28,6 +28,12 @@ SUPPORTED_HARNESSES: frozenset[str] = frozenset(
     {"claude", "codex", "cursor", "gemini", "opencode", "kiro"}
 )
 
+# Harnesses that cannot express tool-level denials (git push, gh, sendmail…).
+# Using one of these without allow_unrestricted_harness = true is a startup error.
+UNRESTRICTED_HARNESSES: frozenset[str] = frozenset(
+    {"codex", "cursor", "gemini", "opencode", "kiro"}
+)
+
 # Hard-deny tool patterns embedded in every claude invocation.
 # These mirror the spec-loop's --disallowedTools defence in depth.
 _CLAUDE_HARD_DENY_TOOLS: tuple[str, ...] = ("Bash(git push:*)", "Bash(gh:*)")
