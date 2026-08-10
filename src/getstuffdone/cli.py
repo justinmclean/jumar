@@ -552,7 +552,7 @@ def _cmd_run(
     Acquires the single-flight lock, ingests, selects one eligible item, and
     hands it to :func:`run_item` — the same orchestration ``gsd resume`` uses.
     """
-    from .gate import GateMode, GateStartupError, check_startup_flags
+    from .gate import GateMode, GateStartupError, check_harness_policy, check_startup_flags
 
     if getattr(args, "dry_run", False):
         mode = GateMode.dry_run
@@ -576,6 +576,16 @@ def _cmd_run(
     if getattr(args, "todo", None):
         cli_overrides["todo_path"] = args.todo
     config = load_config(cli_overrides=cli_overrides or None)
+
+    try:
+        check_harness_policy(
+            config.harness.agent,
+            allow_unrestricted_harness=config.allow_unrestricted_harness,
+        )
+    except GateStartupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     todo_path = Path(config.todo_path)
 
     # Acquire single-flight lock before ingest (AC10.5, AC10.6).

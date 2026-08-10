@@ -56,6 +56,25 @@ class GateError(Exception):
         self.failure_code = failure_code
 
 
+def check_harness_policy(harness_name: str, *, allow_unrestricted_harness: bool) -> None:
+    """Raise GateStartupError if an unrestricted harness is used without explicit opt-in.
+
+    Harnesses in UNRESTRICTED_HARNESSES cannot express tool-level denials for
+    git push, gh, or sendmail. Using one without allow_unrestricted_harness = true
+    is a configuration error, not a runtime failure: raising here (before ingest)
+    makes it visible immediately rather than silently running with weaker controls.
+    """
+    from .harness import UNRESTRICTED_HARNESSES
+
+    if harness_name in UNRESTRICTED_HARNESSES and not allow_unrestricted_harness:
+        raise GateStartupError(
+            f"Harness {harness_name!r} cannot enforce tool-level denials (git push, gh, "
+            "sendmail, etc.) — only 'claude' can express those via --disallowedTools. "
+            "Set allow_unrestricted_harness = true in gsd.toml to acknowledge this and "
+            "proceed (noting that the container is the actual control — see config.py)."
+        )
+
+
 def check_startup_flags(mode: str, *, non_interactive: bool) -> None:
     """Raise GateStartupError before ingest if --approve and --non-interactive conflict.
 

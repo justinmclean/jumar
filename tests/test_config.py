@@ -426,6 +426,40 @@ def test_gh_denied_with_default_config() -> None:
     assert is_allowed(["gh", "pr", "list"], Config()) is False
 
 
+def test_git_c_flag_push_hard_denied() -> None:
+    """`git -C /some/path push` must not bypass the hard-deny via flag interleaving."""
+    cfg = Config(commands=CommandPolicy(allow=("git",), deny=()))
+    assert is_allowed(["git", "-C", "/some/path", "push", "origin", "main"], cfg) is False
+
+
+def test_git_c_flag_push_denied_with_default_config() -> None:
+    assert is_allowed(["git", "-C", ".", "push"], Config()) is False
+
+
+def test_git_non_push_with_flags_is_allowed() -> None:
+    """git -C with a non-push subcommand must still be permitted."""
+    assert is_allowed(["git", "-C", ".", "status"], Config()) is True
+
+
+def test_git_commit_with_flags_is_allowed() -> None:
+    assert is_allowed(["git", "-C", ".", "commit", "-m", "msg"], Config()) is True
+
+
+def test_allow_unrestricted_harness_defaults_false(tmp_path: Path) -> None:
+    assert load_config(tmp_path).allow_unrestricted_harness is False
+
+
+def test_allow_unrestricted_harness_loaded_from_gsd_toml(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "gsd.toml",
+        """\
+        [gsd]
+        allow_unrestricted_harness = true
+    """,
+    )
+    assert load_config(tmp_path).allow_unrestricted_harness is True
+
+
 # ---------------------------------------------------------------------------
 # is_allowed — custom policy
 # ---------------------------------------------------------------------------

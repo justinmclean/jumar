@@ -189,6 +189,10 @@ class Config:
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     commands: CommandPolicy = field(default_factory=CommandPolicy)
     schedule_backend: str | None = None  # None = platform default (cron/launchd)
+    # Opt-in required to use a harness that cannot express tool-level denials
+    # (codex, cursor, gemini, kiro, opencode). Default False because those
+    # harnesses cannot enforce the git push / gh boundary at the tool-call layer.
+    allow_unrestricted_harness: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +271,7 @@ def load_config(
         harness=harness,
         commands=commands,
         schedule_backend=schedule_backend,
+        allow_unrestricted_harness=bool(_get("allow_unrestricted_harness", False)),
     )
 
 
@@ -303,6 +308,12 @@ def is_allowed(argv: list[str], config: Config) -> bool:
     for pattern in _HARD_DENY:
         if tuple(normalised[: len(pattern)]) == pattern:
             return False
+
+    # git push with interleaved flags: `git -C /path push` bypasses the
+    # simple prefix check above. Scan the full argv for "push" as a token;
+    # no legitimate git flag value is the string "push", so this is safe.
+    if cmd == "git" and "push" in normalised[1:]:
+        return False
 
     if cmd in config.commands.deny:
         return False
