@@ -192,18 +192,25 @@ def _extract_json(text: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def _build_check(raw: Any) -> Check | None:
-    """Construct a Check from a raw dict; return None if invalid."""
+def _build_check(raw: Any) -> Check | str:
+    """Construct a Check from a raw dict; return an error string if invalid.
+
+    Returns a Check on success, or a human-readable error string describing
+    the specific rule violation — so the caller can include it verbatim in the
+    retry prompt rather than reporting a generic "missing check".
+    """
     if not isinstance(raw, dict):
-        return None
+        return "check is not an object"
     kind_str = raw.get("kind", "")
     stmt = str(raw.get("statement", "")).strip()
-    if not kind_str or not stmt or stmt in _PLACEHOLDER_STMTS:
-        return None
+    if not kind_str:
+        return "check.kind is missing"
+    if not stmt or stmt in _PLACEHOLDER_STMTS:
+        return f"check.statement is empty or a placeholder: {stmt!r}"
     try:
         kind = CheckKind(kind_str)
     except ValueError:
-        return None
+        return f"unrecognised check.kind: {kind_str!r}"
 
     command: tuple[str, ...] | None = None
     path: str | None = raw.get("path") or None
@@ -216,7 +223,7 @@ def _build_check(raw: Any) -> Check | None:
     if kind is CheckKind.command:
         cmd_raw = raw.get("command")
         if not cmd_raw or not isinstance(cmd_raw, list):
-            return None
+            return "kind=command requires a non-empty command list"
         command = tuple(str(a) for a in cmd_raw)
 
     try:
@@ -231,8 +238,8 @@ def _build_check(raw: Any) -> Check | None:
             rationale=rationale,
             timeout_s=timeout_s,
         )
-    except ValueError:
-        return None
+    except ValueError as exc:
+        return str(exc)
 
 
 def _has_cycle(n: int, depends_on_map: dict[int, tuple[int, ...]]) -> bool:
@@ -261,31 +268,42 @@ def _parse_and_validate(
     item_capabilities: frozenset[Capability],
     max_subtasks: int,
     authored_texts: tuple[str, ...],
-) -> tuple[tuple[Subtask, ...], str | None]:
+) -> tuple[tuple[Subtask, ...], str | None, str | None]:
     """Build and validate Subtask objects from raw JSON.
 
-    Returns ``(subtasks, rejection_reason)`` where ``rejection_reason`` is
-    ``None`` on success or one of:
-    - ``"parse_error"``    — malformed structure (retriable)
-    - ``"missing_check"``  — a subtask lacks an acceptable check (retriable)
-    - ``"plan_too_long"``  — exceeded max_subtasks (non-retriable)
-    - ``"invalid_plan"``   — cycle in depends_on (non-retriable)
+    Returns ``(subtasks, rejection_code, rejection_detail)`` where:
+    - On success: ``(subtasks, None, None)``
+    - On failure: ``((), code, detail)`` — code is one of:
+      - ``"parse_error"``   — malformed structure (retriable)
+      - ``"missing_check"`` — a subtask lacks an acceptable check (retriable)
+      - ``"plan_too_long"`` — exceeded max_subtasks (non-retriable)
+      - ``"invalid_plan"``  — cycle in depends_on (non-retriable)
+      detail is a human-readable explanation suitable for including in the
+      retry prompt so the model knows which rule it broke.
     """
     raw_subtasks = data.get("subtasks")
     if not isinstance(raw_subtasks, list) or not raw_subtasks:
-        return (), "missing_check"
+        return (), "missing_check", "response contains no subtasks list"
 
     if len(raw_subtasks) > max_subtasks:
-        return (), "plan_too_long"
+        return (
+            (),
+            "plan_too_long",
+            f"plan has {len(raw_subtasks)} subtasks; maximum is {max_subtasks}",
+        )
 
     # For authored items the response must match length exactly.
     if authored_texts and len(raw_subtasks) != len(authored_texts):
-        return (), "parse_error"
+        return (
+            (),
+            "parse_error",
+            f"expected {len(authored_texts)} subtasks for authored list, got {len(raw_subtasks)}",
+        )
 
     subtasks: list[Subtask] = []
     for i, raw in enumerate(raw_subtasks):
         if not isinstance(raw, dict):
-            return (), "parse_error"
+            return (), "parse_error", f"subtask {i} is not an object"
 
         description: str
         if authored_texts:
@@ -293,15 +311,17 @@ def _parse_and_validate(
         else:
             description = str(raw.get("description", "")).strip()
         if not description:
-            return (), "missing_check"
+            return (), "missing_check", f"subtask {i} has no description"
 
         raw_check = raw.get("check")
         if not raw_check:
-            return (), "missing_check"
+            return (), "missing_check", f"subtask {i} ({description!r}) has no check field"
 
-        check = _build_check(raw_check)
-        if check is None:
-            return (), "missing_check"
+        check_result = _build_check(raw_check)
+        if isinstance(check_result, str):
+            return (), "missing_check", f"subtask {i} ({description!r}): {check_result}"
+
+        check = check_result
 
         raw_caps = raw.get("capabilities", [])
         subtask_caps: frozenset[Capability] = frozenset()
@@ -335,9 +355,9 @@ def _parse_and_validate(
     # Cycle detection over depends_on.
     dep_map: dict[int, tuple[int, ...]] = {i: s.depends_on for i, s in enumerate(subtasks)}
     if _has_cycle(len(subtasks), dep_map):
-        return (), "invalid_plan"
+        return (), "invalid_plan", "depends_on graph contains a cycle"
 
-    return tuple(subtasks), None
+    return tuple(subtasks), None, None
 
 
 # ---------------------------------------------------------------------------
@@ -407,12 +427,20 @@ def decompose(
     )
 
     authored = bool(item.authored_subtasks)
-    prompt = _authored_prompt(item, config) if authored else _model_prompt(item, config)
+    base_prompt = _authored_prompt(item, config) if authored else _model_prompt(item, config)
     source = "authored" if authored else "model"
 
     last_rejection: str = "parse_error"
+    last_rejection_detail: str | None = None
 
     for attempt_no in range(2):  # initial + one retry (AC3.1)
+        # On the retry, append the specific rule violation so the model knows
+        # what it did wrong rather than receiving a generic "missing check".
+        if attempt_no == 0 or last_rejection_detail is None:
+            prompt = base_prompt
+        else:
+            prompt = base_prompt + f"\n\nRetry because: {last_rejection_detail}"
+
         result: AgentResult = runner(
             prompt,
             cwd=cwd,
@@ -426,11 +454,12 @@ def decompose(
             data = _extract_json(result.stdout)
 
         rejection: str | None
+        detail: str | None
         subtasks: tuple[Subtask, ...]
         if data is None:
-            subtasks, rejection = (), "parse_error"
+            subtasks, rejection, detail = (), "parse_error", "response is not valid JSON"
         else:
-            subtasks, rejection = _parse_and_validate(
+            subtasks, rejection, detail = _parse_and_validate(
                 data,
                 item.item_id,
                 item.capabilities,
@@ -456,14 +485,18 @@ def decompose(
             return plan
 
         last_rejection = rejection
+        last_rejection_detail = detail
+        journal_payload: dict[str, Any] = {
+            "attempt": attempt_no + 1,
+            "reason": rejection,
+            "agent_stdout_head": result.stdout[:500],
+        }
+        if detail:
+            journal_payload["rejection_detail"] = detail
         journal.append(
             PLAN_REJECTED,
             item_id=item.item_id,
-            payload={
-                "attempt": attempt_no + 1,
-                "reason": rejection,
-                "agent_stdout_head": result.stdout[:500],
-            },
+            payload=journal_payload,
         )
 
         # Non-retriable failures abort immediately.
