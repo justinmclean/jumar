@@ -822,3 +822,135 @@ def test_decompose_override_does_not_affect_execute_stage(tmp_path: Path) -> Non
 
     assert len(captured) == 1
     assert captured[0].model == "sonnet"  # execute stage: no override → top-level
+
+
+# ---------------------------------------------------------------------------
+# C1 — thread-check-rejection-reason: retry prompt includes specific violation
+# ---------------------------------------------------------------------------
+
+
+def _prompt_capturing_runner(responses: list[str | None]) -> tuple[Any, list[str]]:
+    """Return a (runner, captured_prompts) pair that records each prompt string."""
+    captured: list[str] = []
+    call_count = [0]
+
+    def runner(
+        prompt: str,
+        *,
+        cwd: Path,
+        capabilities: Any,
+        timeout_s: int,
+        harness: HarnessInfo,
+    ) -> _FakeResult:
+        captured.append(prompt)
+        idx = call_count[0]
+        call_count[0] += 1
+        if idx >= len(responses):
+            return _FakeResult(exit_status=1, stdout="")
+        resp = responses[idx]
+        if resp is None:
+            return _FakeResult(exit_status=1, stdout="")
+        return _FakeResult(exit_status=0, stdout=resp)
+
+    return runner, captured
+
+
+def _shell_wrapper_response() -> str:
+    return json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "Step 1",
+                    "check": {
+                        "kind": "command",
+                        "statement": "step done",
+                        "command": ["bash", "-c", "grep -q foo out.txt"],
+                        "expect_status": 0,
+                    },
+                    "capabilities": [],
+                    "depends_on": [],
+                }
+            ]
+        }
+    )
+
+
+def test_shell_wrapper_rejection_detail_in_retry_prompt(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A shell-wrapper check rejection is propagated into the retry prompt verbatim."""
+    runner, prompts = _prompt_capturing_runner([_shell_wrapper_response(), _valid_response(1)])
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert len(plan.subtasks) == 1
+    assert len(prompts) == 2
+    retry_prompt = prompts[1]
+    assert "Retry because:" in retry_prompt
+    # The specific rule text from Check.__post_init__ must appear.
+    assert "shell wrapper" in retry_prompt
+
+
+def test_shell_wrapper_detail_journalled(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """The rejection_detail from a shell-wrapper check appears in the plan_rejected entry."""
+    runner = _fake_runner([_shell_wrapper_response(), _valid_response(1)])
+    _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    state = journal.replay()
+    rejected = [e for e in state.entries if e["event"] == PLAN_REJECTED]
+    assert rejected, "expected a plan_rejected event"
+    assert "rejection_detail" in rejected[0]["payload"]
+    assert "shell wrapper" in rejected[0]["payload"]["rejection_detail"]
+
+
+def test_unknown_kind_detail_in_retry_prompt(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """An unrecognised check.kind produces a retry prompt naming the bad kind."""
+    bad = json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "Step 1",
+                    "check": {
+                        "kind": "foobar",
+                        "statement": "step done",
+                    },
+                    "capabilities": [],
+                    "depends_on": [],
+                }
+            ]
+        }
+    )
+    runner, prompts = _prompt_capturing_runner([bad, _valid_response(1)])
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert len(plan.subtasks) == 1
+    assert len(prompts) == 2
+    retry_prompt = prompts[1]
+    assert "Retry because:" in retry_prompt
+    assert "foobar" in retry_prompt
+
+
+def test_missing_check_field_retry_still_works(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A subtask with no check field at all still retries and succeeds (backwards-compat)."""
+    bad = json.dumps(
+        {"subtasks": [{"description": "Step 1", "capabilities": [], "depends_on": []}]}
+    )
+    runner, prompts = _prompt_capturing_runner([bad, _valid_response(1)])
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert len(plan.subtasks) == 1
+    assert len(prompts) == 2
+    # Even a bare "no check field" case includes a retry reason.
+    assert "Retry because:" in prompts[1]
+
+
+def test_first_attempt_never_has_retry_prefix(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The first attempt must not contain the retry preamble."""
+    runner, prompts = _prompt_capturing_runner([_valid_response(1)])
+    _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert len(prompts) == 1
+    assert "Retry because:" not in prompts[0]
