@@ -26,7 +26,15 @@ from typing import Any, cast
 
 
 class Capability(StrEnum):
-    """Coarse-grained authority over what a subtask may do."""
+    """Coarse-grained capability declaration — what a subtask claims to need.
+
+    A Capability value is a *declared intent*, not a runtime sandbox. The gate
+    checks that ``subtask.capabilities ⊆ item.capabilities`` (AC4.3); that is the
+    whole of the enforcement at this layer. Granting ``network`` does not prevent
+    a subprocess from opening a socket; not granting it does not block one.
+    Fine-grained allow/deny lists live in ``CommandPolicy``; the actual boundary
+    is the container or VM the operator runs gsd inside.
+    """
 
     read_fs = "read_fs"
     write_fs = "write_fs"

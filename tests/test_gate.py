@@ -365,3 +365,73 @@ def test_auto_mode_writes_gate_decision_event(journal: Journal) -> None:
     gate(_make_plan(), _make_item(), mode=GateMode.auto, journal=journal)
     state = journal.replay()
     assert GATE_DECISION in [e["event"] for e in state.entries]
+
+
+# ---------------------------------------------------------------------------
+# AC4.3 / S3 — Capability is a declared-subset check, not a runtime sandbox
+# ---------------------------------------------------------------------------
+
+
+def test_capability_check_is_declared_subset_not_containment(journal: Journal) -> None:
+    """The gate's capability check is subtask.capabilities ⊆ item.capabilities.
+
+    That is all it is. The gate does not restrict OS calls, file paths, or
+    network egress at runtime. A subtask that *declares* write_fs and whose
+    parent item *grants* write_fs proceeds; whether the subtask actually
+    touches the right paths is the verifier's job, not the gate's.
+    """
+    item = _make_item(
+        capabilities=frozenset({Capability.read_fs, Capability.write_fs, Capability.run_commands})
+    )
+    # Subtask declares an exact-match subset — must proceed.
+    subtask = _make_subtask(
+        0,
+        capabilities=frozenset({Capability.read_fs, Capability.write_fs, Capability.run_commands}),
+    )
+    plan = _make_plan(subtasks=(subtask,))
+    decision = gate(plan, item, mode=GateMode.auto, journal=journal)
+    assert decision == GateDecision.proceed
+
+
+def test_subtask_with_empty_capabilities_proceeds(journal: Journal) -> None:
+    """A subtask that declares no capabilities is trivially a subset of any granted set."""
+    item = _make_item(capabilities=frozenset({Capability.run_commands}))
+    subtask = _make_subtask(0, capabilities=frozenset())
+    plan = _make_plan(subtasks=(subtask,))
+    decision = gate(plan, item, mode=GateMode.auto, journal=journal)
+    assert decision == GateDecision.proceed
+
+
+def test_subtask_with_empty_capabilities_proceeds_even_when_item_has_none(
+    journal: Journal,
+) -> None:
+    """Empty ⊆ empty is vacuously true — both sides declare nothing."""
+    item = _make_item(capabilities=frozenset())
+    subtask = _make_subtask(0, capabilities=frozenset())
+    plan = _make_plan(subtasks=(subtask,))
+    decision = gate(plan, item, mode=GateMode.auto, journal=journal)
+    assert decision == GateDecision.proceed
+
+
+def test_subtask_with_single_capability_denied_when_item_grants_none(journal: Journal) -> None:
+    """Any non-empty claimed set is not a subset of the empty granted set."""
+    item = _make_item(capabilities=frozenset())
+    subtask = _make_subtask(0, capabilities=frozenset({Capability.run_commands}))
+    plan = _make_plan(subtasks=(subtask,))
+    with pytest.raises(GateError) as exc_info:
+        gate(plan, item, mode=GateMode.auto, journal=journal)
+    assert exc_info.value.failure_code == FailureCode.capability_denied
+
+
+def test_only_the_excess_capability_is_refused(journal: Journal) -> None:
+    """Exactly the capabilities outside the item's granted set trigger refusal."""
+    item = _make_item(capabilities=frozenset({Capability.run_commands}))
+    # network is the only ungranted capability.
+    subtask = _make_subtask(
+        0,
+        capabilities=frozenset({Capability.run_commands, Capability.network}),
+    )
+    plan = _make_plan(subtasks=(subtask,))
+    with pytest.raises(GateError) as exc_info:
+        gate(plan, item, mode=GateMode.auto, journal=journal)
+    assert "network" in str(exc_info.value)
