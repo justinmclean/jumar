@@ -21,7 +21,7 @@ jobs:
         run: make check
       - name: Old-name grep gate (post-rename)
         run: |
-          ! grep -rnE --exclude-dir='__pycache__' --exclude-dir='*.egg-info' \
+          ! git grep -nE \
               '\bgsd\b|getstuffdone|GetStuffDone' \
-              src tests tools pyproject.toml Makefile \
+              -- src tests tools pyproject.toml Makefile \
             | grep -v 'legacy-name-ok'
