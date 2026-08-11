@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #   https://www.apache.org/licenses/LICENSE-2.0
 #
-# Spec-driven build loop for GetStuffDone.
+# Spec-driven build loop for Jumar.
 #
 # A small loop in the general "Ralph" style (run a fresh agent context against
 # a fixed prompt, repeat), adapted from the airflow-steward spec-loop to a
@@ -54,11 +54,11 @@ trap 'echo -e "\nStopping loop..."; exit 0' INT TERM
 
 # Operate from the repo root so the agent sees the whole tree.
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-    echo "Error: not inside a git repository. Run 'git init' in GetStuffDone first." >&2; exit 1; }
+    echo "Error: not inside a git repository. Run 'git init' in Jumar first." >&2; exit 1; }
 cd "$ROOT" || exit 1
 
 LOOP_DIR="tools/spec-loop"
-# GetStuffDone layout: specs, plan, and AGENTS live at the repo root, alongside
+# Jumar layout: specs, plan, and AGENTS live at the repo root, alongside
 # the tooling on the same branch — so there is no control-branch/base split.
 SPECS_DIR="specs"
 PLAN="IMPLEMENTATION_PLAN.md"
@@ -97,7 +97,7 @@ PLAN_CONSOLIDATE_THRESHOLD="${SPEC_LOOP_PLAN_MAX:-500}"
 # ---- parse arguments -------------------------------------------------
 usage() {
     cat <<'EOF'
-Spec-driven build loop for GetStuffDone.
+Spec-driven build loop for Jumar.
 
 Usage:
   ./loop.sh [N]               build; N iterations (omit or 0 = unlimited)
@@ -173,7 +173,7 @@ spinner() {
 }
 
 # A cheap, dependency-free repository snapshot, appended to every prompt as a
-# routing aid (the GetStuffDone replacement for airflow-steward's uv spec-inventory).
+# routing aid (the Jumar replacement for airflow-steward's uv spec-inventory).
 repo_snapshot_context() {
     echo ""
     echo "## Repository snapshot"

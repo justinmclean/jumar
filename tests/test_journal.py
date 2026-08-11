@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from getstuffdone.journal import (
+from jumar.journal import (
     ATTEMPT_FINISHED,
     ATTEMPT_STARTED,
     ITEM_COMPLETED,

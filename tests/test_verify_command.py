@@ -22,16 +22,16 @@ from typing import Any
 
 import pytest
 
-from getstuffdone.clock import stamp
-from getstuffdone.config import CommandPolicy, Config
-from getstuffdone.execute import execute
-from getstuffdone.journal import (
+from jumar.clock import stamp
+from jumar.config import CommandPolicy, Config
+from jumar.execute import execute
+from jumar.journal import (
     ATTEMPT_FINISHED,
     ATTEMPT_STARTED,
     VERIFICATION,
     Journal,
 )
-from getstuffdone.models import (
+from jumar.models import (
     Capability,
     Check,
     CheckKind,
@@ -43,8 +43,8 @@ from getstuffdone.models import (
     Verdict,
     VerificationResult,
 )
-from getstuffdone.verify import VerifyContext, VerifyError, _registry, register, run_verify
-from getstuffdone.verify.command import verify_command
+from jumar.verify import VerifyContext, VerifyError, _registry, register, run_verify
+from jumar.verify.command import verify_command
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -187,22 +187,22 @@ def test_expect_stdout_no_match_fails(tmp_path: Path) -> None:
 
 
 def test_missing_binary_yields_inconclusive(tmp_path: Path) -> None:
-    check = _command_check("__no_such_binary_gsd_test__")
-    ctx = _ctx(tmp_path, allow=("__no_such_binary_gsd_test__",))
+    check = _command_check("__no_such_binary_jumar_test__")
+    ctx = _ctx(tmp_path, allow=("__no_such_binary_jumar_test__",))
     result = verify_command(check, ctx)
     assert result.verdict == Verdict.inconclusive
 
 
 def test_missing_binary_evidence_has_error_field(tmp_path: Path) -> None:
-    check = _command_check("__no_such_binary_gsd_test__")
-    ctx = _ctx(tmp_path, allow=("__no_such_binary_gsd_test__",))
+    check = _command_check("__no_such_binary_jumar_test__")
+    ctx = _ctx(tmp_path, allow=("__no_such_binary_jumar_test__",))
     result = verify_command(check, ctx)
     assert result.evidence.get("error") == "binary_not_found"
 
 
 def test_missing_binary_evidence_path_is_none(tmp_path: Path) -> None:
-    check = _command_check("__no_such_binary_gsd_test__")
-    ctx = _ctx(tmp_path, allow=("__no_such_binary_gsd_test__",))
+    check = _command_check("__no_such_binary_jumar_test__")
+    ctx = _ctx(tmp_path, allow=("__no_such_binary_jumar_test__",))
     result = verify_command(check, ctx)
     assert result.evidence_path is None
 
@@ -214,7 +214,7 @@ def test_off_list_binary_is_refused_before_the_spawn(tmp_path: Path) -> None:
     means we tried and the binary was absent; `capability_denied` means we did
     not try.
     """
-    check = _command_check("__no_such_binary_gsd_test__")
+    check = _command_check("__no_such_binary_jumar_test__")
     result = verify_command(check, _ctx(tmp_path))
     assert result.verdict == Verdict.inconclusive
     assert result.evidence.get("error") == "capability_denied"

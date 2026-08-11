@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-# AGENTS — GetStuffDone operational context
+# AGENTS — Jumar operational context
 
 This file is the operational context the spec-loop's prompts load in addition to
 the beat prompt itself: the repository map, the validation commands, and the
-branch rules. GetStuffDone is a single-developer Python project — no skills, no
+branch rules. Jumar is a single-developer Python project — no skills, no
 plugin, no separate governance layer.
 
 ## What this project is
@@ -22,7 +22,7 @@ The repo is built by the same discipline it implements (`specs/05-operator-tooli
 - `specs/` — the functional description of the product (the desired state the
   build loop reconciles code against). One file per area. Owned by the human and
   by the `update` beat; **build iterations never touch it**.
-- `src/getstuffdone/` — the Python package: the pipeline stages (ingest, select,
+- `src/jumar/` — the Python package: the pipeline stages (ingest, select,
   decompose, gate, execute, verify, repair, complete, report), the journal, the
   agent harness, and the CLI.
 - `tests/` — pytest suites, one module per stage plus fixtures and golden
@@ -31,7 +31,7 @@ The repo is built by the same discipline it implements (`specs/05-operator-tooli
   one branch = one PR. Owned by the `plan`/`consolidate` beats.
 - `tools/spec-loop/` — the build loop itself (bash). See its README.
 - `AGENTS.md` — this file.
-- `todo.md`, `gsd.toml`, `runs/` — the human's own work list, config, and run
+- `todo.md`, `jumar.toml`, `runs/` — the human's own work list, config, and run
   journals. Git-ignored where personal; never commit a real todo list with
   private content.
 
@@ -45,7 +45,7 @@ make check                     # ruff + mypy + pytest — what CI runs
 python3 -m pytest -q           # tests only
 python3 -m pytest tests/test_verify_command.py -q    # one stage
 ruff check src tests tools
-mypy src/getstuffdone
+mypy src/jumar
 
 # Shell tooling (when a work item touches the loop itself)
 bash -n tools/spec-loop/loop.sh tools/spec-loop/lib.sh

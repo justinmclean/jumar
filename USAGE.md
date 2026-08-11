@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-# Using GetStuffDone
+# Using Jumar
 
 Worked examples, command reference, config reference. Every transcript below is
 **real output** from the current build, not illustration. Where a command is not
@@ -12,6 +12,12 @@ See [README.md](README.md) for what the tool is and why. See
 each stage must satisfy.
 
 ---
+
+
+> **Renamed from `gsd`, 2026-08-11** — config is `jumar.toml` with `[jumar]`
+> sections (old `gsd.toml`/`[gsd]` not read); schedules installed pre-rename
+> must be removed with the old binary and reinstalled; `jumar doctor` names
+> any leftovers. See the README rename note for the full list.
 
 ## 1. Set up a todo file
 
@@ -38,13 +44,13 @@ to the agent as background — they are never treated as work.
 
 ---
 
-## 2. See what it would do — `gsd plan --dry-run`
+## 2. See what it would do — `jumar plan --dry-run`
 
 The safest command in the tool. It ingests the file, applies both eligibility
 gates, and prints the decision. **No agent is called and nothing is executed.**
 
 ```console
-$ gsd plan --dry-run
+$ jumar plan --dry-run
 Run:   9daec9eb-ae52-4223-b6c8-e450fafd52cd
 Todo:  todo.md  (4 pending)
 Now:   2026-08-08T00:51:11.729401+00:00
@@ -72,7 +78,7 @@ Reading that output:
 Point it at another file with `--todo`:
 
 ```bash
-gsd plan --dry-run --todo ~/work/todo.md
+jumar plan --dry-run --todo ~/work/todo.md
 ```
 
 Every invocation writes `runs/<run-id>/journal.jsonl`, even a dry run. The
@@ -84,7 +90,7 @@ An unparseable date is refused rather than guessed at — guessing is exactly th
 wrong instinct for unattended work:
 
 ```console
-$ gsd plan --dry-run --todo bad.md
+$ jumar plan --dry-run --todo bad.md
 warning: Line 1: bad schedule token: @due='next': Cannot parse date/datetime: 'next'
 Run:   64fcaeff-0eca-4a7f-ba36-295b6a956e3d
 Todo:  bad.md  (1 pending)
@@ -101,7 +107,7 @@ parses and the run still exits 0.
 ### Errors are actionable, not tracebacks
 
 ```console
-$ gsd plan --dry-run --todo nope.md
+$ jumar plan --dry-run --todo nope.md
 error: Todo file not found: nope.md
 $ echo $?
 1
@@ -109,7 +115,7 @@ $ echo $?
 
 ---
 
-## 3. Run an item — `gsd run`
+## 3. Run an item — `jumar run`
 
 The full pipeline: select → decompose → gate → execute → verify → repair →
 complete → report, one item per invocation, under the single-flight lock.
@@ -122,7 +128,7 @@ combination with no safe resolution — auto-approving would defeat the gate,
 auto-declining would silently drop every item:
 
 ```console
-$ gsd run --approve --non-interactive
+$ jumar run --approve --non-interactive
 error: --approve and --non-interactive are mutually exclusive: --approve waits
 for a human response, but --non-interactive forbids blocking reads. Remove one
 of these flags.
@@ -145,13 +151,13 @@ Modes (`specs/02-functional-spec.md` §Stage 4):
 
 ## 4. What happens during a run — reading the live output
 
-`gsd run` emits per-stage progress to **stderr**. Standard output carries only
+`jumar run` emits per-stage progress to **stderr**. Standard output carries only
 the run summary (and, under `--json`, a single machine-readable document).
 Progress is suppressed when the stream is not a TTY and when `--json` is
 active, so scheduled and piped runs stay silent.
 
 ```console
-$ gsd run
+$ jumar run
 → Add a --json flag to the export script
   planning … (one agent call, up to 12 subtasks)
   planned 3 subtask(s)
@@ -211,7 +217,7 @@ falsified it.
 ### Verbose mode — echo the agent's output after each initial attempt
 
 ```bash
-gsd run --verbose
+jumar run --verbose
 ```
 
 Under `--verbose`, the agent's captured stdout is echoed to stderr after each
@@ -260,11 +266,11 @@ otherwise the next eligible item is selected.
 
 ### Status — item-centric view across all runs
 
-While `gsd report` answers "what happened to this run?", `gsd status` answers
+While `jumar report` answers "what happened to this run?", `jumar status` answers
 "where does each item stand right now?":
 
 ```console
-$ gsd status
+$ jumar status
 Status for: todo.md
 
   [ELIGIBLE        ] Add a --json flag to the export script
@@ -278,7 +284,7 @@ Status for: todo.md
   [DONE            ] This one is already done
 ```
 
-`gsd status` scans every journal under `runs/` and merges the results with the
+`jumar status` scans every journal under `runs/` and merges the results with the
 current todo file. One row per item.
 
 | State | Meaning |
@@ -294,29 +300,29 @@ For a failed item, `status` shows which subtask failed and what check kind —
 so you know whether to inspect a file, a command's exit code, or a judge
 artefact before retrying.
 
-`gsd status --json` emits the same data as a JSON document.
+`jumar status --json` emits the same data as a JSON document.
 
 ### Putting it together — the next-action loop
 
 ```
-gsd run                         # attempt the next eligible item
+jumar run                         # attempt the next eligible item
  ↓ if it reports "failed":
-gsd status                      # which item, which subtask, which check kind
-gsd report <run-id>             # full evidence trail for that run
+jumar status                      # which item, which subtask, which check kind
+jumar report <run-id>             # full evidence trail for that run
  ↓ once you have addressed the cause:
-gsd resume <run-id> --retry-failed    # re-enter from the first unverified subtask
+jumar resume <run-id> --retry-failed    # re-enter from the first unverified subtask
 ```
 
-All three views read the same journal files. `gsd resume --retry-failed` never
+All three views read the same journal files. `jumar resume --retry-failed` never
 re-executes a subtask that already carries a `passed` verdict — verified side
 effects are not repeated.
 
 ---
 
-## 5. Read a run — `gsd report`
+## 5. Read a run — `jumar report`
 
 ```console
-$ gsd report demo-run
+$ jumar report demo-run
 Run: 1 failed
 
 Failed: Add a --json flag to the export script
@@ -366,20 +372,20 @@ inconclusive. Deferred and blocked items do not fail a run. A scheduled run with
 nothing to do is a success and must not page anyone.
 
 ```bash
-gsd report <run-id> --runs-dir /path/to/runs   # non-default runs directory
+jumar report <run-id> --runs-dir /path/to/runs   # non-default runs directory
 ```
 
 ---
 
-## 6. Resume an interrupted run — `gsd resume`
+## 6. Resume an interrupted run — `jumar resume`
 
 Replays `runs/<run-id>/journal.jsonl` and continues from the first subtask
 **without a `passed` verdict**.
 
 ```bash
-gsd resume 20260809-1543-a3f9        # full id: YYYYMMDD-HHMM-<4 hex>
-gsd resume 2026 --retry-failed       # any unambiguous prefix works
-gsd resume latest                    # most recently *started* run
+jumar resume 20260809-1543-a3f9        # full id: YYYYMMDD-HHMM-<4 hex>
+jumar resume 2026 --retry-failed       # any unambiguous prefix works
+jumar resume latest                    # most recently *started* run
 ```
 
 Run ids sort chronologically under `ls runs/` and are typeable: anywhere a run
@@ -402,7 +408,7 @@ Two properties worth understanding, because they are what make resume safe:
   the resumed run would be a different run.
 
 Resume writes `report.md` on completion and returns the same exit-status
-contract as `gsd report`.
+contract as `jumar report`.
 
 ---
 
@@ -441,20 +447,20 @@ its `@not-before=` advanced in place; the rest of the line is byte-identical. A
 missed occurrence advances to the single next occurrence after `now`, never a
 backlog of catch-up runs. A *failed* recurring item's schedule is left untouched.
 
-### Recurring runs — `gsd schedule`
+### Recurring runs — `jumar schedule`
 
-Writes a `cron`/`launchd` entry that invokes `gsd run --non-interactive` and
+Writes a `cron`/`launchd` entry that invokes `jumar run --non-interactive` and
 exits — there is no resident daemon:
 
 ```bash
-gsd schedule show "0 9 * * 1-5" --todo ~/todo.md            # print, install nothing
-gsd schedule add "0 9 * * 1-5" --todo ~/todo.md --dry-run   # ditto
-gsd schedule add "0 9 * * 1-5" --todo ~/todo.md
-gsd schedule list
-gsd schedule remove <schedule-id>
+jumar schedule show "0 9 * * 1-5" --todo ~/todo.md            # print, install nothing
+jumar schedule add "0 9 * * 1-5" --todo ~/todo.md --dry-run   # ditto
+jumar schedule add "0 9 * * 1-5" --todo ~/todo.md
+jumar schedule list
+jumar schedule remove <schedule-id>
 ```
 
-Installed entries are wrapped in `gsd <schedule-id>` markers and `remove` only
+Installed entries are wrapped in `jumar <schedule-id>` markers and `remove` only
 ever deletes inside its own block — your existing crontab lines are never
 reformatted. Overlapping firings are safe: the single-flight lock (`lock.py`)
 makes the second firing exit 0 with `already_running`, and a stale lock from a
@@ -464,11 +470,11 @@ crashed run is reclaimed with a journalled note.
 
 ## 8. Configuration
 
-`gsd.toml` in the working directory, or a `[tool.gsd]` table in
+`jumar.toml` in the working directory, or a `[tool.jumar]` table in
 `pyproject.toml`. CLI flags override config. Current effective defaults:
 
 ```toml
-[gsd]
+[jumar]
 todo_path           = "todo.md"
 timezone            = "Australia/Sydney"   # defaults to the system zone
 max_subtasks        = 12
@@ -481,20 +487,20 @@ capabilities        = ["read_fs", "write_fs", "run_commands", "network"]
 evidence_head_bytes = 4000
 allow_unrestricted_harness = false
 
-[gsd.harness]
+[jumar.harness]
 agent = "claude"       # claude | codex | cursor | gemini | opencode | kiro
 model = "sonnet"       # the default for every stage
 
 # Per-stage overrides. Valid stage tables: decompose, execute, judge.
-# Omitted keys inherit [gsd.harness]; an unknown stage name or key is a
+# Omitted keys inherit [jumar.harness]; an unknown stage name or key is a
 # startup error, never a silently ignored typo.
-[gsd.harness.decompose]
+[jumar.harness.decompose]
 model = "opus"
 
-[gsd.harness.judge]
+[jumar.harness.judge]
 model = "opus"
 
-[gsd.commands]
+[jumar.commands]
 allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]
 deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]
 ```
@@ -507,7 +513,7 @@ Notes that matter:
   `curl`/`wget` are allowed — an agent that cannot read a primary source
   fabricates it instead. The deny list is the outbound-transmission vectors
   (mail, ssh, scp, rsync, …), and `git push` / `gh` are hard-denied in every
-  dispatched argv. None of this is a sandbox: run gsd in a container/VM with
+  dispatched argv. None of this is a sandbox: run jumar in a container/VM with
   restricted egress and no push credentials (see README §Security posture).
 - **Choosing per-stage models:** put the strong model where the leverage is —
   **decompose high** (a bad plan poisons every later stage), **execute cheap**
@@ -516,7 +522,7 @@ Notes that matter:
   grading its own homework).
 - **`max_consecutive_failures`**: each failed run advances `@failed=N` on the
   item's line; at the threshold `@paused=auto-failures` is appended and the
-  item is parked — `gsd status` shows it, and you unpark by deleting the
+  item is parked — `jumar status` shows it, and you unpark by deleting the
   `@paused=` token from the line.
 - **`commit_on_complete`** commits a finished item on a per-item branch. It
   never pushes and never opens a PR.
@@ -561,7 +567,7 @@ by four real additions rather than one.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `error: Todo file not found: X` | `todo_path` wrong, or you're in the wrong directory | `gsd plan --dry-run --todo /absolute/path` |
+| `error: Todo file not found: X` | `todo_path` wrong, or you're in the wrong directory | `jumar plan --dry-run --todo /absolute/path` |
 | `warning: bad schedule token` | Unparseable `@not-before=` / `@due=` / `@every=` | Use `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`; that item is skipped until fixed |
 | `Nothing eligible to work on.` | Everything deferred, blocked, or done | The printed *next eligible* instant tells you when to come back |
 | `error: --approve and --non-interactive are mutually exclusive` | Both flags passed | Drop one; scheduled runs must use `--non-interactive` |
@@ -569,7 +575,7 @@ by four real additions rather than one.
 | `unverifiable_plan` | Decomposition produced a subtask with no real check | Usually a too-vague todo line — split it, or supply your own indented subtasks |
 | `plan_too_long` | Decomposition exceeded `max_subtasks` | The item is mis-sized. Split it. Raising the cap is treating the symptom |
 | `ImportError: cannot import name 'UTC'` | Python 3.10 or older | Needs 3.11+ |
-| `gsd: command not found` | Not installed | `make install` |
+| `jumar: command not found` | Not installed | `make install` |
 
 Inspect any run directly — the journal is append-only JSON lines:
 
@@ -590,18 +596,18 @@ and uuid-era run directories without an index row still resolve by prefix.
 ## 11. Command reference
 
 ```
-gsd [--version] [--help]
-gsd plan   [--dry-run] [--todo PATH] [--json]
-gsd run    [--dry-run | --approve] [--non-interactive] [--verbose] [--json] [--todo PATH]
-gsd resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
-gsd report RUN_ID [--runs-dir DIR] [--json]             # ditto
-gsd status [--todo PATH] [--runs-dir DIR] [--json]
-gsd schedule (add | list | remove | show) …
-gsd doctor
+jumar [--version] [--help]
+jumar plan   [--dry-run] [--todo PATH] [--json]
+jumar run    [--dry-run | --approve] [--non-interactive] [--verbose] [--json] [--todo PATH]
+jumar resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
+jumar report RUN_ID [--runs-dir DIR] [--json]             # ditto
+jumar status [--todo PATH] [--runs-dir DIR] [--json]
+jumar schedule (add | list | remove | show) …
+jumar doctor
 ```
 
 Exit statuses: `0` success (including nothing eligible), `1` a run failed or was
 inconclusive, `2` a usage or not-implemented error.
 
-`gsd plan` without `--dry-run` currently exits 2 — the full plan path is wired
+`jumar plan` without `--dry-run` currently exits 2 — the full plan path is wired
 to `--dry-run` only.

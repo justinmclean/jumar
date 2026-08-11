@@ -17,14 +17,14 @@ test:  ## Run the test suite
 	$(PY) -m pytest -q
 
 cov:  ## Run the suite with coverage
-	$(PY) -m pytest -q --cov=getstuffdone --cov-report=term-missing
+	$(PY) -m pytest -q --cov=jumar --cov-report=term-missing
 
 lint:  ## ruff
 	ruff check src tests tools
 	ruff format --check src tests
 
 types:  ## mypy
-	mypy src/getstuffdone
+	mypy src/jumar
 
 loop-test:  ## Syntax + fixture tests for the build loop itself
 	bash -n tools/spec-loop/loop.sh tools/spec-loop/lib.sh

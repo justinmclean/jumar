@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.journal import (
+from jumar.journal import (
     ITEM_COMPLETED,
     ITEM_FAILED,
     ITEM_SELECTED,
@@ -25,7 +25,7 @@ from getstuffdone.journal import (
     VERIFICATION,
     Journal,
 )
-from getstuffdone.report import (
+from jumar.report import (
     build_report,
     format_markdown,
     format_summary,
@@ -474,14 +474,14 @@ def test_report_metadata_from_run_started(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# F1 — friendly-run-ids: prefix matching and "latest" in gsd report
+# F1 — friendly-run-ids: prefix matching and "latest" in jumar report
 # ---------------------------------------------------------------------------
 
 
 def test_report_unambiguous_prefix_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``gsd report <prefix>`` resolves when the prefix matches exactly one run."""
+    """``jumar report <prefix>`` resolves when the prefix matches exactly one run."""
     import json as _json
 
     monkeypatch.chdir(tmp_path)
@@ -515,7 +515,7 @@ def test_report_unambiguous_prefix_resolves(
         + "\n"
     )
 
-    from getstuffdone.cli import main as cli_main
+    from jumar.cli import main as cli_main
 
     rc = cli_main(["report", "20260810-1430", "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
@@ -525,7 +525,7 @@ def test_report_unambiguous_prefix_resolves(
 def test_report_ambiguous_prefix_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``gsd report <ambiguous-prefix>`` exits 1 and names the candidates."""
+    """``jumar report <ambiguous-prefix>`` exits 1 and names the candidates."""
     import json as _json
 
     monkeypatch.chdir(tmp_path)
@@ -535,7 +535,7 @@ def test_report_ambiguous_prefix_errors(
         entry = {"seq": 1, "event": "run_started", "ts": "t", "payload": {"now": "t"}}
         (d / "journal.jsonl").write_text(_json.dumps(entry) + "\n")
 
-    from getstuffdone.cli import main as cli_main
+    from jumar.cli import main as cli_main
 
     rc = cli_main(["report", "20260810-1430", "--runs-dir", str(tmp_path / "runs")])
     assert rc == 1
@@ -548,7 +548,7 @@ def test_report_ambiguous_prefix_errors(
 def test_report_latest_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``gsd report latest`` resolves to the run with the highest run_started.now."""
+    """``jumar report latest`` resolves to the run with the highest run_started.now."""
     import json as _json
 
     monkeypatch.chdir(tmp_path)
@@ -574,7 +574,7 @@ def test_report_latest_alias(
         lines = [_json.dumps(started), _json.dumps(finished)]
         (d / "journal.jsonl").write_text("\n".join(lines) + "\n")
 
-    from getstuffdone.cli import main as cli_main
+    from jumar.cli import main as cli_main
 
     rc = cli_main(["report", "latest", "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
@@ -599,17 +599,17 @@ def test_report_id_in_header_matches_directory(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# F2 — run index used by gsd report latest
+# F2 — run index used by jumar report latest
 # ---------------------------------------------------------------------------
 
 
 def test_report_latest_uses_index_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``gsd report latest`` resolves via the index when index.tsv exists."""
+    """``jumar report latest`` resolves via the index when index.tsv exists."""
     import json as _json
 
-    from getstuffdone.index import STATUS_COMPLETED, append_run_started, update_run_finished
+    from jumar.index import STATUS_COMPLETED, append_run_started, update_run_finished
 
     monkeypatch.chdir(tmp_path)
     runs_dir = tmp_path / "runs"
@@ -633,7 +633,7 @@ def test_report_latest_uses_index_when_present(
         append_run_started(runs_dir, run_id, now_str)
         update_run_finished(runs_dir, run_id, "some-item", STATUS_COMPLETED)
 
-    from getstuffdone.cli import main as cli_main
+    from jumar.cli import main as cli_main
 
     rc = cli_main(["report", "latest", "--runs-dir", str(runs_dir)])
     assert rc == 0
@@ -642,7 +642,7 @@ def test_report_latest_uses_index_when_present(
 
 
 def test_report_latest_works_without_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``gsd report latest`` resolves via journal scan when no index exists."""
+    """``jumar report latest`` resolves via journal scan when no index exists."""
     import json as _json
 
     monkeypatch.chdir(tmp_path)
@@ -666,7 +666,7 @@ def test_report_latest_works_without_index(tmp_path: Path, monkeypatch: pytest.M
         )
     # No index.tsv — journal scan must find the newer run.
 
-    from getstuffdone.cli import main as cli_main
+    from jumar.cli import main as cli_main
 
     rc = cli_main(["report", "latest", "--runs-dir", str(runs_dir)])
     assert rc == 0

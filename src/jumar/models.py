@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Canonical data shapes for GetStuffDone.
+"""Canonical data shapes for Jumar.
 
 All shapes are frozen dataclasses. Every field is a primitive, tuple, frozenset,
 dict, or another shape defined here, so journal records are JSON-round-trippable.
@@ -345,7 +345,7 @@ class ItemResult:
 
 @dataclass(frozen=True)
 class Run:
-    """Top-level container for one gsd run."""
+    """Top-level container for one jumar run."""
 
     run_id: str
     todo_path: str

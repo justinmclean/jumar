@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-You are running the **update** beat of the spec-driven loop for GetStuffDone.
+You are running the **update** beat of the spec-driven loop for Jumar.
 Specs can fall behind the code when functionality lands the normal way (a
 regular commit, not through this loop). This beat brings the specs back in sync
 with reality. It is the inverse of `plan`: `plan` finds code missing against
@@ -12,7 +12,7 @@ Context to load first:
 
 - `AGENTS.md` — operational rules.
 - `specs/*` — the current functional description.
-- The actual code: `src/getstuffdone/`, `tests/`, the CLI.
+- The actual code: `src/jumar/`, `tests/`, the CLI.
 - The appended **Repository snapshot** block from the runner — the first
   routing map before opening full files.
 
@@ -26,7 +26,7 @@ Steps:
    branch every run keeps each sync as its own reviewable PR. Note the exact
    name — you will print it below. Never commit the sync to the base.
 3. Inventory the code (parallel subagents are fine): every module under
-   `src/getstuffdone/`, what it does, and its tests under `tests/`. Map each
+   `src/jumar/`, what it does, and its tests under `tests/`. Map each
    module back to the pipeline stage in `specs/02-functional-spec.md` it
    implements.
 4. Diff that inventory against `specs/`:

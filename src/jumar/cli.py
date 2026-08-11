@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``gsd`` command-line entry point.
+"""``jumar`` command-line entry point.
 
 Subcommands land with their pipeline stages in the phase order set out in
 ``specs/04-technical-plan.md``; see ``IMPLEMENTATION_PLAN.md``.
 
 Implemented so far
 ------------------
-``gsd plan --dry-run``  — ingest, select, print result; no agent calls.
+``jumar plan --dry-run``  — ingest, select, print result; no agent calls.
 """
 
 from __future__ import annotations
@@ -122,10 +122,10 @@ def _resolve_run_id(runs_dir: Path, run_id: str) -> tuple[str, Path]:
 def build_parser() -> argparse.ArgumentParser:
     """Return the top-level argument parser."""
     parser = argparse.ArgumentParser(
-        prog="gsd",
+        prog="jumar",
         description="Turn a todo list into verified work.",
     )
-    parser.add_argument("--version", action="version", version=f"gsd {__version__}")
+    parser.add_argument("--version", action="version", version=f"jumar {__version__}")
 
     subs = parser.add_subparsers(dest="command")
 
@@ -202,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # schedule
-    schedule_p = subs.add_parser("schedule", help="Manage scheduled gsd runs.")
+    schedule_p = subs.add_parser("schedule", help="Manage scheduled jumar runs.")
     schedule_subs = schedule_p.add_subparsers(dest="schedule_command")
 
     _schedule_add_p = schedule_subs.add_parser("add", help="Install a schedule.")
@@ -211,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--todo", required=True, metavar="PATH", help="Absolute path to the todo file."
     )
     _schedule_add_p.add_argument(
-        "--config", default=None, metavar="PATH", help="Absolute path to gsd.toml."
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
     _schedule_add_p.add_argument(
         "--dry-run", action="store_true", help="Print the entry without installing."
@@ -220,7 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--backend", default=None, metavar="NAME", help="Force 'cron' or 'launchd'."
     )
 
-    schedule_subs.add_parser("list", help="List gsd-owned schedule entries.")
+    schedule_subs.add_parser("list", help="List jumar-owned schedule entries.")
 
     _schedule_remove_p = schedule_subs.add_parser("remove", help="Remove a schedule entry.")
     _schedule_remove_p.add_argument("schedule_id", help="The schedule ID to remove.")
@@ -236,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--todo", required=True, metavar="PATH", help="Absolute path to the todo file."
     )
     _schedule_show_p.add_argument(
-        "--config", default=None, metavar="PATH", help="Absolute path to gsd.toml."
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
 
     # doctor
@@ -282,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_doctor(args)
     if args.command == "status":
         return _cmd_status(args)
-    print(f"gsd {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
+    print(f"jumar {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
     return 2
 
 
@@ -292,9 +292,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
-    """Implement ``gsd plan [--dry-run] [--json]``."""
+    """Implement ``jumar plan [--dry-run] [--json]``."""
     if not args.dry_run:
-        print("gsd plan: full pipeline not yet implemented — use --dry-run to preview")
+        print("jumar plan: full pipeline not yet implemented — use --dry-run to preview")
         return 2
 
     from .clock import capture_now, make_run_id
@@ -455,8 +455,8 @@ def run_item(
 ) -> int:
     """Decompose, gate, then execute→verify→repair each subtask, then complete.
 
-    This is the whole outer loop for ONE item, shared verbatim by ``gsd run``
-    and ``gsd resume`` so the two commands cannot drift apart.
+    This is the whole outer loop for ONE item, shared verbatim by ``jumar run``
+    and ``jumar resume`` so the two commands cannot drift apart.
 
     Returns the exit-status contribution: 0 when the item completed, was
     dry-run, or was skipped by the human; 1 when it failed or was inconclusive.
@@ -698,10 +698,10 @@ def _cmd_run(
     _run_agent: object | None = None,
     _progress_force: bool | None = None,
 ) -> int:
-    """Implement ``gsd run [--dry-run | --approve] [--non-interactive]``.
+    """Implement ``jumar run [--dry-run | --approve] [--non-interactive]``.
 
     Acquires the single-flight lock, ingests, selects one eligible item, and
-    hands it to :func:`run_item` — the same orchestration ``gsd resume`` uses.
+    hands it to :func:`run_item` — the same orchestration ``jumar resume`` uses.
     """
     from .gate import GateMode, GateStartupError, check_harness_policy, check_startup_flags
 
@@ -862,7 +862,7 @@ def _cmd_run(
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    """Implement ``gsd report <run-id> [--json]``."""
+    """Implement ``jumar report <run-id> [--json]``."""
     from .report import (
         build_report,
         format_report_json,
@@ -1019,7 +1019,7 @@ def _cmd_resume(
     *,
     _run_agent: object | None = None,
 ) -> int:
-    """Implement ``gsd resume <run-id>``.
+    """Implement ``jumar resume <run-id>``.
 
     Replays the journal, restores run state (AC-S4 — reuses original ``now``),
     and continues from the first subtask without a ``passed`` verdict (AC-S1).
@@ -1186,7 +1186,7 @@ def _cmd_resume(
 
 
 def _cmd_schedule(args: argparse.Namespace) -> int:
-    """Implement ``gsd schedule <add|list|remove|show>``."""
+    """Implement ``jumar schedule <add|list|remove|show>``."""
     from .config import load_config
     from .schedule import (
         CronExprError,
@@ -1237,7 +1237,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
     if sub == "list":
         entries = list_schedules(default_backend(backend_override))
         if not entries:
-            print("No gsd-owned schedule entries found.")
+            print("No jumar-owned schedule entries found.")
             return 0
         for e in entries:
             print(
@@ -1253,7 +1253,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
         print(f"Removed schedule {args.schedule_id!r}.")
         return 0
 
-    print(f"gsd schedule {sub}: unknown sub-command", file=sys.stderr)
+    print(f"jumar schedule {sub}: unknown sub-command", file=sys.stderr)
     return 2
 
 
@@ -1263,7 +1263,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Implement ``gsd doctor``."""
+    """Implement ``jumar doctor``."""
     from .config import load_config
     from .doctor import format_report, run_doctor
 
@@ -1283,7 +1283,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    """Implement ``gsd status [--json]``.
+    """Implement ``jumar status [--json]``.
 
     Read-only: never creates a run directory.  Exit 0 always.
     """

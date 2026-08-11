@@ -1,11 +1,22 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-# GetStuffDone
+# Jumar
 
 Turn a plain Markdown todo list into **verified** work.
 
-For each item on the list, GetStuffDone breaks it into concrete subtasks, does
+> **Renamed from GetStuffDone (`gsd`), 2026-08-11.** If you used a pre-rename
+> build: the CLI verb is now `jumar`; rename your config file `gsd.toml` →
+> `jumar.toml` and its `[gsd]`/`[gsd.*]` sections → `[jumar]`/`[jumar.*]` (the
+> old names are **not** read — this is a clean break); a run in progress under
+> the old `.gsd.lock` is invisible to the new binary, so let old runs finish
+> first; and any installed schedules keep firing the old command — remove each
+> with the **old** binary (`gsd schedule remove`) or by hand *before*
+> upgrading, then reinstall with `jumar schedule add`. `jumar doctor` detects
+> and names leftover pre-rename schedule entries. Existing `runs/` directories
+> and journals are untouched — they are an append-only historical record.
+
+For each item on the list, Jumar breaks it into concrete subtasks, does
 **one subtask at a time**, and **proves each one worked** — with a real,
 executable check — before starting the next. An item is done when every one of
 its subtasks passed its own check. If a check cannot be passed, the item stops
@@ -36,8 +47,8 @@ refuse.
 `runs/<run-id>/journal.jsonl` — one line per event, strictly ordered, written
 before the next step starts. Days later you can reconstruct which check ran,
 what the evidence was, what the agent claimed versus what the verifier found,
-and how each repair attempt differed. `gsd report <run-id>` renders it;
-`gsd status` rolls it up per item across every run.
+and how each repair attempt differed. `jumar report <run-id>` renders it;
+`jumar status` rolls it up per item across every run.
 
 **Something you can leave on a schedule.** A single-flight lock means a slow run
 never overlaps its successor — a second invocation exits 0 with
@@ -47,7 +58,7 @@ item stops re-spending its budget every firing instead of failing nightly
 forever. Recurrence is delegated to cron or launchd; there is no daemon and no
 resident watcher.
 
-**A plan before any agent runs.** `gsd plan --dry-run` decomposes the next
+**A plan before any agent runs.** `jumar plan --dry-run` decomposes the next
 eligible item and prints the subtasks and their checks without executing
 anything. On a vague item that breakdown is useful on its own, and it is cheap.
 
@@ -96,13 +107,13 @@ Everything below is built, tested and merged.
 
 | Command | What it does |
 |---|---|
-| `gsd plan` | Ingest, select, decompose, print. `--dry-run` stops before execution. |
-| `gsd run` | The full pipeline for the next eligible item. |
-| `gsd resume <run-id>` | Replay the journal and continue from the first unverified subtask. |
-| `gsd report <run-id>` | Render a run report. Exit 1 if anything failed. |
-| `gsd status` | Item-centric view across the todo file and every run journal. |
-| `gsd schedule add\|list\|remove\|show` | Install and inspect cron/launchd entries. |
-| `gsd doctor` | Check config, harness binary, allow list, schedules, todo file. |
+| `jumar plan` | Ingest, select, decompose, print. `--dry-run` stops before execution. |
+| `jumar run` | The full pipeline for the next eligible item. |
+| `jumar resume <run-id>` | Replay the journal and continue from the first unverified subtask. |
+| `jumar report <run-id>` | Render a run report. Exit 1 if anything failed. |
+| `jumar status` | Item-centric view across the todo file and every run journal. |
+| `jumar schedule add\|list\|remove\|show` | Install and inspect cron/launchd entries. |
+| `jumar doctor` | Check config, harness binary, allow list, schedules, todo file. |
 
 `--json` is available on `plan`, `run`, `report` and `status`; `--verbose` streams the
 agent's output during `run`. Progress goes to stderr so stdout stays clean, and
@@ -116,10 +127,10 @@ Known gaps are tracked in **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**.
 Python 3.11 or newer (the code uses `datetime.UTC`).
 
 ```bash
-git clone <your-remote> GetStuffDone && cd GetStuffDone
+git clone <your-remote> Jumar && cd Jumar
 make install      # editable install + dev tools (pytest, ruff, mypy)
 make check        # ruff + mypy + pytest + the build-loop fixture tests
-gsd --version
+jumar --version
 ```
 
 ## Quick start
@@ -127,9 +138,9 @@ gsd --version
 ```bash
 cp todo.example.md todo.md      # todo.md is git-ignored by default
 $EDITOR todo.md
-gsd plan --dry-run              # see what it would pick, and why
-gsd run --approve               # confirm each subtask before it runs
-gsd status                      # where everything stands
+jumar plan --dry-run              # see what it would pick, and why
+jumar run --approve               # confirm each subtask before it runs
+jumar status                      # where everything stands
 ```
 
 Full worked examples, the flag reference, and the config reference are in
@@ -178,7 +189,7 @@ schedule token blocks that item rather than being guessed at.
 | `IMPLEMENTATION_PLAN.md` | Prioritised work items. One item = one branch = one PR. |
 | `AGENTS.md` | Operational rules for any agent working in this repo. |
 | `tools/spec-loop/` | The spec-driven build loop that builds this repo. |
-| `src/getstuffdone/` | The Python package. |
+| `src/jumar/` | The Python package. |
 | `tests/` | pytest suites, one module per stage. |
 | `USAGE.md` | Worked examples, command reference, config reference. |
 
@@ -199,7 +210,7 @@ schedule token blocks that item rather than being guessed at.
 
 ## How the repo is built
 
-GetStuffDone is built the way GetStuffDone works — one work item at a time, on
+Jumar is built the way Jumar works — one work item at a time, on
 its own branch, validated before it commits:
 
 | product concept | build-loop equivalent |
@@ -242,7 +253,7 @@ primary source writes from memory instead, which is the worse outcome.
 
 With `python3` on the allow list and the network reachable, none of the above
 stops a determined agent — it is defence in depth, not a sandbox. The real
-control is the execution environment: run gsd inside a container or VM with
+control is the execution environment: run jumar inside a container or VM with
 restricted egress and no push credentials. The agent CLI runs with its
 unattended flag, which bypasses the *agent's* permission prompts, not the OS.
 

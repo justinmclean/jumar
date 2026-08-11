@@ -21,8 +21,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from getstuffdone.config import Config
-from getstuffdone.models import (
+from jumar.config import Config
+from jumar.models import (
     Capability,
     ItemStatus,
     Recurrence,

@@ -7,7 +7,7 @@ status: proposed
 # 03 — Data Model
 
 Canonical shapes. Implemented as frozen dataclasses (or pydantic models) in
-`src/getstuffdone/models.py`. Anything serialised to the journal is
+`src/jumar/models.py`. Anything serialised to the journal is
 JSON-round-trippable: every field is a primitive, a list, a dict, or another
 model here.
 
@@ -210,8 +210,8 @@ set on a `deferred` item, `next_occurrence` on a completed recurring one.
 
 ## ScheduleEntry
 
-A recurring invocation of `gsd run` installed in the OS scheduler (stage 10).
-GetStuffDone owns the record; the scheduler owns the firing.
+A recurring invocation of `jumar run` installed in the OS scheduler (stage 10).
+Jumar owns the record; the scheduler owns the firing.
 
 | field | type | notes |
 |---|---|---|
@@ -221,7 +221,7 @@ GetStuffDone owns the record; the scheduler owns the firing.
 | `backend` | ScheduleBackend | |
 | `todo_path` | str | absolute |
 | `config_path` | str \| None | absolute |
-| `command` | list[str] | the exact argv installed, absolute `gsd`, always including `--non-interactive` |
+| `command` | list[str] | the exact argv installed, absolute `jumar`, always including `--non-interactive` |
 | `log_path` | str | where the entry redirects stdout/stderr |
 | `installed_at` | str | ISO-8601 UTC |
 
@@ -275,10 +275,10 @@ Invariants:
 
 ## Config
 
-`gsd.toml` (or `[tool.gsd]` in `pyproject.toml`), resolved config ⊕ CLI flags:
+`jumar.toml` (or `[tool.jumar]` in `pyproject.toml`), resolved config ⊕ CLI flags:
 
 ```toml
-[gsd]
+[jumar]
 todo_path       = "todo.md"
 timezone        = "Australia/Sydney"   # resolves bare dates; defaults to system zone
 max_subtasks    = 12
@@ -291,22 +291,22 @@ capabilities    = ["read_fs", "write_fs", "run_commands", "network"]  # send, no
 evidence_head_bytes = 4000
 allow_unrestricted_harness = false
 
-[gsd.harness]
+[jumar.harness]
 agent = "claude"       # defaults for every stage
 model = "sonnet"
 
-[gsd.harness.decompose]   # per-stage overrides; omitted keys inherit [gsd.harness]
+[jumar.harness.decompose]   # per-stage overrides; omitted keys inherit [jumar.harness]
 model = "opus"
 
-[gsd.harness.judge]
+[jumar.harness.judge]
 model = "opus"            # valid stage tables: decompose, execute, judge
 
-[gsd.schedule]
+[jumar.schedule]
 backend    = "auto"        # auto | cron | launchd | systemd
 log_dir    = "runs/logs"
 lock_dir   = "runs"
 
-[gsd.commands]
+[jumar.commands]
 allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]  # argv[0] allow-list (fetchers allowed)
 deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]  # send vectors
 ```
@@ -317,5 +317,5 @@ holds the **send** vectors: the enforced boundary is outbound transmission,
 not outbound reading — `network` is a default capability and `curl`/`wget`
 are allowed, because an agent that cannot fetch a primary source fabricates it
 instead. `git push` and `gh` are hard-denied regardless of these lists. An
-unknown key under `[gsd.harness]` or a stage table other than
+unknown key under `[jumar.harness]` or a stage table other than
 `decompose`/`execute`/`judge` is a startup error, not a silent no-op.

@@ -20,10 +20,10 @@ import io
 from pathlib import Path
 from unittest.mock import patch
 
-from getstuffdone.journal import Journal
-from getstuffdone.models import Check, CheckKind, Verdict
-from getstuffdone.verify import VerifyContext, _registry, run_verify
-from getstuffdone.verify.manual import verify_manual
+from jumar.journal import Journal
+from jumar.models import Check, CheckKind, Verdict
+from jumar.verify import VerifyContext, _registry, run_verify
+from jumar.verify.manual import verify_manual
 
 # ---------------------------------------------------------------------------
 # Helpers

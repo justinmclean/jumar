@@ -6,7 +6,7 @@
 # live agent execution so the fixture tests can pin runner behaviour without
 # launching a headless harness.
 #
-# Adapted for GetStuffDone from the airflow-steward spec-loop: this project is a
+# Adapted for Jumar from the airflow-steward spec-loop: this project is a
 # plain Python tool (src/ + tests/), so there is no control-branch-vs-base
 # split, no .claude/skills, and no uv/spec-inventory dependency. Prompt
 # assembly is therefore just: base prompt + repo snapshot + PR context +

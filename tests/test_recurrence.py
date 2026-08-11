@@ -15,8 +15,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from getstuffdone.models import Recurrence, RecurUnit
-from getstuffdone.recurrence import next_occurrence
+from jumar.models import Recurrence, RecurUnit
+from jumar.recurrence import next_occurrence
 
 # ---------------------------------------------------------------------------
 # Helpers

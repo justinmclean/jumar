@@ -19,11 +19,11 @@ from typing import Any
 
 import pytest
 
-from getstuffdone.clock import stamp
-from getstuffdone.config import Config
-from getstuffdone.execute import execute
-from getstuffdone.journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, Journal
-from getstuffdone.models import (
+from jumar.clock import stamp
+from jumar.config import Config
+from jumar.execute import execute
+from jumar.journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, Journal
+from jumar.models import (
     Attempt,
     Capability,
     Check,

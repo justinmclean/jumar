@@ -2,7 +2,7 @@
 """Single-flight run lock for a todo path.
 
 A PID-stamped JSON lock file is written alongside the todo file before ingest
-begins. If a second ``gsd run`` finds a live lock for the same todo path it
+begins. If a second ``jumar run`` finds a live lock for the same todo path it
 exits 0 immediately with ``already_running`` (AC10.5). A stale lock — one
 whose recorded PID is no longer running — is reclaimed, the reclaim is
 journalled, and the current run proceeds (AC10.6).
@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .journal import Journal
 
-_LOCK_FILENAME = ".gsd.lock"
+_LOCK_FILENAME = ".jumar.lock"
 
 
 class AlreadyRunning(Exception):
@@ -53,7 +53,7 @@ class Lock:
     """PID-stamped lock file scoped to one todo-file path.
 
     The lock file lives in the same directory as the todo file and is named
-    ``.gsd.lock``.  It contains a single JSON object::
+    ``.jumar.lock``.  It contains a single JSON object::
 
         {"pid": <int>, "run_id": "<str>", "todo": "<abs-path>"}
 

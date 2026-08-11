@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from getstuffdone.models import (
+from jumar.models import (
     Attempt,
     Capability,
     Check,

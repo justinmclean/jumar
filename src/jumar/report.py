@@ -566,7 +566,7 @@ class PlanBlockedItem:
 
 @dataclass
 class PlanResult:
-    """Full output of ``gsd plan --dry-run``, shared by human and JSON renderers."""
+    """Full output of ``jumar plan --dry-run``, shared by human and JSON renderers."""
 
     run_id: str
     now: str
@@ -584,7 +584,7 @@ class PlanResult:
 
 
 def format_plan_text(result: PlanResult) -> str:
-    """Return the human-readable ``gsd plan --dry-run`` output string."""
+    """Return the human-readable ``jumar plan --dry-run`` output string."""
     lines: list[str] = []
     lines.append(f"Run:   {result.run_id}")
     lines.append(f"Todo:  {result.todo_path}  ({result.pending_count} pending)")

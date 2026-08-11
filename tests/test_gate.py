@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.gate import (
+from jumar.gate import (
     GateDecision,
     GateError,
     GateMode,
@@ -26,8 +26,8 @@ from getstuffdone.gate import (
     check_startup_flags,
     gate,
 )
-from getstuffdone.journal import GATE_DECISION, Journal
-from getstuffdone.models import (
+from jumar.journal import GATE_DECISION, Journal
+from jumar.models import (
     Capability,
     Check,
     CheckKind,

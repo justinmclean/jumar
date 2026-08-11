@@ -1,13 +1,13 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-# spec-loop (GetStuffDone)
+# spec-loop (Jumar)
 
 A spec-driven build loop in the [Ralph](https://ghuntley.com/ralph/) style — run
 a fresh agent context against a fixed prompt, repeat — that reconciles the
-GetStuffDone **code** against the GetStuffDone **specs**.
+Jumar **code** against the Jumar **specs**.
 
-This is the meta-layer: GetStuffDone is a system that decomposes work, does one
+This is the meta-layer: Jumar is a system that decomposes work, does one
 step at a time, and verifies each step before advancing — and it is *built* the
 same way. See `../../specs/05-operator-tooling.md` for the mapping between the
 two.
@@ -41,7 +41,7 @@ need. Supported: `claude`, `codex`, `cursor`/`cursor-agent`, `gemini`,
 ## First-time setup
 
 ```bash
-cd /path/to/GetStuffDone
+cd /path/to/Jumar
 git init && git add -A && git commit -m "Initial spec pack + loop"
 git branch -M main
 ```

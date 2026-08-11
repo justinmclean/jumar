@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from getstuffdone.models import Capability, ItemStatus, Recurrence, Schedule, TodoItem
-from getstuffdone.select import CycleError, select_next
+from jumar.models import Capability, ItemStatus, Recurrence, Schedule, TodoItem
+from jumar.select import CycleError, select_next
 
 # ---------------------------------------------------------------------------
 # Frozen test clock

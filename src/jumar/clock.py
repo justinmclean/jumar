@@ -11,7 +11,7 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 
-from getstuffdone.config import Config
+from jumar.config import Config
 
 
 def capture_now(config: Config, *, _now: datetime | None = None) -> datetime:

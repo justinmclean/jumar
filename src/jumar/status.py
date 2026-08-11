@@ -35,7 +35,7 @@ from typing import Any
 
 @dataclass
 class ItemStatusLine:
-    """One item's current state as seen by ``gsd status``."""
+    """One item's current state as seen by ``jumar status``."""
 
     item_id: str
     text: str
@@ -225,7 +225,7 @@ def build_status(
     runs_dir:
         Directory containing ``<run-id>/journal.jsonl`` subdirectories.
     config:
-        Loaded :class:`~getstuffdone.config.Config`.
+        Loaded :class:`~jumar.config.Config`.
     now:
         Current eligibility instant (timezone-aware UTC).
 

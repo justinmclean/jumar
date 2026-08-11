@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.status import ItemStatusLine, StatusReport, build_status, format_status
+from jumar.status import ItemStatusLine, StatusReport, build_status, format_status
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,7 +33,7 @@ def _now() -> datetime:
 
 
 def _make_config(tmp_path: Path, todo_path: str | None = None) -> object:
-    from getstuffdone.config import load_config
+    from jumar.config import load_config
 
     overrides = {"todo_path": todo_path or str(tmp_path / "todo.md"), "timezone": "UTC"}
     return load_config(cli_overrides=overrides)
@@ -275,7 +275,7 @@ def test_corrupt_journal_degrades_gracefully(tmp_path: Path) -> None:
 
 
 def test_runs_dir_is_unchanged_after_build_status(tmp_path: Path) -> None:
-    """gsd status must not create any new run directory or write any file."""
+    """jumar status must not create any new run directory or write any file."""
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Something @id=item1\n")
     config = _make_config(tmp_path, str(todo))
@@ -449,12 +449,12 @@ def test_multiple_items_eligible_and_done(tmp_path: Path) -> None:
 
 
 def test_cli_status_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``gsd status`` always exits 0, even when items are failed."""
+    """``jumar status`` always exits 0, even when items are failed."""
     monkeypatch.chdir(tmp_path)
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Some task @id=t1\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     rc = main(["status", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
@@ -463,13 +463,13 @@ def test_cli_status_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_cli_status_does_not_create_run_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``gsd status`` must not create a runs directory or any file in it."""
+    """``jumar status`` must not create a runs directory or any file in it."""
     monkeypatch.chdir(tmp_path)
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Some task @id=t1\n")
     runs_dir = tmp_path / "my-runs"
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--todo", str(todo), "--runs-dir", str(runs_dir)])
 
@@ -477,19 +477,19 @@ def test_cli_status_does_not_create_run_dir(
 
 
 # ---------------------------------------------------------------------------
-# AC11.5 / AC11.6 — gsd status --json
+# AC11.5 / AC11.6 — jumar status --json
 # ---------------------------------------------------------------------------
 
 
 def test_status_json_stdout_is_valid_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``gsd status --json`` emits a single JSON document on stdout (AC11.5)."""
+    """``jumar status --json`` emits a single JSON document on stdout (AC11.5)."""
     monkeypatch.chdir(tmp_path)
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Task one @id=t1\n- [x] Done task @id=t2\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     rc = main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
@@ -507,7 +507,7 @@ def test_status_json_all_items_present(
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Alpha @id=alpha\n- [x] Beta @id=beta\n- [ ] Gamma @id=gamma\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     doc = json.loads(capsys.readouterr().out)
@@ -523,7 +523,7 @@ def test_status_json_item_fields_present(
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] My task @id=t1\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     doc = json.loads(capsys.readouterr().out)
@@ -542,7 +542,7 @@ def test_status_json_parked_item_fields(
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Broken @id=t1 @paused=auto-failures @failed=3\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     doc = json.loads(capsys.readouterr().out)
@@ -560,7 +560,7 @@ def test_status_json_deferred_item_timestamp(
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Future @id=t1 @not-before=2099-01-01T09:00:00+00:00\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     doc = json.loads(capsys.readouterr().out)
@@ -610,7 +610,7 @@ def test_status_json_last_run_at_is_iso8601(
         ],
     )
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(runs_dir)])
     doc = json.loads(capsys.readouterr().out)
@@ -632,7 +632,7 @@ def test_status_json_stdout_only_json_no_progress(
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Alpha @id=a\n- [ ] Beta @id=b\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     out = capsys.readouterr().out
@@ -649,7 +649,7 @@ def test_status_json_warnings_go_to_stderr_not_stdout(
     # A bad schedule token triggers an ingest warning
     _write_todo(todo, "- [ ] Bad schedule @due=not-a-date\n- [ ] Good task @id=good\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     out, err = capsys.readouterr()
@@ -667,7 +667,7 @@ def test_status_json_and_human_mode_same_item_count(
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] One @id=one\n- [x] Two @id=two\n- [ ] Three @id=three\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     capsys.readouterr()  # discard human output
@@ -680,12 +680,12 @@ def test_status_json_and_human_mode_same_item_count(
 def test_status_json_exit_zero_always(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``gsd status --json`` exits 0 always, same as human mode (AC11.1)."""
+    """``jumar status --json`` exits 0 always, same as human mode (AC11.1)."""
     monkeypatch.chdir(tmp_path)
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Pending @id=t1\n")
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     rc = main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
@@ -694,13 +694,13 @@ def test_status_json_exit_zero_always(
 def test_status_json_does_not_create_run_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``gsd status --json`` must not create any run directory (AC11.1)."""
+    """``jumar status --json`` must not create any run directory (AC11.1)."""
     monkeypatch.chdir(tmp_path)
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Task @id=t1\n")
     runs_dir = tmp_path / "no-runs"
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     main(["status", "--json", "--todo", str(todo), "--runs-dir", str(runs_dir)])
 
@@ -709,7 +709,7 @@ def test_status_json_does_not_create_run_dir(
 
 def test_format_status_json_function_directly() -> None:
     """format_status_json serialises a StatusReport to a valid JSON document."""
-    from getstuffdone.status import StatusReport, format_status_json
+    from jumar.status import StatusReport, format_status_json
 
     report = StatusReport(
         todo_path="/todo.md",

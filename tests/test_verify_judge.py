@@ -29,10 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from getstuffdone.journal import VERIFICATION, Journal
-from getstuffdone.models import Check, CheckKind, HarnessInfo, Verdict
-from getstuffdone.verify import VerifyContext, _registry, run_verify
-from getstuffdone.verify.judge import build_judge_prompt, verify_judge
+from jumar.journal import VERIFICATION, Journal
+from jumar.models import Check, CheckKind, HarnessInfo, Verdict
+from jumar.verify import VerifyContext, _registry, run_verify
+from jumar.verify.judge import build_judge_prompt, verify_judge
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers

@@ -22,10 +22,10 @@ from typing import Any
 
 import pytest
 
-from getstuffdone.config import Config
-from getstuffdone.decompose import DecomposeError, decompose
-from getstuffdone.journal import PLAN_CREATED, PLAN_REJECTED, Journal
-from getstuffdone.models import (
+from jumar.config import Config
+from jumar.decompose import DecomposeError, decompose
+from jumar.journal import PLAN_CREATED, PLAN_REJECTED, Journal
+from jumar.models import (
     Capability,
     FailureCode,
     HarnessInfo,
@@ -730,7 +730,7 @@ def _capturing_runner(
 
 def test_decompose_stage_override_model_reaches_runner(journal: Journal, tmp_path: Path) -> None:
     """The model resolved for the 'decompose' stage is passed to the agent runner."""
-    from getstuffdone.config import HarnessConfig
+    from jumar.config import HarnessConfig
 
     cfg = Config(harness=HarnessConfig(agent="claude", model="sonnet", decompose_model="opus"))
     runner, harnesses = _capturing_runner([_valid_response(1)])
@@ -743,7 +743,7 @@ def test_decompose_stage_override_model_reaches_runner(journal: Journal, tmp_pat
 
 def test_decompose_stage_override_model_reaches_journal(journal: Journal, tmp_path: Path) -> None:
     """The resolved model appears in the plan_created journal entry."""
-    from getstuffdone.config import HarnessConfig
+    from jumar.config import HarnessConfig
 
     cfg = Config(harness=HarnessConfig(agent="claude", model="sonnet", decompose_model="opus"))
     runner = _fake_runner([_valid_response(1)])
@@ -757,7 +757,7 @@ def test_decompose_stage_override_model_reaches_journal(journal: Journal, tmp_pa
 
 def test_no_decompose_override_falls_back_to_top_level(journal: Journal, tmp_path: Path) -> None:
     """Without a decompose override, the top-level model is used."""
-    from getstuffdone.config import HarnessConfig
+    from jumar.config import HarnessConfig
 
     cfg = Config(harness=HarnessConfig(agent="claude", model="flash"))
     runner, harnesses = _capturing_runner([_valid_response(1)])
@@ -768,9 +768,9 @@ def test_no_decompose_override_falls_back_to_top_level(journal: Journal, tmp_pat
 
 def test_decompose_override_does_not_affect_execute_stage(tmp_path: Path) -> None:
     """A decompose-model override must not change the model used in execute.py."""
-    from getstuffdone.config import HarnessConfig
-    from getstuffdone.execute import execute
-    from getstuffdone.models import Capability, Check, CheckKind, Subtask, SubtaskStatus
+    from jumar.config import HarnessConfig
+    from jumar.execute import execute
+    from jumar.models import Capability, Check, CheckKind, Subtask, SubtaskStatus
 
     captured: list[HarnessInfo] = []
 
@@ -786,8 +786,8 @@ def test_decompose_override_does_not_affect_execute_stage(tmp_path: Path) -> Non
         captured.append(harness)
         return _FakeResult(exit_status=0, stdout="done", agent_claim="done")
 
-    from getstuffdone.journal import Journal as _J
-    from getstuffdone.models import ItemStatus, TodoItem
+    from jumar.journal import Journal as _J
+    from jumar.models import ItemStatus, TodoItem
 
     jrn = _J(tmp_path / "j.jsonl", "r1")
     cfg = Config(harness=HarnessConfig(agent="claude", model="sonnet", decompose_model="opus"))

@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for --json output on gsd plan and gsd report.
+"""Tests for --json output on jumar plan and jumar report.
 
 Acceptance criteria exercised:
-- --json flag on gsd plan --dry-run produces stdout that parses with json.loads
-- --json flag on gsd report produces stdout that parses with json.loads
+- --json flag on jumar plan --dry-run produces stdout that parses with json.loads
+- --json flag on jumar report produces stdout that parses with json.loads
 - Warnings go to stderr in both modes; stdout stays pure JSON (no warning text)
 - Human and JSON modes are built from the same underlying result object
   (PlanResult / RunReport) — verified by asserting the same data appears in both
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.cli import main
-from getstuffdone.journal import (
+from jumar.cli import main
+from jumar.journal import (
     ITEM_COMPLETED,
     ITEM_FAILED,
     ITEM_SELECTED,
@@ -28,7 +28,7 @@ from getstuffdone.journal import (
     VERIFICATION,
     Journal,
 )
-from getstuffdone.report import (
+from jumar.report import (
     PlanBlockedItem,
     PlanDeferredItem,
     PlanResult,
@@ -300,14 +300,14 @@ class TestReportFormatFunctions:
     """format_summary and format_report_json must be built from the same RunReport."""
 
     def _make_report(self, run_dir: Path) -> RunReport:
-        from getstuffdone.report import build_report
+        from jumar.report import build_report
 
         return build_report(run_dir)
 
     def test_format_report_json_parses(self, tmp_path: Path) -> None:
         run_dir = _make_run_dir(tmp_path)
         _make_clean_journal(run_dir)
-        from getstuffdone.report import build_report
+        from jumar.report import build_report
 
         report = build_report(run_dir)
         doc = json.loads(format_report_json(report))
@@ -319,7 +319,7 @@ class TestReportFormatFunctions:
         """Both renderers use the same RunReport object."""
         run_dir = _make_run_dir(tmp_path)
         _make_clean_journal(run_dir)
-        from getstuffdone.report import build_report
+        from jumar.report import build_report
 
         report = build_report(run_dir)
         summary = format_summary(report)
@@ -333,7 +333,7 @@ class TestReportFormatFunctions:
     def test_format_report_json_failed_run(self, tmp_path: Path) -> None:
         run_dir = _make_run_dir(tmp_path)
         _make_failed_journal(run_dir)
-        from getstuffdone.report import build_report
+        from jumar.report import build_report
 
         report = build_report(run_dir)
         doc = json.loads(format_report_json(report))
@@ -345,7 +345,7 @@ class TestReportFormatFunctions:
     def test_format_report_json_subtasks(self, tmp_path: Path) -> None:
         run_dir = _make_run_dir(tmp_path)
         _make_clean_journal(run_dir)
-        from getstuffdone.report import build_report
+        from jumar.report import build_report
 
         report = build_report(run_dir)
         doc = json.loads(format_report_json(report))
@@ -357,7 +357,7 @@ class TestReportFormatFunctions:
 
 
 # ---------------------------------------------------------------------------
-# CLI integration: gsd plan --dry-run --json
+# CLI integration: jumar plan --dry-run --json
 # ---------------------------------------------------------------------------
 
 
@@ -459,7 +459,7 @@ class TestPlanJsonCLI:
 
 
 # ---------------------------------------------------------------------------
-# CLI integration: gsd report --json
+# CLI integration: jumar report --json
 # ---------------------------------------------------------------------------
 
 

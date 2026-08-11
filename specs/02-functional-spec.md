@@ -30,7 +30,7 @@ defines the machine-readable (`--json`) output contract.
 
 ## Stage 1 — Ingest
 
-**Where it lives:** `src/getstuffdone/ingest.py`
+**Where it lives:** `src/jumar/ingest.py`
 
 **Behaviour & contract**
 
@@ -94,7 +94,7 @@ Markdown task list items into `TodoItem` records.
 
 ## Stage 2 — Select
 
-**Where it lives:** `src/getstuffdone/select.py`
+**Where it lives:** `src/jumar/select.py`
 
 **Behaviour & contract**
 
@@ -169,7 +169,7 @@ loosens a check, or skips verification.
 
 ## Stage 3 — Decompose
 
-**Where it lives:** `src/getstuffdone/decompose.py`
+**Where it lives:** `src/jumar/decompose.py`
 
 **Behaviour & contract**
 
@@ -235,7 +235,7 @@ Hard rules enforced by the code, not by the prompt:
 
 ## Stage 4 — Gate
 
-**Where it lives:** `src/getstuffdone/gate.py`
+**Where it lives:** `src/jumar/gate.py`
 
 **Behaviour & contract**
 
@@ -273,7 +273,7 @@ the capability.
 
 ## Stage 5 — Execute one subtask
 
-**Where it lives:** `src/getstuffdone/execute.py`
+**Where it lives:** `src/jumar/execute.py`
 
 **Behaviour & contract**
 
@@ -317,7 +317,7 @@ is never contaminated by progress.
 
 ## Stage 6 — Verify
 
-**Where it lives:** `src/getstuffdone/verify/` (one module per check kind, plus
+**Where it lives:** `src/jumar/verify/` (one module per check kind, plus
 a registry)
 
 **Behaviour & contract**
@@ -379,7 +379,7 @@ Rules:
 
 ## Stage 7 — Repair (bounded)
 
-**Where it lives:** `src/getstuffdone/repair.py`
+**Where it lives:** `src/jumar/repair.py`
 
 **Behaviour & contract**
 
@@ -406,7 +406,7 @@ run moves to the next eligible item (or halts entirely under `--halt-on-fail`).
 
 ## Stage 8 — Complete item
 
-**Where it lives:** `src/getstuffdone/complete.py`
+**Where it lives:** `src/jumar/complete.py`
 
 **Behaviour & contract**
 
@@ -464,7 +464,7 @@ the token), never an automatic one.
 
 ## Stage 9 — Report
 
-**Where it lives:** `src/getstuffdone/report.py`
+**Where it lives:** `src/jumar/report.py`
 
 **Behaviour & contract**
 
@@ -496,19 +496,19 @@ nothing to do is a success, and must not page anyone.
 
 ## Stage 10 — Scheduled runs
 
-**Where it lives:** `src/getstuffdone/schedule.py`
+**Where it lives:** `src/jumar/schedule.py`
 
 **Behaviour & contract**
 
-Installs, lists, and removes a recurring invocation of `gsd run` in the
-**operating system's own scheduler**. GetStuffDone does not stay resident; it is
+Installs, lists, and removes a recurring invocation of `jumar run` in the
+**operating system's own scheduler**. Jumar does not stay resident; it is
 started by cron/launchd/systemd like any other command and exits.
 
 ```
-gsd schedule add "0 9 * * 1-5" --todo ~/todo.md   # weekdays 09:00 local
-gsd schedule list
-gsd schedule remove <schedule-id>
-gsd schedule show                                  # print the entry, install nothing
+jumar schedule add "0 9 * * 1-5" --todo ~/todo.md   # weekdays 09:00 local
+jumar schedule list
+jumar schedule remove <schedule-id>
+jumar schedule show                                  # print the entry, install nothing
 ```
 
 Contract:
@@ -520,11 +520,11 @@ Contract:
   macOS, `systemd --user` timer where available and preferred. The backend is
   selected automatically and overridable in config.
 - **Owned entries only.** Entries are delimited by a
-  `# >>> gsd <schedule-id> >>>` / `# <<< gsd <schedule-id> <<<` block (or the
+  `# >>> jumar <schedule-id> >>>` / `# <<< jumar <schedule-id> <<<` block (or the
   equivalent per backend). `remove` only ever deletes inside its own block, and
   a `list`/`remove` never rewrites a line it did not author. The user's existing
-  crontab is not GetStuffDone's to reformat.
-- **Absolute everything.** The installed command uses the absolute `gsd` path,
+  crontab is not Jumar's to reformat.
+- **Absolute everything.** The installed command uses the absolute `jumar` path,
   an absolute `--todo` path, an absolute config path, and `cd`s nowhere
   implicitly — a scheduler's environment is not a login shell's.
 - **Always non-interactive.** The installed command carries
@@ -536,7 +536,7 @@ Contract:
   gone) is reclaimed with a journalled note.
 - **Output goes to the journal, not to mail.** Scheduled runs write
   `runs/<run-id>/` as usual; the installed entry redirects stdout/stderr to a
-  log path under the run directory. GetStuffDone sends nothing outward.
+  log path under the run directory. Jumar sends nothing outward.
 
 Timezone: cron expressions are interpreted in the **local** zone by the backend.
 The resolved zone is recorded with the schedule and printed on `add`, because a
@@ -547,10 +547,10 @@ half the year.
 
 - AC10.1 `schedule add --dry-run` prints the exact entry and installs nothing —
   asserted against a fake backend that fails the test if it is written to.
-- AC10.2 An installed entry is wrapped in its `gsd <schedule-id>` markers, and
+- AC10.2 An installed entry is wrapped in its `jumar <schedule-id>` markers, and
   `remove` deletes only the lines between them, leaving unrelated user entries
   byte-identical.
-- AC10.3 The installed command contains absolute paths for `gsd`, the todo file,
+- AC10.3 The installed command contains absolute paths for `jumar`, the todo file,
   and the config, and carries `--non-interactive`.
 - AC10.4 An invalid cron expression is rejected with a message naming the field,
   and nothing is installed.
@@ -558,7 +558,7 @@ half the year.
   dispatches no agent call.
 - AC10.6 A stale lock (recorded PID not running) is reclaimed, the reclaim is
   journalled, and the run proceeds.
-- AC10.7 `schedule list` reports only gsd-owned entries, with their id, cron
+- AC10.7 `schedule list` reports only jumar-owned entries, with their id, cron
   expression, resolved timezone, and target todo path.
 - AC10.8 Removing an id that does not exist is a clean non-zero error that
   modifies nothing.
@@ -568,20 +568,20 @@ half the year.
 **Known gaps**
 
 - No Windows Task Scheduler backend in v1.
-- The scheduler is not consulted at run time: `gsd run` behaves identically
+- The scheduler is not consulted at run time: `jumar run` behaves identically
   whether a human or cron started it. That is deliberate — one code path.
 
 ---
 
 ## Stage 11 — Status & machine-readable output
 
-**Where it lives:** `src/getstuffdone/status.py` (`gsd status`); the `--json`
-flag in `cli.py` / `report.py` (`gsd plan --dry-run`, `gsd run`, `gsd report`,
-`gsd status`)
+**Where it lives:** `src/jumar/status.py` (`jumar status`); the `--json`
+flag in `cli.py` / `report.py` (`jumar plan --dry-run`, `jumar run`, `jumar report`,
+`jumar status`)
 
 **Behaviour & contract**
 
-*`gsd status`* answers "where is everything?" without opening twelve journals:
+*`jumar status`* answers "where is everything?" without opening twelve journals:
 one line per todo item, aggregated from the todo file **and every run journal**
 in the runs directory.
 
@@ -596,14 +596,14 @@ in the runs directory.
   description and check kind — the same "which subtask, which check" contract
   as stage 9, one level up.
 
-*`--json`* (on `gsd plan --dry-run`, `gsd run`, and `gsd report`) makes stdout
+*`--json`* (on `jumar plan --dry-run`, `jumar run`, and `jumar report`) makes stdout
 a **single JSON document** and nothing else. The schema is the existing
 dataclasses serialised — not a parallel shape maintained by hand. Warnings stay
 on stderr; progress (AC5.6) is suppressed. All timestamps are ISO-8601 UTC.
 
 **Acceptance criteria**
 
-- AC11.1 `gsd status` creates no run directory, appends to no journal, and
+- AC11.1 `jumar status` creates no run directory, appends to no journal, and
   exits 0 — including when the runs directory is empty or absent.
 - AC11.2 Every item in the todo file appears exactly once, with a state drawn
   from `done | parked | deferred | blocked | eligible | never-attempted`.
@@ -617,7 +617,7 @@ on stderr; progress (AC5.6) is suppressed. All timestamps are ISO-8601 UTC.
 
 **Known gaps**
 
-- None. Both gaps previously listed here closed 2026-08-11: `gsd status`
+- None. Both gaps previously listed here closed 2026-08-11: `jumar status`
   gained `--json` (AC11.5, AC11.6), and `runs/index.tsv` now exists as a
   cache for `latest` resolution (journals remain authoritative; a missing or
   corrupt index falls back to a journal scan).
@@ -626,14 +626,14 @@ on stderr; progress (AC5.6) is suppressed. All timestamps are ISO-8601 UTC.
 
 ## Cross-cutting: state & resume
 
-**Where it lives:** `src/getstuffdone/journal.py`
+**Where it lives:** `src/jumar/journal.py`
 
 Every stage transition is appended to `runs/<run-id>/journal.jsonl` **before**
-the next stage begins. `gsd resume <run-id>` replays the journal, restores item
+the next stage begins. `jumar resume <run-id>` replays the journal, restores item
 and subtask status, and continues from the first subtask without a verdict.
 
 By default, resume continues an **interrupted** run only: an item already
-terminal (`done` or `failed`) is reported, not re-executed. `gsd resume
+terminal (`done` or `failed`) is reported, not re-executed. `jumar resume
 <run-id> --retry-failed` reopens a **failed** item — re-entering it at the
 first subtask without a `passed` verdict, replaying (never re-executing) the
 passed ones. The retry appends to the same journal, so the report must take the

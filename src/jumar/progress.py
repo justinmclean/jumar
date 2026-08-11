@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Human-facing run progress, written to stderr.
 
-``gsd run`` is otherwise silent between the gate and the final summary: the
+``jumar run`` is otherwise silent between the gate and the final summary: the
 stages do not print, and the agent subprocess is captured rather than streamed.
 On a long item that is indistinguishable from a hung process.
 

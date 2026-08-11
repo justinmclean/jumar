@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""gsd doctor — runtime sanity checks with actionable messages.
+"""jumar doctor — runtime sanity checks with actionable messages.
 
 Public API
 ----------
@@ -12,7 +12,9 @@ format_report() — render a DoctorReport as a human-readable string
 
 from __future__ import annotations
 
+import contextlib
 import shutil
+import subprocess
 import zoneinfo
 from dataclasses import dataclass
 from enum import StrEnum
@@ -52,13 +54,14 @@ def run_doctor(config: Config) -> DoctorReport:
     checks.extend(_check_allowlist(config))
     checks.append(_check_todo(config))
     checks.append(_check_schedule(config))
+    checks.append(_check_legacy_schedule_markers())
     return DoctorReport(checks=tuple(checks))
 
 
 def format_report(report: DoctorReport) -> str:
     """Render a DoctorReport as a human-readable string."""
     _SYMBOL = {CheckStatus.ok: "ok  ", CheckStatus.warn: "warn", CheckStatus.fail: "FAIL"}
-    lines = ["gsd doctor"]
+    lines = ["jumar doctor"]
     for check in report.checks:
         lines.append(f"  [{_SYMBOL[check.status]}] {check.name}: {check.message}")
     lines.append("")
@@ -84,7 +87,7 @@ def _check_config(config: Config) -> list[DoctorCheck]:
                 "config.max_subtasks",
                 CheckStatus.fail,
                 f"max_subtasks is {config.max_subtasks}; must be >= 1. "
-                "Set max_subtasks in gsd.toml.",
+                "Set max_subtasks in jumar.toml.",
             )
         )
 
@@ -93,7 +96,8 @@ def _check_config(config: Config) -> list[DoctorCheck]:
             DoctorCheck(
                 "config.max_repairs",
                 CheckStatus.fail,
-                f"max_repairs is {config.max_repairs}; must be >= 0. Set max_repairs in gsd.toml.",
+                f"max_repairs is {config.max_repairs}; must be >= 0. "
+                "Set max_repairs in jumar.toml.",
             )
         )
 
@@ -103,7 +107,7 @@ def _check_config(config: Config) -> list[DoctorCheck]:
                 "config.subtask_timeout_s",
                 CheckStatus.fail,
                 f"subtask_timeout_s is {config.subtask_timeout_s}; must be >= 1. "
-                "Set subtask_timeout_s in gsd.toml.",
+                "Set subtask_timeout_s in jumar.toml.",
             )
         )
 
@@ -115,7 +119,7 @@ def _check_config(config: Config) -> list[DoctorCheck]:
                 "config.timezone",
                 CheckStatus.fail,
                 f"Unknown timezone {config.timezone!r}. "
-                "Set timezone to a valid IANA name (e.g. 'America/New_York') in gsd.toml.",
+                "Set timezone to a valid IANA name (e.g. 'America/New_York') in jumar.toml.",
             )
         )
 
@@ -144,7 +148,7 @@ def _check_harness(config: Config) -> DoctorCheck:
         "harness",
         CheckStatus.fail,
         f"Harness binary '{agent_bin}' not found on PATH. "
-        'Install it or set [harness] agent = "<name>" in gsd.toml.',
+        'Install it or set [harness] agent = "<name>" in jumar.toml.',
     )
 
 
@@ -162,7 +166,7 @@ def _check_allowlist(config: Config) -> list[DoctorCheck]:
                 "allowlist.overlap",
                 CheckStatus.warn,
                 f"Commands in both allow and deny (deny wins, never dispatched): {names}. "
-                "Remove them from one list in gsd.toml [commands].",
+                "Remove them from one list in jumar.toml [commands].",
             )
         )
 
@@ -172,7 +176,7 @@ def _check_allowlist(config: Config) -> list[DoctorCheck]:
                 "allowlist.empty",
                 CheckStatus.fail,
                 "Allow list is empty — no commands can be dispatched by subtasks. "
-                "Add entries under [commands] allow in gsd.toml.",
+                "Add entries under [commands] allow in jumar.toml.",
             )
         )
 
@@ -197,7 +201,7 @@ def _check_todo(config: Config) -> DoctorCheck:
         return DoctorCheck(
             "todo",
             CheckStatus.fail,
-            f"Todo file not found at '{todo_path}'. Create it or set todo_path in gsd.toml.",
+            f"Todo file not found at '{todo_path}'. Create it or set todo_path in jumar.toml.",
         )
 
     try:
@@ -235,7 +239,7 @@ def _check_schedule(config: Config) -> DoctorCheck:
         return DoctorCheck(
             "schedule",
             CheckStatus.warn,
-            "Schedule module not available. Run 'gsd schedule add <cron>' to install one.",
+            "Schedule module not available. Run 'jumar schedule add <cron>' to install one.",
         )
     except Exception as exc:  # noqa: BLE001
         return DoctorCheck(
@@ -249,7 +253,7 @@ def _check_schedule(config: Config) -> DoctorCheck:
         return DoctorCheck(
             "schedule",
             CheckStatus.warn,
-            "No gsd schedule entries installed. Run 'gsd schedule add <cron>' to install one.",
+            "No jumar schedule entries installed. Run 'jumar schedule add <cron>' to install one.",
         )
 
     return DoctorCheck(
@@ -257,3 +261,62 @@ def _check_schedule(config: Config) -> DoctorCheck:
         CheckStatus.ok,
         f"{len(entries)} schedule entry(ies) installed.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Legacy (pre-rename) schedule markers
+# ---------------------------------------------------------------------------
+
+# Markers written by the tool before the rename to jumar. Entries carrying
+# them are invisible to the new binary: it must never rewrite entries it did
+# not author (AGENTS.md), so it can only detect and name them.
+_LEGACY_CRON_MARKER = "# gsd-meta: "  # legacy-name-ok
+_LEGACY_LAUNCHD_GLOB = "com.gsd.*.plist"  # legacy-name-ok
+
+
+def _legacy_marker_findings(crontab_text: str, plist_names: list[str]) -> list[str]:
+    """Return human-readable findings for pre-rename schedule entries."""
+    findings: list[str] = []
+    n_cron = sum(1 for line in crontab_text.splitlines() if line.startswith(_LEGACY_CRON_MARKER))
+    if n_cron:
+        findings.append(
+            f"{n_cron} crontab entry(ies) with the pre-rename marker {_LEGACY_CRON_MARKER!r}"
+        )
+    if plist_names:
+        findings.append(
+            f"{len(plist_names)} launchd agent(s) with the pre-rename label: "
+            + ", ".join(sorted(plist_names))
+        )
+    return findings
+
+
+def _check_legacy_schedule_markers() -> DoctorCheck:
+    """Warn about schedule entries installed under the pre-rename name.
+
+    The new binary does not manage them (and must not rewrite entries it did
+    not author). They keep firing the old command until removed by hand.
+    """
+    crontab_text = ""
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, shell=False, timeout=10
+        )
+        if result.returncode == 0:
+            crontab_text = result.stdout
+
+    plist_names: list[str] = []
+    agents_dir = Path.home() / "Library" / "LaunchAgents"
+    with contextlib.suppress(OSError):
+        plist_names = [p.name for p in agents_dir.glob(_LEGACY_LAUNCHD_GLOB)]
+
+    findings = _legacy_marker_findings(crontab_text, plist_names)
+    if findings:
+        return DoctorCheck(
+            "legacy-schedule",
+            CheckStatus.warn,
+            "Pre-rename schedule entries found — the new binary does not manage them: "
+            + "; ".join(findings)
+            + ". Remove them by hand (crontab -e / rm the plist) and reinstall with "
+            "'jumar schedule add'.",
+        )
+    return DoctorCheck("legacy-schedule", CheckStatus.ok, "No pre-rename schedule entries found.")

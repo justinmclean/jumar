@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.config import Config
-from getstuffdone.ingest import IngestError, IngestResult, ingest
-from getstuffdone.models import ItemStatus, RecurUnit
+from jumar.config import Config
+from jumar.ingest import IngestError, IngestResult, ingest
+from jumar.models import ItemStatus, RecurUnit
 
 # ---------------------------------------------------------------------------
 # Helpers

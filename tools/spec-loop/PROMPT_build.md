@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-You are running the **build** beat of the spec-driven loop for GetStuffDone.
+You are running the **build** beat of the spec-driven loop for Jumar.
 Implement exactly ONE work item, on its OWN branch.
 
 Context to load first:
@@ -29,7 +29,7 @@ Steps:
    `git checkout -b <slug>`, where `<slug>` is the work item's bare branch slug
    (no `spec/` or other prefix, e.g. `ingest-markdown-todos`). NEVER commit work
    to the integration base. One branch per work item.
-4. Read only the relevant `specs/*.md` file(s) plus the `src/getstuffdone/` and
+4. Read only the relevant `specs/*.md` file(s) plus the `src/jumar/` and
    `tests/` files the item touches. Confirm what already exists before writing —
    do not assume.
 5. Implement the work item **completely** — no placeholders, no stubs, no
@@ -76,4 +76,4 @@ Rules:
   (`specs/04-technical-plan.md` §Phases). Execute and verify land together.
 - Never commit secrets. No API keys in the repo — env or a git-ignored `.env`.
 - Single source of truth — no duplicate logic; extend existing modules under
-  `src/getstuffdone/`.
+  `src/jumar/`.

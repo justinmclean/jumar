@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage 10 — Run scheduling.
 
-Installs, lists, and removes a recurring ``gsd run`` invocation in the
+Installs, lists, and removes a recurring ``jumar run`` invocation in the
 operating system's own scheduler (cron or launchd).
 
 Public API
@@ -13,8 +13,8 @@ CronBackend         – reads/writes via ``crontab -l`` / ``crontab -``.
 LaunchdBackend      – reads/writes ``~/Library/LaunchAgents/`` plist files.
 default_backend()   – platform-appropriate backend.
 add_schedule()      – validate, print, and (unless dry-run) install.
-list_schedules()    – return all gsd-owned entries from the backend.
-remove_schedule()   – delete the gsd block for one schedule id.
+list_schedules()    – return all jumar-owned entries from the backend.
+remove_schedule()   – delete the jumar block for one schedule id.
 show_entry()        – format the entry string without writing it.
 """
 
@@ -44,7 +44,7 @@ class ScheduleEntry:
     schedule_id: str
     cron_expr: str
     todo_path: str
-    gsd_path: str
+    jumar_path: str
     config_path: str | None
     timezone: str
 
@@ -153,21 +153,21 @@ def validate_cron(expr: str) -> None:
 # Cron text block manipulation (pure functions; no I/O)
 # ---------------------------------------------------------------------------
 
-_META_PREFIX = "# gsd-meta: "
-_OPEN_PAT = re.compile(r"^# >>> gsd (\S+) >>>$")
+_META_PREFIX = "# jumar-meta: "
+_OPEN_PAT = re.compile(r"^# >>> jumar (\S+) >>>$")
 
 
 def _open_marker(sid: str) -> str:
-    return f"# >>> gsd {sid} >>>"
+    return f"# >>> jumar {sid} >>>"
 
 
 def _close_marker(sid: str) -> str:
-    return f"# <<< gsd {sid} <<<"
+    return f"# <<< jumar {sid} <<<"
 
 
 def _build_command(entry: ScheduleEntry) -> list[str]:
-    """Return the argv for the installed gsd run command."""
-    cmd = [entry.gsd_path, "run", "--todo", entry.todo_path, "--non-interactive"]
+    """Return the argv for the installed jumar run command."""
+    cmd = [entry.jumar_path, "run", "--todo", entry.todo_path, "--non-interactive"]
     if entry.config_path:
         cmd += ["--config", entry.config_path]
     return cmd
@@ -195,7 +195,7 @@ def _format_cron_block(entry: ScheduleEntry) -> str:
 
 
 def _insert_block(current_text: str, entry: ScheduleEntry) -> str:
-    """Insert (or replace) the gsd block in crontab text. Returns new text."""
+    """Insert (or replace) the jumar block in crontab text. Returns new text."""
     # Remove any existing block for this id first.
     text, _ = _remove_block(current_text, entry.schedule_id)
     if text and not text.endswith("\n"):
@@ -205,7 +205,7 @@ def _insert_block(current_text: str, entry: ScheduleEntry) -> str:
 
 
 def _remove_block(current_text: str, schedule_id: str) -> tuple[str, bool]:
-    """Remove the gsd block for schedule_id from crontab text.
+    """Remove the jumar block for schedule_id from crontab text.
 
     Returns ``(new_text, was_found)``.
     """
@@ -230,7 +230,7 @@ def _remove_block(current_text: str, schedule_id: str) -> tuple[str, bool]:
 
 
 def _parse_blocks(text: str) -> list[ScheduleEntry]:
-    """Extract all gsd-owned entries from crontab text."""
+    """Extract all jumar-owned entries from crontab text."""
     entries: list[ScheduleEntry] = []
     lines = text.splitlines()
     i = 0
@@ -240,7 +240,7 @@ def _parse_blocks(text: str) -> list[ScheduleEntry]:
             sid = m.group(1)
             meta_data: dict[str, Any] = {}
             cron_expr = ""
-            gsd_path = ""
+            jumar_path = ""
             close = _close_marker(sid)
             j = i + 1
             while j < len(lines) and lines[j] != close:
@@ -252,14 +252,14 @@ def _parse_blocks(text: str) -> list[ScheduleEntry]:
                     parts = lines[j].split()
                     if len(parts) >= 6:
                         cron_expr = " ".join(parts[:5])
-                        gsd_path = parts[5]
+                        jumar_path = parts[5]
                 j += 1
             entries.append(
                 ScheduleEntry(
                     schedule_id=str(meta_data.get("schedule_id", sid)),
                     cron_expr=str(meta_data.get("cron_expr", cron_expr)),
                     todo_path=str(meta_data.get("todo_path", "")),
-                    gsd_path=gsd_path,
+                    jumar_path=jumar_path,
                     config_path=None,
                     timezone=str(meta_data.get("tz", "UTC")),
                 )
@@ -448,13 +448,13 @@ class LaunchdBackend:
         return "launchd"
 
     def _plist_path(self, schedule_id: str) -> Path:
-        return self._dir / f"com.gsd.{schedule_id}.plist"
+        return self._dir / f"com.jumar.{schedule_id}.plist"
 
     def add_entry(self, entry: ScheduleEntry) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
         sci = _cron_to_launchd_sci(entry.cron_expr)
         plist_data: dict[str, Any] = {
-            "Label": f"com.gsd.{entry.schedule_id}",
+            "Label": f"com.jumar.{entry.schedule_id}",
             "ProgramArguments": _build_command(entry),
             "StartCalendarInterval": sci,
             # Metadata stored for list/remove/show.
@@ -472,7 +472,7 @@ class LaunchdBackend:
         if not self._dir.is_dir():
             return []
         entries: list[ScheduleEntry] = []
-        for plist_path in sorted(self._dir.glob("com.gsd.*.plist")):
+        for plist_path in sorted(self._dir.glob("com.jumar.*.plist")):
             try:
                 with plist_path.open("rb") as fh:
                     data: dict[str, Any] = plistlib.load(fh)
@@ -483,7 +483,7 @@ class LaunchdBackend:
                         schedule_id=env.get("GSD_SCHEDULE_ID", ""),
                         cron_expr=env.get("GSD_CRON_EXPR", ""),
                         todo_path=env.get("GSD_TODO_PATH", ""),
-                        gsd_path=argv[0] if argv else "",
+                        jumar_path=argv[0] if argv else "",
                         config_path=None,
                         timezone=env.get("GSD_TIMEZONE", "UTC"),
                     )
@@ -518,9 +518,9 @@ def default_backend(override: str | None = None) -> CronBackend | LaunchdBackend
 # ---------------------------------------------------------------------------
 
 
-def _gsd_executable() -> str:
-    """Return the absolute path to the gsd executable on PATH, or sys.argv[0]."""
-    found = shutil.which("gsd")
+def _jumar_executable() -> str:
+    """Return the absolute path to the jumar executable on PATH, or sys.argv[0]."""
+    found = shutil.which("jumar")
     if found:
         return str(Path(found).resolve())
     return str(Path(sys.argv[0]).resolve())
@@ -551,7 +551,7 @@ def add_schedule(
     config_path: str | Path | None = None,
     timezone: str = "UTC",
     backend: Backend | None = None,
-    gsd_path: str | None = None,
+    jumar_path: str | None = None,
     dry_run: bool = False,
     schedule_id: str | None = None,
 ) -> ScheduleEntry:
@@ -568,7 +568,7 @@ def add_schedule(
         schedule_id=sid,
         cron_expr=cron_expr,
         todo_path=str(Path(todo_path).resolve()),
-        gsd_path=gsd_path or _gsd_executable(),
+        jumar_path=jumar_path or _jumar_executable(),
         config_path=str(Path(config_path).resolve()) if config_path else None,
         timezone=timezone,
     )
@@ -583,7 +583,7 @@ def add_schedule(
 
 
 def list_schedules(backend: Backend | None = None) -> list[ScheduleEntry]:
-    """Return all gsd-owned schedule entries (AC10.7)."""
+    """Return all jumar-owned schedule entries (AC10.7)."""
     b: Backend = backend or default_backend()
     return b.list_entries()
 

@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from getstuffdone.models import ItemStatus, TodoItem
+from jumar.models import ItemStatus, TodoItem
 
 # ---------------------------------------------------------------------------
 # Public types

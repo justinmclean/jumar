@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.config import (
+from jumar.config import (
     Capability,
     CommandPolicy,
     Config,
@@ -95,26 +95,26 @@ def test_fetchers_are_not_denied(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_config — from gsd.toml
+# load_config — from jumar.toml
 # ---------------------------------------------------------------------------
 
 
-def test_load_todo_path_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_todo_path_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd]
+        [jumar]
         todo_path = "work.md"
     """,
     )
     assert load_config(tmp_path).todo_path == "work.md"
 
 
-def test_load_numeric_fields_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_numeric_fields_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd]
+        [jumar]
         max_subtasks = 5
         max_repairs = 1
         subtask_timeout_s = 300
@@ -128,11 +128,11 @@ def test_load_numeric_fields_from_gsd_toml(tmp_path: Path) -> None:
     assert cfg.evidence_head_bytes == 2000
 
 
-def test_load_bool_fields_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_bool_fields_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd]
+        [jumar]
         halt_on_fail = true
         commit_on_complete = true
     """,
@@ -142,11 +142,11 @@ def test_load_bool_fields_from_gsd_toml(tmp_path: Path) -> None:
     assert cfg.commit_on_complete is True
 
 
-def test_load_capabilities_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_capabilities_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd]
+        [jumar]
         capabilities = ["read_fs", "network"]
     """,
     )
@@ -154,11 +154,11 @@ def test_load_capabilities_from_gsd_toml(tmp_path: Path) -> None:
     assert cfg.capabilities == frozenset({Capability.read_fs, Capability.network})
 
 
-def test_load_harness_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_harness_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd.harness]
+        [jumar.harness]
         agent = "gemini"
         model = "flash"
     """,
@@ -168,11 +168,11 @@ def test_load_harness_from_gsd_toml(tmp_path: Path) -> None:
     assert h.model == "flash"
 
 
-def test_load_commands_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_commands_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd.commands]
+        [jumar.commands]
         allow = ["python3", "make"]
         deny = ["curl"]
     """,
@@ -182,11 +182,11 @@ def test_load_commands_from_gsd_toml(tmp_path: Path) -> None:
     assert c.deny == ("curl",)
 
 
-def test_unset_fields_keep_defaults_with_gsd_toml(tmp_path: Path) -> None:
+def test_unset_fields_keep_defaults_with_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd]
+        [jumar]
         todo_path = "tasks.md"
     """,
     )
@@ -195,7 +195,7 @@ def test_unset_fields_keep_defaults_with_gsd_toml(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_config — from pyproject.toml [tool.gsd]
+# load_config — from pyproject.toml [tool.jumar]
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +206,7 @@ def test_load_from_pyproject_toml(tmp_path: Path) -> None:
         [project]
         name = "myproject"
 
-        [tool.gsd]
+        [tool.jumar]
         todo_path = "tasks.md"
         max_repairs = 3
     """,
@@ -217,7 +217,7 @@ def test_load_from_pyproject_toml(tmp_path: Path) -> None:
     assert cfg.max_subtasks == 12  # default preserved
 
 
-def test_pyproject_without_tool_gsd_uses_defaults(tmp_path: Path) -> None:
+def test_pyproject_without_tool_jumar_uses_defaults(tmp_path: Path) -> None:
     _write(
         tmp_path / "pyproject.toml",
         """\
@@ -233,14 +233,14 @@ def test_pyproject_without_tool_gsd_uses_defaults(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gsd_toml_wins_over_pyproject(tmp_path: Path) -> None:
-    _write(tmp_path / "gsd.toml", '[gsd]\ntodo_path = "from_gsd.md"\n')
-    _write(tmp_path / "pyproject.toml", '[tool.gsd]\ntodo_path = "from_pyproject.md"\n')
-    assert load_config(tmp_path).todo_path == "from_gsd.md"
+def test_jumar_toml_wins_over_pyproject(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", '[jumar]\ntodo_path = "from_jumar.md"\n')
+    _write(tmp_path / "pyproject.toml", '[tool.jumar]\ntodo_path = "from_pyproject.md"\n')
+    assert load_config(tmp_path).todo_path == "from_jumar.md"
 
 
 def test_cli_overrides_win_over_file(tmp_path: Path) -> None:
-    _write(tmp_path / "gsd.toml", "[gsd]\nmax_subtasks = 5\n")
+    _write(tmp_path / "jumar.toml", "[jumar]\nmax_subtasks = 5\n")
     cfg = load_config(tmp_path, cli_overrides={"max_subtasks": 20})
     assert cfg.max_subtasks == 20
 
@@ -328,19 +328,19 @@ def test_for_stage_result_has_no_per_stage_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_config — per-stage harness override from gsd.toml
+# load_config — per-stage harness override from jumar.toml
 # ---------------------------------------------------------------------------
 
 
-def test_load_harness_stage_override_from_gsd_toml(tmp_path: Path) -> None:
+def test_load_harness_stage_override_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd.harness]
+        [jumar.harness]
         agent = "claude"
         model = "sonnet"
 
-        [gsd.harness.decompose]
+        [jumar.harness.decompose]
         model = "opus"
     """,
     )
@@ -354,9 +354,9 @@ def test_load_harness_stage_override_from_gsd_toml(tmp_path: Path) -> None:
 
 def test_load_harness_stage_override_only_agent(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd.harness.judge]
+        [jumar.harness.judge]
         agent = "gemini"
     """,
     )
@@ -370,9 +370,9 @@ def test_load_harness_stage_override_only_agent(tmp_path: Path) -> None:
 def test_unknown_harness_stage_key_is_startup_error(tmp_path: Path) -> None:
     """A typo in a stage name must raise, not silently ignore the override."""
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd.harness.ingest]
+        [jumar.harness.ingest]
         model = "opus"
     """,
     )
@@ -382,9 +382,9 @@ def test_unknown_harness_stage_key_is_startup_error(tmp_path: Path) -> None:
 
 def test_unknown_key_inside_stage_table_is_error(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd.harness.decompose]
+        [jumar.harness.decompose]
         model = "opus"
         temperature = 0.5
     """,
@@ -566,11 +566,11 @@ def test_allow_unrestricted_harness_defaults_false(tmp_path: Path) -> None:
     assert load_config(tmp_path).allow_unrestricted_harness is False
 
 
-def test_allow_unrestricted_harness_loaded_from_gsd_toml(tmp_path: Path) -> None:
+def test_allow_unrestricted_harness_loaded_from_jumar_toml(tmp_path: Path) -> None:
     _write(
-        tmp_path / "gsd.toml",
+        tmp_path / "jumar.toml",
         """\
-        [gsd]
+        [jumar]
         allow_unrestricted_harness = true
     """,
     )

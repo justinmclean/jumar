@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Append-only run journal for GetStuffDone.
+"""Append-only run journal for Jumar.
 
 Public API
 ----------
@@ -88,7 +88,7 @@ class ReplayState:
 
 
 class Journal:
-    """Append-only journal for one gsd run.
+    """Append-only journal for one jumar run.
 
     Each :meth:`append` call adds exactly one JSON line to the file.
     ``seq`` strictly increases within a run: the counter is seeded from the

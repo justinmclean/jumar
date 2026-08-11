@@ -23,10 +23,10 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.journal import Journal
-from getstuffdone.models import Check, CheckKind, Verdict
-from getstuffdone.verify import VerifyContext, _registry, run_verify
-from getstuffdone.verify.file import verify_absence, verify_file
+from jumar.journal import Journal
+from jumar.models import Check, CheckKind, Verdict
+from jumar.verify import VerifyContext, _registry, run_verify
+from jumar.verify.file import verify_absence, verify_file
 
 # ---------------------------------------------------------------------------
 # Helpers

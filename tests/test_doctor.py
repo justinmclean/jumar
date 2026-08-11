@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for gsd doctor checks (src/getstuffdone/doctor.py)."""
+"""Tests for jumar doctor checks (src/jumar/doctor.py)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.config import CommandPolicy, Config, HarnessConfig
-from getstuffdone.doctor import (
+from jumar.config import CommandPolicy, Config, HarnessConfig
+from jumar.doctor import (
     CheckStatus,
     DoctorCheck,
     DoctorReport,
@@ -107,16 +107,16 @@ def test_harness_found_on_path() -> None:
 
 
 def test_harness_not_found_on_path() -> None:
-    config = _cfg(harness=HarnessConfig(agent="no-such-gsd-binary-zzz", model=""))
+    config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
     report = run_doctor(config)
     check = _find(report, "harness")
     assert check.status == CheckStatus.fail
-    assert "no-such-gsd-binary-zzz" in check.message
+    assert "no-such-jumar-binary-zzz" in check.message
     assert "PATH" in check.message
 
 
 def test_harness_fail_contributes_to_exit_status() -> None:
-    config = _cfg(harness=HarnessConfig(agent="no-such-gsd-binary-zzz", model=""))
+    config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
     report = run_doctor(config)
     assert report.exit_status == 1
 
@@ -242,7 +242,7 @@ def test_schedule_module_absent_is_warn(monkeypatch: pytest.MonkeyPatch) -> None
     real_import = builtins.__import__
 
     def fake_import(name: str, *args: object, **kwargs: object) -> object:
-        if name == "getstuffdone.schedule":
+        if name == "jumar.schedule":
             raise ImportError("schedule not available")
         return real_import(name, *args, **kwargs)
 
@@ -252,7 +252,7 @@ def test_schedule_module_absent_is_warn(monkeypatch: pytest.MonkeyPatch) -> None
     config = _cfg(todo_path=str(todo))
 
     # Reimport doctor to pick up the monkeypatched import, then call _check_schedule
-    from getstuffdone.doctor import _check_schedule
+    from jumar.doctor import _check_schedule
 
     check = _check_schedule(config)
     assert check.status == CheckStatus.warn
@@ -265,7 +265,7 @@ def test_schedule_module_absent_does_not_fail_run(tmp_path: Path) -> None:
     todo.write_text("- [ ] One task\n")
     config = _cfg(todo_path=str(todo))
 
-    from getstuffdone.doctor import _check_schedule
+    from jumar.doctor import _check_schedule
 
     check = _check_schedule(config)
     # Should be warn (module absent) or ok (if schedule is present and empty)
@@ -301,7 +301,7 @@ def test_format_report_contains_check_names(tmp_path: Path) -> None:
     config = _cfg(todo_path=str(todo))
     report = run_doctor(config)
     text = format_report(report)
-    assert "gsd doctor" in text
+    assert "jumar doctor" in text
     assert "todo" in text
     assert "harness" in text
 
@@ -333,7 +333,7 @@ def test_cli_doctor_exits_nonzero_on_missing_todo(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     rc = main(["doctor", "--todo", str(tmp_path / "no_such.md")])
     assert rc == 1
@@ -350,21 +350,79 @@ def test_cli_doctor_exits_zero_with_valid_setup(
     todo = tmp_path / "todo.md"
     todo.write_text("- [ ] Write tests\n")
 
-    # Write a gsd.toml that uses python3 as the harness (guaranteed on PATH).
-    (tmp_path / "gsd.toml").write_text(
-        '[gsd]\ntodo_path = "todo.md"\n\n[gsd.harness]\nagent = "python3"\nmodel = ""\n'
+    # Write a jumar.toml that uses python3 as the harness (guaranteed on PATH).
+    (tmp_path / "jumar.toml").write_text(
+        '[jumar]\ntodo_path = "todo.md"\n\n[jumar.harness]\nagent = "python3"\nmodel = ""\n'
     )
 
-    from getstuffdone.cli import main
+    from jumar.cli import main
 
     rc = main(["doctor", "--todo", str(todo)])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "gsd doctor" in out
+    assert "jumar doctor" in out
 
 
 def test_cli_doctor_subcommand_is_known() -> None:
-    from getstuffdone.cli import build_parser
+    from jumar.cli import build_parser
 
     args = build_parser().parse_args(["doctor"])
     assert args.command == "doctor"
+
+
+# ---------------------------------------------------------------------------
+# Legacy (pre-rename) schedule markers
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_findings_empty_when_clean() -> None:
+    from jumar.doctor import _legacy_marker_findings
+
+    assert _legacy_marker_findings("0 9 * * * /usr/bin/true\n", []) == []
+
+
+def test_legacy_findings_reports_cron_marker() -> None:
+    from jumar.doctor import _legacy_marker_findings
+
+    text = '# gsd-meta: {"schedule_id":"abc"}\n0 9 * * * gsd run\n'  # legacy-name-ok
+    findings = _legacy_marker_findings(text, [])
+    assert len(findings) == 1
+    assert "1 crontab entry(ies)" in findings[0]
+
+
+def test_legacy_findings_reports_launchd_plists() -> None:
+    from jumar.doctor import _legacy_marker_findings
+
+    plists = ["com.gsd.abc.plist", "com.gsd.def.plist"]  # legacy-name-ok
+    findings = _legacy_marker_findings("", plists)
+    assert len(findings) == 1
+    assert "2 launchd agent(s)" in findings[0]
+    assert "com.gsd.abc.plist" in findings[0]  # legacy-name-ok
+
+
+def test_legacy_check_warns_on_cron_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jumar import doctor as _doctor
+
+    class _Result:
+        returncode = 0
+        stdout = '# gsd-meta: {"schedule_id":"abc"}\n'  # legacy-name-ok
+
+    monkeypatch.setattr(_doctor.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
+    check = _doctor._check_legacy_schedule_markers()
+    assert check.status is _doctor.CheckStatus.warn
+    assert "Pre-rename" in check.message
+
+
+def test_legacy_check_ok_when_crontab_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jumar import doctor as _doctor
+
+    def _raise(*a: object, **k: object) -> object:
+        raise OSError("no crontab binary")
+
+    monkeypatch.setattr(_doctor.subprocess, "run", _raise)
+    monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
+    check = _doctor._check_legacy_schedule_markers()
+    assert check.status is _doctor.CheckStatus.ok

@@ -16,7 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
-from getstuffdone.models import Recurrence, RecurUnit
+from jumar.models import Recurrence, RecurUnit
 
 # ---------------------------------------------------------------------------
 # Named day-of-week map (3-letter abbreviation → Python weekday number 0=Mon)

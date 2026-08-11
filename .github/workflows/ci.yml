@@ -19,3 +19,9 @@ jobs:
         run: make install
       - name: Run checks
         run: make check
+      - name: Old-name grep gate (post-rename)
+        run: |
+          ! grep -rnE '\bgsd\b|getstuffdone|GetStuffDone' \
+              src tests tools pyproject.toml Makefile \
+            | grep -v 'legacy-name-ok'
+

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for ``gsd run`` and the shared :func:`run_item` orchestration.
+"""Tests for ``jumar run`` and the shared :func:`run_item` orchestration.
 
 ``run`` and ``resume`` share one code path (``run_item``) so the two commands
 cannot drift apart. These tests drive the real pipeline — ingest, select,
@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 
-from getstuffdone import cli
-from getstuffdone.harness import AgentResult
+from jumar import cli
+from jumar.harness import AgentResult
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -163,7 +163,7 @@ def test_run_refuses_approve_with_non_interactive(workspace: Path) -> None:
 
 def test_run_exits_zero_when_another_run_holds_the_lock(workspace: Path) -> None:
     """A live lock is `already_running`, not a failure (AC10.5)."""
-    from getstuffdone.lock import Lock
+    from jumar.lock import Lock
 
     held = Lock(workspace / "todo.md")
     held.acquire(run_id="held-by-another-process")
@@ -326,7 +326,7 @@ def test_retry_failed_reruns_only_the_unverified_subtask(workspace: Path) -> Non
 
     Before this, a failed item could not be resumed at all — `_cmd_resume`
     short-circuited on any terminal state and reprinted the old report, so a
-    run that failed because of a bug in gsd had to be redone in full once the
+    run that failed because of a bug in jumar had to be redone in full once the
     bug was fixed.
     """
     assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1

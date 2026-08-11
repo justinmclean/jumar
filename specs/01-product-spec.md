@@ -67,9 +67,9 @@ team task-management product.
 - **Not** a shared/team task tracker, and **not** a sync client for Jira, Asana,
   Todoist, or similar. The todo list is a local file.
 - **Not** a resident daemon. Scheduling is real (see Goal 6), but it is
-  delegated: `gsd schedule` generates and installs a `cron`/`launchd`/systemd
-  entry that invokes `gsd run`, and the process exits. There is no long-lived
-  GetStuffDone service holding state in memory.
+  delegated: `jumar schedule` generates and installs a `cron`/`launchd`/systemd
+  entry that invokes `jumar run`, and the process exits. There is no long-lived
+  Jumar service holding state in memory.
 - **Not** a calendar. Item scheduling expresses *eligibility* ("not before
   Monday", "every weekday"), not appointments, invitations, or reminders to a
   human.
@@ -128,7 +128,7 @@ like; 02 says what a test can check.
   skipping verification. Nothing about being late makes unproven work
   acceptable.
 - **Scheduling is delegated, not reinvented.** The operating system already has
-  a reliable scheduler; GetStuffDone writes an entry to it and gets out of the
+  a reliable scheduler; Jumar writes an entry to it and gets out of the
   way.
 - **Config over code.** Adjusting decomposition depth, retry budgets, allowed
   tools, or the verification policy is a config change, not a code change.

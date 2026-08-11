@@ -29,11 +29,11 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.config import Config
-from getstuffdone.models import Check, CheckKind, Verdict
-from getstuffdone.verify import VerifyContext
-from getstuffdone.verify.command import verify_command
-from getstuffdone.verify.file import verify_file
+from jumar.config import Config
+from jumar.models import Check, CheckKind, Verdict
+from jumar.verify import VerifyContext
+from jumar.verify.command import verify_command
+from jumar.verify.file import verify_file
 
 
 def _ctx(tmp_path: Path, **kw: object) -> VerifyContext:

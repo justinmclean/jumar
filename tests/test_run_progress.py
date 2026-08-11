@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for run progress output (stderr) and its suppression rules.
 
-``gsd run`` was silent between the gate and the final summary, which on a long
+``jumar run`` was silent between the gate and the final summary, which on a long
 item is indistinguishable from a hung process. These tests pin the two rules
 that make progress safe to add:
 
@@ -22,9 +22,9 @@ from typing import Any
 
 import pytest
 
-from getstuffdone import cli
-from getstuffdone.harness import AgentResult
-from getstuffdone.progress import Progress
+from jumar import cli
+from jumar.harness import AgentResult
+from jumar.progress import Progress
 
 _PLAN = json.dumps(
     {

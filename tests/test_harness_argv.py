@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.harness import (
+from jumar.harness import (
     SESSION_RESUMABLE_HARNESSES,
     SUPPORTED_HARNESSES,
     AgentResult,
@@ -29,7 +29,7 @@ from getstuffdone.harness import (
     run_agent,
     scrub_env,
 )
-from getstuffdone.models import Capability, HarnessInfo
+from jumar.models import Capability, HarnessInfo
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -674,14 +674,14 @@ def test_agent_result_is_frozen() -> None:
 
 def test_unrestricted_harnesses_does_not_include_claude() -> None:
     """claude is the only harness that can express --disallowedTools."""
-    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+    from jumar.harness import UNRESTRICTED_HARNESSES
 
     assert "claude" not in UNRESTRICTED_HARNESSES
 
 
 def test_unrestricted_harnesses_includes_all_non_claude() -> None:
     """Every harness other than claude is unrestricted."""
-    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+    from jumar.harness import UNRESTRICTED_HARNESSES
 
     non_claude = SUPPORTED_HARNESSES - {"claude"}
     assert non_claude == UNRESTRICTED_HARNESSES
@@ -694,8 +694,8 @@ def test_unrestricted_harnesses_includes_all_non_claude() -> None:
 
 def test_unrestricted_harness_without_flag_raises_startup_error() -> None:
     """Using codex/cursor/etc. without allow_unrestricted_harness is a startup error."""
-    from getstuffdone.gate import GateStartupError, check_harness_policy
-    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+    from jumar.gate import GateStartupError, check_harness_policy
+    from jumar.harness import UNRESTRICTED_HARNESSES
 
     for harness in UNRESTRICTED_HARNESSES:
         with pytest.raises(GateStartupError, match="allow_unrestricted_harness"):
@@ -704,8 +704,8 @@ def test_unrestricted_harness_without_flag_raises_startup_error() -> None:
 
 def test_unrestricted_harness_with_flag_is_permitted() -> None:
     """allow_unrestricted_harness = true clears the gate."""
-    from getstuffdone.gate import check_harness_policy
-    from getstuffdone.harness import UNRESTRICTED_HARNESSES
+    from jumar.gate import check_harness_policy
+    from jumar.harness import UNRESTRICTED_HARNESSES
 
     for harness in UNRESTRICTED_HARNESSES:
         check_harness_policy(harness, allow_unrestricted_harness=True)  # must not raise
@@ -713,14 +713,14 @@ def test_unrestricted_harness_with_flag_is_permitted() -> None:
 
 def test_claude_is_always_permitted() -> None:
     """claude enforces tool-level denials and never requires the flag."""
-    from getstuffdone.gate import check_harness_policy
+    from jumar.gate import check_harness_policy
 
     check_harness_policy("claude", allow_unrestricted_harness=False)  # must not raise
 
 
 def test_check_harness_policy_error_names_the_harness() -> None:
     """The error message must name the offending harness for actionable output."""
-    from getstuffdone.gate import GateStartupError, check_harness_policy
+    from jumar.gate import GateStartupError, check_harness_policy
 
     with pytest.raises(GateStartupError, match="codex"):
         check_harness_policy("codex", allow_unrestricted_harness=False)
@@ -733,14 +733,14 @@ def test_check_harness_policy_error_names_the_harness() -> None:
 
 def test_git_c_push_is_denied_by_is_allowed() -> None:
     """git -C /path push must not bypass the hard-deny via flag interleaving."""
-    from getstuffdone.config import Config, is_allowed
+    from jumar.config import Config, is_allowed
 
     assert is_allowed(["git", "-C", "/repo", "push", "origin", "main"], Config()) is False
 
 
 def test_git_c_non_push_is_still_allowed() -> None:
     """git -C with a non-push subcommand must pass the policy."""
-    from getstuffdone.config import Config, is_allowed
+    from jumar.config import Config, is_allowed
 
     assert is_allowed(["git", "-C", ".", "status"], Config()) is True
 
@@ -823,7 +823,7 @@ def test_claude_always_runs_with_strict_mcp_config() -> None:
     """Both a startup-cost fix and a hole in the send boundary.
 
     Every invocation boots every configured MCP server before reading the
-    prompt, and gsd spawns a fresh agent per subtask. Worse: `config.py` denies
+    prompt, and jumar spawns a fresh agent per subtask. Worse: `config.py` denies
     sendmail/ssh/scp, and an MCP mail server would hand the agent that exact
     capability without appearing in any argv. A boundary an unrelated user
     config can open is not a boundary.
@@ -932,11 +932,11 @@ def test_judge_verifier_runner_called_without_session_id(tmp_path: Path) -> None
             agent_claim="pass",
         )
 
-    from getstuffdone.models import CheckKind, HarnessInfo
-    from getstuffdone.verify import VerifyContext
-    from getstuffdone.verify.judge import verify_judge
+    from jumar.models import CheckKind, HarnessInfo
+    from jumar.verify import VerifyContext
+    from jumar.verify.judge import verify_judge
 
-    check_raw = __import__("getstuffdone.models", fromlist=["Check"]).Check(
+    check_raw = __import__("jumar.models", fromlist=["Check"]).Check(
         kind=CheckKind.judge,
         statement="The output is correct.",
         rationale="No executable check is possible.",

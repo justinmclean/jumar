@@ -72,7 +72,7 @@ def check_harness_policy(harness_name: str, *, allow_unrestricted_harness: bool)
         raise GateStartupError(
             f"Harness {harness_name!r} cannot enforce tool-level denials (git push, gh, "
             "sendmail, etc.) — only 'claude' can express those via --disallowedTools. "
-            "Set allow_unrestricted_harness = true in gsd.toml to acknowledge this and "
+            "Set allow_unrestricted_harness = true in jumar.toml to acknowledge this and "
             "proceed (noting that the container is the actual control — see config.py)."
         )
 

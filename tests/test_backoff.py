@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.backoff import BackoffError, advance_failure_count, clear_failure_count
-from getstuffdone.config import Config
-from getstuffdone.journal import (
+from jumar.backoff import BackoffError, advance_failure_count, clear_failure_count
+from jumar.config import Config
+from jumar.journal import (
     FAILURE_COUNT_ADVANCED,
     FAILURE_COUNT_CLEARED,
     ITEM_PARKED,
@@ -28,9 +28,9 @@ from getstuffdone.journal import (
     RUN_STARTED,
     Journal,
 )
-from getstuffdone.models import Capability, ItemStatus, TodoItem
-from getstuffdone.report import build_report, format_markdown, format_summary, report_exit_status
-from getstuffdone.select import select_next
+from jumar.models import Capability, ItemStatus, TodoItem
+from jumar.report import build_report, format_markdown, format_summary, report_exit_status
+from jumar.select import select_next
 
 # ---------------------------------------------------------------------------
 # Frozen test clock
@@ -497,7 +497,7 @@ def test_parked_item_does_not_affect_exit_status(tmp_path: Path) -> None:
 
 def test_parked_item_listed_alongside_done_items(tmp_path: Path) -> None:
     """A mix of done and parked items: done exits 0, parked is listed."""
-    from getstuffdone.journal import ITEM_COMPLETED, ITEM_SELECTED
+    from jumar.journal import ITEM_COMPLETED, ITEM_SELECTED
 
     run_dir = _make_run_dir(tmp_path)
     journal = Journal(run_dir / "journal.jsonl", run_dir.name)
@@ -531,24 +531,24 @@ def test_parked_item_listed_alongside_done_items(tmp_path: Path) -> None:
 
 def test_config_max_consecutive_failures_default(tmp_path: Path) -> None:
     """max_consecutive_failures defaults to 3."""
-    from getstuffdone.config import load_config
+    from jumar.config import load_config
 
     cfg = load_config(tmp_path)
     assert cfg.max_consecutive_failures == 3
 
 
 def test_config_max_consecutive_failures_from_file(tmp_path: Path) -> None:
-    """max_consecutive_failures can be set in gsd.toml."""
-    from getstuffdone.config import load_config
+    """max_consecutive_failures can be set in jumar.toml."""
+    from jumar.config import load_config
 
-    (tmp_path / "gsd.toml").write_text("[gsd]\nmax_consecutive_failures = 5\n")
+    (tmp_path / "jumar.toml").write_text("[jumar]\nmax_consecutive_failures = 5\n")
     cfg = load_config(tmp_path)
     assert cfg.max_consecutive_failures == 5
 
 
 def test_config_max_consecutive_failures_cli_override(tmp_path: Path) -> None:
     """max_consecutive_failures can be overridden via CLI overrides dict."""
-    from getstuffdone.config import load_config
+    from jumar.config import load_config
 
     cfg = load_config(tmp_path, cli_overrides={"max_consecutive_failures": 1})
     assert cfg.max_consecutive_failures == 1

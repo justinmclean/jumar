@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from getstuffdone import __version__
-from getstuffdone.cli import SUBCOMMANDS, build_parser, main
+from jumar import __version__
+from jumar.cli import SUBCOMMANDS, build_parser, main
 
 
 def test_version_is_set() -> None:

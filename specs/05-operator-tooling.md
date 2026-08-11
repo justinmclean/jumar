@@ -6,9 +6,9 @@ status: done
 
 # 05 — Operator Tooling: the spec loop that builds this repo
 
-This spec is **about the meta-layer, not the product**. GetStuffDone is built by
+This spec is **about the meta-layer, not the product**. Jumar is built by
 the same kind of loop it implements: a spec-driven build loop that reconciles the
-code under `src/getstuffdone/` against the specs in `specs/`.
+code under `src/jumar/` against the specs in `specs/`.
 
 Status is `done` because the loop described here exists at
 `tools/spec-loop/` — it is the bootstrap, and it shipped first, by design.
@@ -79,10 +79,10 @@ prompt assembly + agent launch, unit-testable without an agent):
 
 ## Relationship to the product
 
-`tools/spec-loop/` builds the repo. `src/getstuffdone/` is what gets built. They
+`tools/spec-loop/` builds the repo. `src/jumar/` is what gets built. They
 share ideas — the harness abstraction, the never-push rule, the fixture-tested
 argv — but not code: the loop is bash the human runs, the product is Python the
-human installs. Once the product is complete enough, GetStuffDone can be pointed
+human installs. Once the product is complete enough, Jumar can be pointed
 at its own `IMPLEMENTATION_PLAN.md`; that is a milestone, not a dependency, and
 nothing in the product may assume it.
 

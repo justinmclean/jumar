@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for ``gsd plan --dry-run`` and the clock.py wall-clock discipline."""
+"""Tests for ``jumar plan --dry-run`` and the clock.py wall-clock discipline."""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from getstuffdone.cli import main
+from jumar.cli import main
 
 if TYPE_CHECKING:
-    from getstuffdone.schedule import FakeBackend
+    from jumar.schedule import FakeBackend
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -61,7 +61,7 @@ def todo_with_subtasks(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Happy-path: gsd plan --dry-run
+# Happy-path: jumar plan --dry-run
 # ---------------------------------------------------------------------------
 
 
@@ -195,7 +195,7 @@ def test_plan_dry_run_all_deferred_exits_zero(
 def test_plan_without_dry_run_is_not_yet_implemented(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd plan`` without --dry-run returns 2 (full pipeline not yet built)."""
+    """``jumar plan`` without --dry-run returns 2 (full pipeline not yet built)."""
     rc = main(["plan"])
     assert rc == 2
 
@@ -236,7 +236,7 @@ def test_doctor_runs_its_checks(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd doctor`` executes its checks and reports them.
+    """``jumar doctor`` executes its checks and reports them.
 
     The verdict is environment-dependent (the harness binary may or may not be
     on PATH), so this asserts the command ran and rendered a report rather than
@@ -249,7 +249,7 @@ def test_doctor_runs_its_checks(
     out = capsys.readouterr().out
 
     assert rc in (0, 1)
-    assert out.startswith("gsd doctor")
+    assert out.startswith("jumar doctor")
     for name in ("harness", "todo"):
         assert name in out
 
@@ -280,7 +280,7 @@ def test_clock_is_only_wall_clock_reader() -> None:
     journal.py is explicitly allowed: it stamps audit-log ``ts`` fields.
     Every other module must inject ``now`` from ``clock.capture_now()``.
     """
-    src_dir = Path(__file__).parent.parent / "src" / "getstuffdone"
+    src_dir = Path(__file__).parent.parent / "src" / "jumar"
     allowed: frozenset[str] = frozenset({"clock.py", "journal.py"})
     violators: list[str] = []
 
@@ -302,8 +302,8 @@ def test_clock_is_only_wall_clock_reader() -> None:
 
 
 def test_capture_now_returns_utc() -> None:
-    from getstuffdone.clock import capture_now
-    from getstuffdone.config import load_config
+    from jumar.clock import capture_now
+    from jumar.config import load_config
 
     config = load_config()
     now = capture_now(config)
@@ -313,8 +313,8 @@ def test_capture_now_returns_utc() -> None:
 
 
 def test_capture_now_injectable() -> None:
-    from getstuffdone.clock import capture_now
-    from getstuffdone.config import load_config
+    from jumar.clock import capture_now
+    from jumar.config import load_config
 
     config = load_config()
     fixed = datetime(2026, 8, 7, 10, 0, 0, tzinfo=UTC)
@@ -326,8 +326,8 @@ def test_capture_now_converts_to_utc() -> None:
     """A non-UTC-aware datetime passed as _now is converted to UTC."""
     import zoneinfo
 
-    from getstuffdone.clock import capture_now
-    from getstuffdone.config import load_config
+    from jumar.clock import capture_now
+    from jumar.config import load_config
 
     config = load_config()
     ny = zoneinfo.ZoneInfo("America/New_York")
@@ -339,7 +339,7 @@ def test_capture_now_converts_to_utc() -> None:
 
 
 # ---------------------------------------------------------------------------
-# gsd run subcommand
+# jumar run subcommand
 # ---------------------------------------------------------------------------
 
 
@@ -348,7 +348,7 @@ def test_run_missing_todo_file_returns_1(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd run`` with no todo file is an actionable error, not a traceback."""
+    """``jumar run`` with no todo file is an actionable error, not a traceback."""
     monkeypatch.chdir(tmp_path)
     rc = main(["run"])
     assert rc == 1
@@ -370,7 +370,7 @@ def test_run_dry_run_still_validates_the_todo_file(
 def test_run_approve_non_interactive_startup_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd run --approve --non-interactive`` is refused at startup (AC4.4)."""
+    """``jumar run --approve --non-interactive`` is refused at startup (AC4.4)."""
     rc = main(["run", "--approve", "--non-interactive"])
     assert rc == 2
     err = capsys.readouterr().err
@@ -403,12 +403,12 @@ def test_run_already_running(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd run`` exits 0 with 'already_running' when a live lock file exists."""
+    """``jumar run`` exits 0 with 'already_running' when a live lock file exists."""
     import json
     import os
 
     monkeypatch.chdir(tmp_path)
-    lock_path = tmp_path / ".gsd.lock"
+    lock_path = tmp_path / ".jumar.lock"
     lock_path.write_text(
         json.dumps(
             {
@@ -425,7 +425,7 @@ def test_run_already_running(
 
 
 # ---------------------------------------------------------------------------
-# gsd report subcommand
+# jumar report subcommand
 # ---------------------------------------------------------------------------
 
 
@@ -434,7 +434,7 @@ def test_report_missing_journal_returns_1(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd report <run-id>`` when no journal exists returns 1 with an error."""
+    """``jumar report <run-id>`` when no journal exists returns 1 with an error."""
     monkeypatch.chdir(tmp_path)
     rc = main(["report", "no-such-run-id"])
     assert rc == 1
@@ -447,7 +447,7 @@ def test_report_with_existing_journal(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``gsd report <run-id>`` with a valid journal exits 0 and writes report.md."""
+    """``jumar report <run-id>`` with a valid journal exits 0 and writes report.md."""
     import json
 
     monkeypatch.chdir(tmp_path)
@@ -486,17 +486,17 @@ def test_report_with_existing_journal(
 
 
 # ---------------------------------------------------------------------------
-# gsd schedule subcommand
+# jumar schedule subcommand
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def _fake_backend(monkeypatch: pytest.MonkeyPatch) -> FakeBackend:
     """Patch schedule.default_backend to return a FakeBackend for all CLI tests."""
-    from getstuffdone.schedule import FakeBackend as FB
+    from jumar.schedule import FakeBackend as FB
 
     fake = FB()
-    monkeypatch.setattr("getstuffdone.schedule.default_backend", lambda override=None: fake)
+    monkeypatch.setattr("jumar.schedule.default_backend", lambda override=None: fake)
     return fake
 
 
@@ -507,7 +507,7 @@ class TestScheduleCLI:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``gsd schedule add --dry-run`` prints the entry and exits 0."""
+        """``jumar schedule add --dry-run`` prints the entry and exits 0."""
         monkeypatch.chdir(tmp_path)
         todo = tmp_path / "todo.md"
         todo.write_text("")
@@ -522,13 +522,13 @@ class TestScheduleCLI:
         monkeypatch: pytest.MonkeyPatch,
         _fake_backend: FakeBackend,
     ) -> None:
-        """``gsd schedule add`` installs an entry in the backend."""
+        """``jumar schedule add`` installs an entry in the backend."""
         monkeypatch.chdir(tmp_path)
         todo = tmp_path / "todo.md"
         todo.write_text("")
         rc = main(["schedule", "add", "0 9 * * *", "--todo", str(todo)])
         assert rc == 0
-        from getstuffdone.schedule import list_schedules
+        from jumar.schedule import list_schedules
 
         assert len(list_schedules(_fake_backend)) == 1
 
@@ -555,7 +555,7 @@ class TestScheduleCLI:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``gsd schedule show`` prints the entry without installing."""
+        """``jumar schedule show`` prints the entry without installing."""
         monkeypatch.chdir(tmp_path)
         todo = tmp_path / "todo.md"
         todo.write_text("")
@@ -583,12 +583,12 @@ class TestScheduleCLI:
         _fake_backend: FakeBackend,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``gsd schedule list`` with no entries prints the no-entries message."""
+        """``jumar schedule list`` with no entries prints the no-entries message."""
         monkeypatch.chdir(tmp_path)
         rc = main(["schedule", "list"])
         assert rc == 0
         out = capsys.readouterr().out
-        assert "No gsd-owned" in out
+        assert "No jumar-owned" in out
 
     def test_list_with_entries(
         self,
@@ -597,7 +597,7 @@ class TestScheduleCLI:
         _fake_backend: FakeBackend,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``gsd schedule list`` shows installed entries."""
+        """``jumar schedule list`` shows installed entries."""
         monkeypatch.chdir(tmp_path)
         todo = tmp_path / "todo.md"
         todo.write_text("")
@@ -614,20 +614,20 @@ class TestScheduleCLI:
         _fake_backend: FakeBackend,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``gsd schedule remove <id>`` removes the entry and exits 0."""
+        """``jumar schedule remove <id>`` removes the entry and exits 0."""
         monkeypatch.chdir(tmp_path)
         todo = tmp_path / "todo.md"
         todo.write_text("")
         main(["schedule", "add", "0 9 * * *", "--todo", str(todo), "--dry-run"])
         # Manually install one entry so we can remove it.
-        from getstuffdone.schedule import ScheduleEntry
+        from jumar.schedule import ScheduleEntry
 
         _fake_backend.add_entry(
             ScheduleEntry(
                 schedule_id="testremove",
                 cron_expr="0 9 * * *",
                 todo_path=str(todo),
-                gsd_path="/usr/local/bin/gsd",
+                jumar_path="/usr/local/bin/jumar",
                 config_path=None,
                 timezone="UTC",
             )
@@ -644,7 +644,7 @@ class TestScheduleCLI:
         _fake_backend: FakeBackend,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``gsd schedule remove`` for a missing id returns 1 with an error."""
+        """``jumar schedule remove`` for a missing id returns 1 with an error."""
         monkeypatch.chdir(tmp_path)
         rc = main(["schedule", "remove", "no-such-id"])
         assert rc == 1
@@ -656,7 +656,7 @@ class TestScheduleCLI:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``gsd schedule`` with no subcommand prints help and exits 0."""
+        """``jumar schedule`` with no subcommand prints help and exits 0."""
         monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             main(["schedule"])

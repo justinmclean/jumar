@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Implementation Plan — GetStuffDone
+# Implementation Plan — Jumar (formerly GetStuffDone)
 
 Prioritised **work items** the `build` beat implements one at a time. One work
 item = one branch = one PR.
@@ -9,6 +9,16 @@ REMINDER (AGENTS.md): build iterations never modify files under `specs/`, and
 never weaken a check to get green.
 
 ## Status — 2026-08-11
+
+**N2 (rename-everything) completed 2026-08-11.** The project is now **jumar**
+throughout: package `src/jumar/`, CLI verb `jumar`, config `jumar.toml` with
+`[jumar]` sections (clean break, old names not read), lock `.jumar.lock`,
+schedule marker `# jumar-meta: ` and launchd label `com.jumar.<id>`.
+`jumar doctor` gained a legacy-schedule check that detects and names
+pre-rename crontab/launchd entries. README and USAGE carry the migration
+note; the old-name grep gate runs in CI (lines carrying pre-rename literals
+on purpose are tagged `legacy-name-ok`). Existing `runs/` journals untouched.
+The GitHub remote was created as `justinmclean/jumar` (private until ready).
 
 **RESOLVED 2026-08-11:** the blocker recorded earlier today is cleared. All
 three local branches (`runs-dir-relative-path`, `status-json`, `run-index-tsv`)
@@ -26,9 +36,10 @@ The two pieces of formerly uncommitted work on main are also committed:
 2. `IMPLEMENTATION_PLAN.md` — the plan updates (Phase 14 items, in-flight list),
    committed 2026-08-11 (3b293c1) and superseded by this revision.
 
-All planned phases through Phase 13 N1 and Phase 12 F1 + F2 are merged to
-main. Next open items: N2 (rename-everything, awaiting human registrar check)
-and Phase 14 P2.
+All planned phases through Phase 13 (N1 + N2) and Phase 12 F1 + F2 are merged
+to main, plus Phase 14 P3 (reuse-the-execution-session) and the
+implementation-guide-run-context write-up (both merged 2026-08-11). The only
+open work item is Phase 14 P2 — blocked on its design decision.
 
 - C1 (`thread-check-rejection-reason`), R1 (`resume-can-retry-a-failed-item`),
   D1 (`validate-depends-targets-at-ingest`), N1 (`choose-the-name`), and
@@ -38,9 +49,8 @@ and Phase 14 P2.
   `jumar.dev` registrar check remains before N2 begins).
 - F1 shipped items 1–3 (prefix matching, `latest`, new id format). Item 4
   shipped separately as F2 (`run-index-tsv`), merged 2026-08-11.
-- **Sequencing note (stale):** the prior plan said to do N2 before F1. F1 has
-  shipped under the old name. N2 still must happen before any publication —
-  the cost is the same, just no longer affects the id format.
+- **Sequencing note (resolved):** N2 shipped 2026-08-11, before anything was
+  pushed to the (private) remote — the "rename before publication" rule held.
 - **USER-side spec amendments applied 2026-08-11:** AC2.11, AC2.12,
   AC3.7–3.8, AC5.6, AC6.8–6.9, AC8.8, Stage 11 (AC11.1–11.6) and AC-S5 are
   now in `specs/02-functional-spec.md`; the run-id format/resolution rules,
@@ -96,78 +106,13 @@ and Phase 14 P2.
 - **runs-dir-relative-path** — `_resolve_run_id` + `_RunResolveError` in `cli.py`; prefix matching and `latest` wired into `gsd resume` and `gsd report`; CWD-aware error messages; C1 follow-up (rejection detail in decompose retry). Merged 2026-08-11.
 - **status-json** — `--json` flag on `gsd status` (AC11.5, AC11.6); run-id symbol correction from F1. Merged 2026-08-11; closes the known gap noted in `specs/02` §Stage 11.
 - **run-index-tsv** — F2. `runs/index.tsv` appended at `run_started`, status column updated at `run_finished`; `_resolve_run_id` uses the index for `latest` when present, falls back to journal scan. Merged 2026-08-11.
+- **implementation-guide-run-context** — §4 "What happens during a run" in `USAGE.md`: progress output, report, status view, agent claims, verifier evidence, repair attempts and next action, read together. Merged 2026-08-11.
+- **reuse-the-execution-session** — P3. One execution session per item (`--session-id`/`--resume`), minted at `plan_created` and journalled; repair continues the same session; verifiers and judge always get a fresh context; harnesses without resume fall back to today's argv. Merged 2026-08-11.
+- **rename-everything** — N2. Full rename GetStuffDone/`gsd` → **jumar**: package dir, entry point, CLI verb, `jumar.toml` + `[jumar]` config (clean break), `.jumar.lock`, `# jumar-meta: ` / `com.jumar.<id>` schedule markers, docs, specs, spec-loop prompts. `doctor` detects pre-rename schedule entries; CI grep gate blocks the old name. Landed 2026-08-11.
 
 ---
 
 ## Work items (priority order)
-
-### Phase 13 — rename the project
-
-N2. **rename-everything** — One branch, one commit, mechanical. Do it **before
-   anything is published**; the cost roughly doubles once a package name exists
-   on an index and a schedule exists on someone's machine.
-
-   **Precondition:** human must confirm `jumar.dev` is available at a registrar.
-   If it is taken, fall back to `proofstep` (check `proofstep.dev` similarly).
-   Only begin this item after that confirmation.
-
-   **Branding conflict: resolved 2026-08-11.** Known existing uses of the name
-   were re-checked: the `github.com/jumar` personal account (Montreal hobbyist,
-   no software product), Jumar Solutions Ltd / Jumar Technology (UK IT-services
-   company, jumar.co.uk), and "jumar" as the generic climbing-ascender term.
-   The human decided coexistence is acceptable — existing use of the name does
-   not disqualify it. Only domain availability remains to check.
-
-   **NOT a build iteration.** This item touches `specs/` — the plan beat and
-   update beat may work on it, and the human may merge both halves in one commit;
-   the build beat must skip it. The full rename belongs in a single commit so the
-   grep gate passes without an intermediate broken state.
-
-   Measured surface as at 2026-08-09 — `gsd` / `getstuffdone` / `GetStuffDone`
-   respectively: `src/` 145/54/37, `tests/` 145/239/29, `specs/` 28/15/9,
-   `tools/` 0/6/13. Plus `README.md`, `USAGE.md`, `AGENTS.md`, `Makefile`,
-   `pyproject.toml`, `.gitignore`, and the four `tools/spec-loop/` prompt files.
-
-   Identifiers that are **not** just prose and must each be decided deliberately:
-
-   - `pyproject.toml`: `name = "getstuffdone"`, the `[project.scripts]` entry
-     point, and the `[tool.gsd]` config table name.
-   - The package directory `src/getstuffdone/`.
-   - The CLI verb itself — `gsd run` becomes `<name> run`.
-   - `config.py`: the `gsd.toml` filename and the `[gsd]` section header.
-     **This one breaks every existing config file.** Support the old name for a
-     release with a deprecation notice, or accept the break and say so in the
-     README — but decide, do not discover.
-   - `lock.py`: `_LOCK_FILENAME = ".gsd.lock"`. A rename means a run in progress
-     under the old name is invisible to the new one.
-   - `schedule.py`: `_META_PREFIX = "# gsd-meta: "` and the launchd label
-     `com.gsd.<id>.plist`. **This is the load-bearing one.** Installed cron and
-     launchd entries are found by those markers. Rename them and every
-     already-installed schedule becomes both orphaned and broken.
-
-     Handle it explicitly: `<name> doctor` should detect old-marker entries and
-     name them, and the release notes must say "run `gsd schedule remove` for
-     each entry **before** upgrading, then reinstall". Do **not** have the new
-     binary rewrite entries it did not author — AGENTS.md forbids touching
-     crontab lines outside our own markers.
-
-   Deliberately **not** renamed: existing `runs/` directories and journal
-   contents. They are an append-only historical record.
-
-   *Validation:* `make check` + a grep gate — `grep -ri 'gsd\|getstuffdone\|GetStuffDone' src tests specs tools *.md *.toml Makefile` returns only deliberate historical references (e.g. mentions in `IMPLEMENTATION_PLAN.md`'s Completed section). Add that grep to CI so the old name cannot creep back in.
-   *Closes:* nothing — pure rename. `specs/` are touched so the build beat
-   cannot take this item; it requires a human edit or plan+update-beat
-   collaboration.
-   *Branch slug:* `rename-everything`
-
-### Small items (unscheduled)
-
-- **implementation-guide-run-context** — The implementation guide needs a
-  clearer "what is going on during a run" view than just "read the journal".
-  Document how to interpret the live progress output, report, status view, agent
-  claims, verifier evidence, repair attempts, and next action together. If that
-  write-up exposes a product gap, split the behaviour change into its own work
-  item instead of smuggling it into docs.
 
 ### Phase 14 — the wall-clock ceiling
 
@@ -229,59 +174,6 @@ P2. **parallel-independent-subtasks** — **Measured 2026-08-11**, not assumed.
    here — an hour for fifteen verified subtasks is then the honest price, and
    the README should quote it rather than leave users to discover it.
 
-
-P3. **reuse-the-execution-session** — Every subtask spawns `claude -p` in a
-   **brand-new conversation**. Measured 2026-08-11: process startup is 4.1s
-   (`--strict-mcp-config` changed it by 46ms, so MCP boot is not a factor), and
-   a subtask that fetched two documents took 132s. Startup is ~3% — the rest is
-   the model working. But a meaningful slice of that work is the model
-   re-orienting: every call re-sends the item text, the context prose block and
-   the prior-evidence summary, uncached, and the model rebuilds from nothing.
-
-   The comparison that makes it concrete: the same research in a single desktop
-   conversation feels far faster, and part of that is real — one conversation
-   means prompt-cached input turn over turn, and by step seven the model already
-   knows what it did at step three. gsd throws that away fifteen times.
-
-   **This does not touch the product's thesis.** The fresh-context requirement
-   is a property of **verification**, not execution — the verifier must never
-   see the executing agent's reasoning, only the world it left behind (AC6.4).
-   Nothing requires the *executor* to forget. `claude` supports `--session-id`
-   and `--resume`, so execution can run as one continued session per item while
-   every verifier still gets a brand-new context.
-
-   Shape:
-   - One session id per **item**, minted at `plan_created` and journalled so a
-     resume can rejoin or deliberately start fresh.
-   - `execute()` passes `--resume <id>` for every subtask after the first.
-   - **Verification and the judge are unchanged** — always a new context, never
-     the execution session. If that separation is ever blurred the adversarial
-     judge becomes self-assessment and the guarantee goes with it.
-   - Harnesses that cannot resume a session fall back to today's behaviour, the
-     same way `allow_tools` degrades for `UNRESTRICTED_HARNESSES`.
-   - A repair continues the same session: it is the same subtask, and the
-     failing evidence is more useful in context than re-explained.
-
-   **Honest limits.** It will not halve an hour. The dominant cost is output
-   generation and tool round trips, which session reuse does not reduce; it
-   removes re-reading and re-orientation, so it helps short subtasks more than
-   long ones. And it weakens isolation: a session that goes wrong stays wrong
-   for the remaining subtasks, where today each starts clean. If that trade is
-   unacceptable, say so here and close the item — but it is a smaller trade than
-   P2's, because the DAG is not being trusted for anything.
-
-   *Validation:* `make check` + `pytest tests/test_execute.py tests/test_verify_judge.py -q`
-   — subtask 2 onwards carries `--resume` with the session id journalled at
-   `plan_created`; the judge verifier's argv never carries a session id; a
-   harness without resume support produces today's argv unchanged; a resumed run
-   either rejoins the recorded session or starts a new one and journals which.
-   *Closes:* new behaviour — USER-side spec amendment to `specs/04` §Harness.
-   *Branch slug:* `reuse-the-execution-session`
-
-   Do this **before** P2. It is smaller, it needs no decision about what "one
-   subtask at a time" means, and it makes every subtask cheaper whether or not
-   they ever run concurrently.
-
 ---
 
 ## Guardrails (do not re-plan these)
@@ -314,10 +206,9 @@ P3. **reuse-the-execution-session** — Every subtask spawns `claude -p` in a
 
 ## Manual follow-ups (USER-side; not loop work items — do not build these)
 
-- **Confirm `jumar.dev` availability** at a domain registrar before N2 begins.
-  If taken, fall back to `proofstep` (check `proofstep.dev` too). The branding
-  question is closed (see N2): coexistence with existing "jumar" uses was
-  accepted 2026-08-11; only the domain check remains.
+- **Register `jumar.dev`** (or chosen domain) if wanted — no longer a blocker:
+  the rename shipped 2026-08-11 at the human's direction with branding
+  coexistence accepted; the domain is now a nice-to-have, not a gate.
 - Confirm which agent CLI is on PATH before the first loop run
   (`SPEC_LOOP_AGENT`, default `claude`).
 - Run the loop inside a sandbox with no push credentials in the environment.

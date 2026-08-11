@@ -18,10 +18,10 @@ status: proposed
 ## Package layout
 
 ```
-src/getstuffdone/
+src/jumar/
   __init__.py
-  cli.py            # `gsd` entry point: run / plan / resume / report / schedule / doctor
-  config.py         # gsd.toml + CLI flag resolution, capability + argv policy
+  cli.py            # `jumar` entry point: run / plan / resume / report / schedule / doctor
+  config.py         # jumar.toml + CLI flag resolution, capability + argv policy
   models.py         # every shape in 03-data-model.md, with invariants
   ingest.py         # stage 1
   select.py         # stage 2 (time + dependency eligibility)
@@ -88,7 +88,7 @@ never a partial accept.
   failure. The standing deny list is the outbound-transmission vectors:
   `mail`, `mailx`, `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`,
   `rsync`. The allow list is defence in depth, not a sandbox — with `python3`
-  allowed and the network reachable, the real control is running gsd in a
+  allowed and the network reachable, the real control is running jumar in a
   container/VM with restricted egress and no push credentials.
 - `git push` and `gh` are **hard-denied** in every dispatched argv, mirroring the
   spec loop's `--disallowedTools` defence in depth. AC8.4 tests this.
@@ -150,7 +150,7 @@ Rules that make the time logic testable and safe:
   coupling that would quietly turn this into the thing it was built to replace.
 
 The scheduler backends write into files the user also owns (a crontab, a
-LaunchAgents plist), so every write is delimited by `gsd <schedule-id>` markers
+LaunchAgents plist), so every write is delimited by `jumar <schedule-id>` markers
 and `remove` only ever edits between its own markers. Unrecognised lines are
 never reformatted.
 
@@ -166,16 +166,16 @@ invariant — it would be reformulated per dependency chain, not dropped.
 
 - **Phase 0 — skeleton.** `models.py` with invariants, `config.py`,
   `journal.py`, `cli.py` shell, test scaffolding, `make check` green.
-- **Phase 1 — read-only path.** `ingest.py`, `select.py`, `gsd plan --dry-run`
+- **Phase 1 — read-only path.** `ingest.py`, `select.py`, `jumar plan --dry-run`
   printing the parsed items. No agent calls yet.
 - **Phase 2 — decompose + gate.** `harness.py`, `decompose.py`, `gate.py`;
-  `gsd plan` produces and journals a validated plan. Still executes nothing.
+  `jumar plan` produces and journals a validated plan. Still executes nothing.
 - **Phase 3 — the inner loop.** `execute.py`, `verify/command.py`,
   `verify/file.py`, `repair.py`. This is the first phase that can do work, and
   the first that can be trusted, because verification lands with execution —
   never before it in the build order.
 - **Phase 4 — completion.** `complete.py` (checkbox flip, per-item branch
-  commit), `report.py`, `gsd resume`.
+  commit), `report.py`, `jumar resume`.
 - **Phase 4b — item scheduling.** `clock.py`, `recurrence.py`, the eligibility
   gate in `select.py`, and recurrence advance in `complete.py`. Lands *after*
   completion because recurrence rewrites the same line the checkbox flip does,
@@ -186,7 +186,7 @@ invariant — it would be reformulated per dependency chain, not dropped.
 - **Phase 5b — run scheduling.** `lock.py`, then `schedule.py` with the cron
   backend, then launchd/systemd. The lock ships first: installing a recurring
   run before single-flight exists is how you get two agents editing one tree.
-- **Phase 6 — polish.** `gsd doctor` (config + harness + allow-list + installed
+- **Phase 6 — polish.** `jumar doctor` (config + harness + allow-list + installed
   schedule sanity), richer reports, evidence artefact pruning.
 
 **Sequencing rule:** no phase that executes work may land before the
@@ -210,7 +210,7 @@ one work item or two strictly-ordered ones.
   three tries is not converging; more attempts mostly produce more damage.
 - **Scheduling is delegated to the OS.** Writing a scheduler means reimplementing
   wake-from-sleep, missed-fire policy, boot ordering, and user sessions — all of
-  which cron/launchd/systemd already do better. GetStuffDone writes an entry and
+  which cron/launchd/systemd already do better. Jumar writes an entry and
   exits.
 - **Eligibility lives in the todo line, not a sidecar file.** `@not-before=` and
   `@every=` stay visible where the human edits them; a separate schedule store

@@ -4,13 +4,13 @@
 Acceptance criteria covered
 ----------------------------
 AC10.1  schedule add --dry-run prints the entry and does NOT write to the backend.
-AC10.2  An installed entry is wrapped in gsd markers; remove deletes only those
+AC10.2  An installed entry is wrapped in jumar markers; remove deletes only those
         lines and leaves unrelated user entries byte-identical (round-trip).
-AC10.3  The installed command contains absolute paths for gsd and the todo file,
+AC10.3  The installed command contains absolute paths for jumar and the todo file,
         and carries --non-interactive.
 AC10.4  An invalid cron expression is rejected with a message naming the field,
         and nothing is installed.
-AC10.7  list_schedules reports only gsd-owned entries with id, cron expr,
+AC10.7  list_schedules reports only jumar-owned entries with id, cron expr,
         resolved timezone, and target todo path.
 AC10.8  Removing an id that does not exist is a clean non-zero error.
 AC10.9  The resolved timezone is recorded on the entry and printed at install time.
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.schedule import (
+from jumar.schedule import (
     CronBackend,
     CronExprError,
     FakeBackend,
@@ -32,8 +32,8 @@ from getstuffdone.schedule import (
     ScheduleEntry,
     _cron_to_launchd_sci,
     _expand_cron_field,
-    _gsd_executable,
     _insert_block,
+    _jumar_executable,
     _parse_blocks,
     _remove_block,
     add_schedule,
@@ -55,7 +55,7 @@ _FIXTURE_CRONTAB = """\
 30 7 * * 1 /home/user/weekly.sh
 """
 
-_GSD = "/usr/local/bin/gsd"
+_GSD = "/usr/local/bin/jumar"
 _TODO = "/home/user/todo.md"
 
 
@@ -63,7 +63,7 @@ def _make_entry(
     schedule_id: str = "abc12345",
     cron_expr: str = "0 9 * * 1-5",
     todo_path: str = _TODO,
-    gsd_path: str = _GSD,
+    jumar_path: str = _GSD,
     timezone: str = "America/Los_Angeles",
     config_path: str | None = None,
 ) -> ScheduleEntry:
@@ -71,7 +71,7 @@ def _make_entry(
         schedule_id=schedule_id,
         cron_expr=cron_expr,
         todo_path=todo_path,
-        gsd_path=gsd_path,
+        jumar_path=jumar_path,
         config_path=config_path,
         timezone=timezone,
     )
@@ -156,14 +156,14 @@ class TestCronBlockManipulation:
     def test_insert_creates_markers(self) -> None:
         entry = _make_entry()
         text = _insert_block("", entry)
-        assert f"# >>> gsd {entry.schedule_id} >>>" in text
-        assert f"# <<< gsd {entry.schedule_id} <<<" in text
+        assert f"# >>> jumar {entry.schedule_id} >>>" in text
+        assert f"# <<< jumar {entry.schedule_id} <<<" in text
 
     def test_insert_contains_command_and_cron(self) -> None:
         entry = _make_entry()
         text = _insert_block("", entry)
         assert entry.cron_expr in text
-        assert entry.gsd_path in text
+        assert entry.jumar_path in text
         assert entry.todo_path in text
         assert "--non-interactive" in text
 
@@ -211,7 +211,7 @@ class TestRoundTrip:
         entry2 = _make_entry(cron_expr="0 10 * * *")  # same id, different expr
         text = _insert_block("", entry)
         text2 = _insert_block(text, entry2)
-        assert text2.count(f"# >>> gsd {entry.schedule_id}") == 1
+        assert text2.count(f"# >>> jumar {entry.schedule_id}") == 1
         assert "0 10 * * *" in text2
 
     def test_multiple_entries_independent(self) -> None:
@@ -248,7 +248,7 @@ class TestParseBlocks:
         assert e.todo_path == entry.todo_path
         assert e.timezone == "Europe/London"
 
-    def test_ignores_non_gsd_lines(self) -> None:
+    def test_ignores_non_jumar_lines(self) -> None:
         entries = _parse_blocks(_FIXTURE_CRONTAB)
         assert entries == []
 
@@ -317,7 +317,7 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             dry_run=True,
         )
         # fail_on_write would have raised if add_entry was called
@@ -334,7 +334,7 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             dry_run=False,
         )
         assert backend.write_calls == 1
@@ -350,7 +350,7 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
         )
         assert Path(entry.todo_path).is_absolute()
         # Check the crontab line too
@@ -367,13 +367,13 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
         )
         text = backend.current_text
         assert "--non-interactive" in text
 
-    def test_gsd_path_absolute(self, tmp_path: Path) -> None:
-        """AC10.3: installed command carries absolute gsd path."""
+    def test_jumar_path_absolute(self, tmp_path: Path) -> None:
+        """AC10.3: installed command carries absolute jumar path."""
         backend = FakeBackend()
         todo = tmp_path / "todo.md"
         todo.write_text("")
@@ -382,9 +382,9 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
         )
-        assert Path(entry.gsd_path).is_absolute()
+        assert Path(entry.jumar_path).is_absolute()
 
     def test_invalid_cron_raises_before_write(self, tmp_path: Path) -> None:
         """AC10.4: invalid cron rejected with field info; nothing installed."""
@@ -397,7 +397,7 @@ class TestAddSchedule:
                 todo_path=todo,
                 timezone="UTC",
                 backend=backend,
-                gsd_path=_GSD,
+                jumar_path=_GSD,
             )
         assert exc_info.value.field == "minute"
         assert backend.write_calls == 0  # nothing written
@@ -414,7 +414,7 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="Pacific/Auckland",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
         )
         assert entry.timezone == "Pacific/Auckland"
         out = capsys.readouterr().out
@@ -429,7 +429,7 @@ class TestAddSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             schedule_id="myfixedid",
         )
         assert entry.schedule_id == "myfixedid"
@@ -440,7 +440,7 @@ class TestAddSchedule:
         backend = FakeBackend()
         todo = tmp_path / "todo.md"
         todo.write_text("")
-        cfg = tmp_path / "gsd.toml"
+        cfg = tmp_path / "jumar.toml"
         cfg.write_text("")
         add_schedule(
             "0 9 * * *",
@@ -448,7 +448,7 @@ class TestAddSchedule:
             config_path=cfg,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
         )
         text = backend.current_text
         assert str(cfg.resolve()) in text
@@ -465,8 +465,8 @@ class TestListSchedules:
         backend = FakeBackend()
         assert list_schedules(backend) == []
 
-    def test_returns_only_gsd_entries(self) -> None:
-        """AC10.7: list ignores non-gsd crontab lines."""
+    def test_returns_only_jumar_entries(self) -> None:
+        """AC10.7: list ignores non-jumar crontab lines."""
         backend = FakeBackend(initial_text=_FIXTURE_CRONTAB)
         assert list_schedules(backend) == []
 
@@ -480,7 +480,7 @@ class TestListSchedules:
             todo_path=todo,
             timezone="Europe/Berlin",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             schedule_id="berlin01",
         )
         entries = list_schedules(backend)
@@ -500,7 +500,7 @@ class TestListSchedules:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             schedule_id="s1",
         )
         add_schedule(
@@ -508,7 +508,7 @@ class TestListSchedules:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             schedule_id="s2",
         )
         entries = list_schedules(backend)
@@ -531,7 +531,7 @@ class TestRemoveSchedule:
             todo_path=todo,
             timezone="UTC",
             backend=backend,
-            gsd_path=_GSD,
+            jumar_path=_GSD,
             schedule_id="rem1",
         )
         assert remove_schedule("rem1", backend)
@@ -572,11 +572,11 @@ class TestShowEntry:
         assert "Asia/Tokyo" in text
         assert "--non-interactive" in text
 
-    def test_show_entry_contains_gsd_markers(self) -> None:
+    def test_show_entry_contains_jumar_markers(self) -> None:
         entry = _make_entry()
         text = show_entry(entry)
-        assert f"# >>> gsd {entry.schedule_id} >>>" in text
-        assert f"# <<< gsd {entry.schedule_id} <<<" in text
+        assert f"# >>> jumar {entry.schedule_id} >>>" in text
+        assert f"# <<< jumar {entry.schedule_id} <<<" in text
 
 
 # ---------------------------------------------------------------------------
@@ -711,7 +711,7 @@ class TestLaunchdBackend:
         backend = LaunchdBackend(agents_dir=tmp_path)
         entry = _make_entry()
         backend.add_entry(entry)
-        plist = tmp_path / f"com.gsd.{entry.schedule_id}.plist"
+        plist = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
         assert plist.exists()
 
     def test_list_returns_installed_entry(self, tmp_path: Path) -> None:
@@ -735,7 +735,7 @@ class TestLaunchdBackend:
         backend.add_entry(entry)
         found = backend.remove_entry(entry.schedule_id)
         assert found
-        plist = tmp_path / f"com.gsd.{entry.schedule_id}.plist"
+        plist = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
         assert not plist.exists()
 
     def test_remove_not_found_returns_false(self, tmp_path: Path) -> None:
@@ -772,12 +772,12 @@ class TestDefaultBackend:
 
 
 # ---------------------------------------------------------------------------
-# _gsd_executable
+# _jumar_executable
 # ---------------------------------------------------------------------------
 
 
 class TestGsdExecutable:
     def test_returns_non_empty_string(self) -> None:
-        result = _gsd_executable()
+        result = _jumar_executable()
         assert isinstance(result, str)
         assert len(result) > 0

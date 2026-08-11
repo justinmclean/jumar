@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Config loading: gsd.toml / [tool.gsd] in pyproject.toml, merged with CLI flags.
+"""Config loading: jumar.toml / [tool.jumar] in pyproject.toml, merged with CLI flags.
 
 Public API
 ----------
@@ -33,7 +33,7 @@ class Capability(StrEnum):
     whole of the enforcement at this layer. Granting ``network`` does not prevent
     a subprocess from opening a socket; not granting it does not block one.
     Fine-grained allow/deny lists live in ``CommandPolicy``; the actual boundary
-    is the container or VM the operator runs gsd inside.
+    is the container or VM the operator runs jumar inside.
     """
 
     read_fs = "read_fs"
@@ -136,7 +136,7 @@ _DEFAULT_DENY: tuple[str, ...] = (
 # `python3` is on the allow list and `network` is granted, so
 # `python3 -c "import smtplib; ..."` sends mail and `urllib` posts anywhere.
 # An argv[0] allow list cannot stop a determined agent; it is defence in depth,
-# not a boundary. The actual control is the execution environment: run gsd
+# not a boundary. The actual control is the execution environment: run jumar
 # inside a container or VM whose egress is restricted to the hosts the work
 # needs. Any unattended or scheduled run without that container is unbounded,
 # whatever these tuples say.
@@ -152,9 +152,9 @@ _HARD_DENY: tuple[tuple[str, ...], ...] = (
 )
 
 
-# Stage names that may appear as sub-tables under [harness] in gsd.toml.
+# Stage names that may appear as sub-tables under [harness] in jumar.toml.
 # An unrecognised sub-table key is a startup error — not a silent no-op —
-# so that a typo in gsd.toml does not silently fail to apply the override.
+# so that a typo in jumar.toml does not silently fail to apply the override.
 _VALID_HARNESS_STAGES: frozenset[str] = frozenset({"decompose", "execute", "judge"})
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class CommandPolicy:
 
 @dataclass(frozen=True)
 class Config:
-    """Resolved configuration for one gsd run."""
+    """Resolved configuration for one jumar run."""
 
     todo_path: str = "todo.md"
     timezone: str = field(default_factory=_system_timezone)
@@ -248,19 +248,19 @@ class Config:
 
 
 def _load_raw(root: Path) -> dict[str, Any]:
-    """Return the [gsd] section from gsd.toml, or [tool.gsd] from pyproject.toml."""
-    gsd_toml = root / "gsd.toml"
-    if gsd_toml.is_file():
-        with gsd_toml.open("rb") as fh:
+    """Return the [jumar] section from jumar.toml, or [tool.jumar] from pyproject.toml."""
+    jumar_toml = root / "jumar.toml"
+    if jumar_toml.is_file():
+        with jumar_toml.open("rb") as fh:
             data: dict[str, Any] = tomllib.load(fh)
-        return cast(dict[str, Any], data.get("gsd", {}))
+        return cast(dict[str, Any], data.get("jumar", {}))
 
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
         with pyproject.open("rb") as fh:
             data = tomllib.load(fh)
         tool: dict[str, Any] = cast(dict[str, Any], data.get("tool", {}))
-        return cast(dict[str, Any], tool.get("gsd", {}))
+        return cast(dict[str, Any], tool.get("jumar", {}))
 
     return {}
 
@@ -272,8 +272,8 @@ def load_config(
 ) -> Config:
     """Load config from file then apply CLI overrides.
 
-    Priority (highest wins): CLI overrides > gsd.toml / [tool.gsd] > built-in defaults.
-    gsd.toml is preferred over pyproject.toml when both are present.
+    Priority (highest wins): CLI overrides > jumar.toml / [tool.jumar] > built-in defaults.
+    jumar.toml is preferred over pyproject.toml when both are present.
     """
     if root is None:
         root = Path.cwd()
@@ -300,7 +300,7 @@ def load_config(
     }
     if unknown_harness_keys:
         raise ValueError(
-            f"Unknown key(s) under [harness] in gsd.toml: {sorted(unknown_harness_keys)}. "
+            f"Unknown key(s) under [harness] in jumar.toml: {sorted(unknown_harness_keys)}. "
             f"Valid stage names: {sorted(_VALID_HARNESS_STAGES)}."
         )
 

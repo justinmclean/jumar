@@ -27,10 +27,10 @@ from unittest.mock import patch
 
 import pytest
 
-from getstuffdone.complete import complete
-from getstuffdone.config import Config
-from getstuffdone.journal import ITEM_COMPLETED, SCHEDULE_ADVANCED, Journal
-from getstuffdone.models import (
+from jumar.complete import complete
+from jumar.config import Config
+from jumar.journal import ITEM_COMPLETED, SCHEDULE_ADVANCED, Journal
+from jumar.models import (
     Capability,
     Check,
     CheckKind,
@@ -569,7 +569,7 @@ def test_no_push_or_gh_dispatched(tmp_path: Path, journal: Journal) -> None:
             dispatched.append(list(argv))
         return real_run(argv, **kwargs)
 
-    with patch("getstuffdone.complete.subprocess.run", side_effect=recording_run):
+    with patch("jumar.complete.subprocess.run", side_effect=recording_run):
         complete(
             item,
             plan,
@@ -610,7 +610,7 @@ def test_no_push_or_gh_without_git_repo(tmp_path: Path, journal: Journal) -> Non
             dispatched.append(list(argv))
         return _real_run(argv, **kwargs)  # noqa: S603
 
-    with patch("getstuffdone.complete.subprocess.run", side_effect=recording_run):
+    with patch("jumar.complete.subprocess.run", side_effect=recording_run):
         result = complete(
             item,
             plan,
@@ -1048,7 +1048,7 @@ def test_flip_checkbox_raises_on_out_of_bounds_line_no(
     tmp_path: Path, journal: Journal, cfg: Config
 ) -> None:
     """Calling complete() with a line_no that exceeds the file length raises CompleteError."""
-    from getstuffdone.complete import CompleteError
+    from jumar.complete import CompleteError
 
     todo_path = tmp_path / "todo.md"
     todo_path.write_bytes(b"- [ ] Only one line\n")
@@ -1125,7 +1125,7 @@ def test_advance_not_before_raises_on_out_of_bounds_line_no(
     tmp_path: Path, journal: Journal, cfg: Config
 ) -> None:
     """_advance_not_before raises CompleteError if line_no is out of range."""
-    from getstuffdone.complete import CompleteError
+    from jumar.complete import CompleteError
 
     todo_path = tmp_path / "todo.md"
     todo_path.write_bytes(b"- [ ] Only one line @every=1d\n")
@@ -1173,9 +1173,9 @@ def test_is_git_repo_returns_false_on_oserror(tmp_path: Path) -> None:
     """_is_git_repo returns False when subprocess raises OSError."""
     from unittest.mock import patch
 
-    from getstuffdone.complete import _is_git_repo
+    from jumar.complete import _is_git_repo
 
-    with patch("getstuffdone.complete.subprocess.run", side_effect=OSError("no git")):
+    with patch("jumar.complete.subprocess.run", side_effect=OSError("no git")):
         assert _is_git_repo(tmp_path) is False
 
 
@@ -1183,9 +1183,9 @@ def test_current_branch_returns_none_on_oserror(tmp_path: Path) -> None:
     """_current_branch returns None when subprocess raises OSError."""
     from unittest.mock import patch
 
-    from getstuffdone.complete import _current_branch
+    from jumar.complete import _current_branch
 
-    with patch("getstuffdone.complete.subprocess.run", side_effect=OSError("no git")):
+    with patch("jumar.complete.subprocess.run", side_effect=OSError("no git")):
         assert _current_branch(tmp_path) is None
 
 
@@ -1193,11 +1193,11 @@ def test_current_branch_returns_none_on_nonzero_exit(tmp_path: Path) -> None:
     """_current_branch returns None when git exits non-zero."""
     from unittest.mock import MagicMock, patch
 
-    from getstuffdone.complete import _current_branch
+    from jumar.complete import _current_branch
 
     mock_result = MagicMock()
     mock_result.returncode = 128
     mock_result.stdout = ""
 
-    with patch("getstuffdone.complete.subprocess.run", return_value=mock_result):
+    with patch("jumar.complete.subprocess.run", return_value=mock_result):
         assert _current_branch(tmp_path) is None

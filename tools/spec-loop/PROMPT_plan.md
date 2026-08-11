@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0
      https://www.apache.org/licenses/LICENSE-2.0 -->
 
-You are running the **plan** beat of the spec-driven loop for GetStuffDone.
+You are running the **plan** beat of the spec-driven loop for Jumar.
 Plan only — do NOT implement anything and do NOT commit code.
 
 Context to load first:
@@ -20,7 +20,7 @@ Steps:
    source modules, and tests. It is a routing aid, not proof: before recording
    a gap or declaring one closed, confirm with a code search or file read.
 2. Study each spec in `specs/` and compare it against the actual code it
-   describes under `src/getstuffdone/` and `tests/`. You may use parallel
+   describes under `src/jumar/` and `tests/`. You may use parallel
    subagents for reading. Do NOT assume something is missing — confirm first.
 3. Read the **Open pull-request context** and **Local work-item branches**.
    Treat both as in-flight work. If an apparent gap is already substantially
@@ -49,7 +49,7 @@ Rules:
 - Do not duplicate in-flight work. If a stale plan item is now covered by an
   open PR or a local work-item branch, remove it or mark it in-flight rather
   than leaving it available for the build beat.
-- Prefer extending an existing module under `src/getstuffdone/` over adding a
+- Prefer extending an existing module under `src/jumar/` over adding a
   new ad-hoc one.
 - Every work item needs one concrete **Validation** command (usually
   `make check`, plus the specific `pytest tests/test_<stage>.py` it adds) and

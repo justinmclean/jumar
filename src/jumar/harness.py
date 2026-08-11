@@ -157,7 +157,7 @@ def build_argv(
             # one:
             #
             # 1. Startup cost. Every invocation boots every configured server
-            #    before reading the prompt, and gsd spawns a fresh agent per
+            #    before reading the prompt, and jumar spawns a fresh agent per
             #    subtask. On a machine with a dozen servers that dominates the
             #    run.
             # 2. The send boundary. `config.py` denies sendmail, ssh, scp and

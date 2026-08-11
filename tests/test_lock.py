@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from getstuffdone.journal import ALREADY_RUNNING, LOCK_RECLAIMED, Journal
-from getstuffdone.lock import AlreadyRunning, Lock
+from jumar.journal import ALREADY_RUNNING, LOCK_RECLAIMED, Journal
+from jumar.lock import AlreadyRunning, Lock
 
 # ---------------------------------------------------------------------------
 # Helpers

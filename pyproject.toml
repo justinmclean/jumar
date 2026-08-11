@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 [project]
-name = "getstuffdone"
+name = "jumar"
 version = "0.1.0"
 description = "Turn a todo list into verified work: decompose, do one subtask at a time, prove each one before the next."
 requires-python = ">=3.11"
@@ -10,7 +10,7 @@ dependencies = []
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
-gsd = "getstuffdone.cli:main"
+jumar = "jumar.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -29,7 +29,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src/getstuffdone"]
+files = ["src/jumar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -38,7 +38,7 @@ addopts = "-q"
 [tool.coverage.report]
 fail_under = 90
 
-[tool.gsd]
+[tool.jumar]
 todo_path = "todo.md"
 max_subtasks = 12
 max_repairs = 2

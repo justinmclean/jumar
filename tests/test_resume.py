@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for ``gsd resume <run-id>`` — journal replay and pipeline continuation.
+"""Tests for ``jumar resume <run-id>`` — journal replay and pipeline continuation.
 
 Acceptance criteria exercised here:
 - AC-S1  A resumed run does not re-execute any subtask that already has a
@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 
-from getstuffdone.cli import _resolve_run_id, _RunResolveError, main
-from getstuffdone.journal import (
+from jumar.cli import _resolve_run_id, _RunResolveError, main
+from jumar.journal import (
     ATTEMPT_FINISHED,
     ATTEMPT_STARTED,
     ITEM_COMPLETED,
@@ -134,14 +134,14 @@ def _make_journal(run_dir: Path) -> Journal:
 
 
 def test_resume_run_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """gsd resume with a non-existent run-id exits 1 with an error message."""
+    """jumar resume with a non-existent run-id exits 1 with an error message."""
     monkeypatch.chdir(tmp_path)
     rc = main(["resume", "nonexistent-run-id-xyz"])
     assert rc == 1
 
 
 def test_resume_no_run_started_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """gsd resume with a journal that has no run_started exits 1."""
+    """jumar resume with a journal that has no run_started exits 1."""
     monkeypatch.chdir(tmp_path)
     run_id = "no-start-run"
     run_dir = _make_run_dir(tmp_path, run_id)
@@ -239,8 +239,8 @@ def test_resume_skips_passed_subtasks(tmp_path: Path, monkeypatch: pytest.Monkey
     fake_runner = _fake_runner_factory([_FakeResult(exit_status=0, stdout="done")])
 
     # Monkeypatch the verify registry to always return passed for command checks.
-    from getstuffdone.clock import stamp
-    from getstuffdone.models import CheckKind, Verdict, VerificationResult
+    from jumar.clock import stamp
+    from jumar.models import CheckKind, Verdict, VerificationResult
 
     def _fake_command_verify(check: Any, ctx: Any) -> VerificationResult:
         return VerificationResult(
@@ -254,7 +254,7 @@ def test_resume_skips_passed_subtasks(tmp_path: Path, monkeypatch: pytest.Monkey
             checked_at=stamp(),
         )
 
-    import getstuffdone.verify as _verify_mod
+    import jumar.verify as _verify_mod
 
     original_registry = dict(_verify_mod._registry)
     _verify_mod._registry[CheckKind.command] = _fake_command_verify
@@ -262,7 +262,7 @@ def test_resume_skips_passed_subtasks(tmp_path: Path, monkeypatch: pytest.Monkey
     try:
         import argparse
 
-        from getstuffdone.cli import _cmd_resume
+        from jumar.cli import _cmd_resume
 
         ns = argparse.Namespace(
             run_id=run_id,
@@ -290,7 +290,7 @@ def test_resume_skips_passed_subtasks(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_resume_uses_original_now_for_eligibility(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-S4: gsd resume uses the now from run_started, not the current time.
+    """AC-S4: jumar resume uses the now from run_started, not the current time.
 
     Setup:
     - Journal has now = 2026-01-01T09:00:00Z.
@@ -300,7 +300,7 @@ def test_resume_uses_original_now_for_eligibility(
     If resume reads the wall clock, the item is eligible.
     If resume uses the original now, the item is still deferred.
 
-    We verify that gsd resume exits 0 with no execution (nothing selected).
+    We verify that jumar resume exits 0 with no execution (nothing selected).
     """
     monkeypatch.chdir(tmp_path)
     run_id = "resume-original-now"
@@ -360,8 +360,8 @@ def test_resume_failed_subtask_exits_one(tmp_path: Path, monkeypatch: pytest.Mon
     fake_runner = _fake_runner_factory([_FakeResult(exit_status=0, stdout="done")])
 
     # Fake verifier: always returns failed.
-    from getstuffdone.clock import stamp
-    from getstuffdone.models import CheckKind, Verdict, VerificationResult
+    from jumar.clock import stamp
+    from jumar.models import CheckKind, Verdict, VerificationResult
 
     def _fake_verify_failed(check: Any, ctx: Any) -> VerificationResult:
         return VerificationResult(
@@ -375,7 +375,7 @@ def test_resume_failed_subtask_exits_one(tmp_path: Path, monkeypatch: pytest.Mon
             checked_at=stamp(),
         )
 
-    import getstuffdone.verify as _verify_mod
+    import jumar.verify as _verify_mod
 
     original_registry = dict(_verify_mod._registry)
     _verify_mod._registry[CheckKind.command] = _fake_verify_failed
@@ -383,7 +383,7 @@ def test_resume_failed_subtask_exits_one(tmp_path: Path, monkeypatch: pytest.Mon
     try:
         import argparse
 
-        from getstuffdone.cli import _cmd_resume
+        from jumar.cli import _cmd_resume
 
         ns = argparse.Namespace(
             run_id=run_id,
@@ -408,7 +408,7 @@ def test_resume_failed_subtask_exits_one(tmp_path: Path, monkeypatch: pytest.Mon
 def test_resume_appends_to_journal_not_rewrites(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-S2: gsd resume appends new events without rewriting prior lines."""
+    """AC-S2: jumar resume appends new events without rewriting prior lines."""
     monkeypatch.chdir(tmp_path)
     run_id = "resume-append-only"
     run_dir = _make_run_dir(tmp_path, run_id)
@@ -429,8 +429,8 @@ def test_resume_appends_to_journal_not_rewrites(
     # Fake runner + verifier returning success.
     fake_runner = _fake_runner_factory([_FakeResult(exit_status=0, stdout="done")])
 
-    from getstuffdone.clock import stamp
-    from getstuffdone.models import CheckKind, Verdict, VerificationResult
+    from jumar.clock import stamp
+    from jumar.models import CheckKind, Verdict, VerificationResult
 
     def _fake_verify_ok(check: Any, ctx: Any) -> VerificationResult:
         return VerificationResult(
@@ -444,7 +444,7 @@ def test_resume_appends_to_journal_not_rewrites(
             checked_at=stamp(),
         )
 
-    import getstuffdone.verify as _verify_mod
+    import jumar.verify as _verify_mod
 
     original_registry = dict(_verify_mod._registry)
     _verify_mod._registry[CheckKind.command] = _fake_verify_ok
@@ -452,7 +452,7 @@ def test_resume_appends_to_journal_not_rewrites(
     try:
         import argparse
 
-        from getstuffdone.cli import _cmd_resume
+        from jumar.cli import _cmd_resume
 
         ns = argparse.Namespace(
             run_id=run_id,
@@ -475,11 +475,11 @@ def test_resume_appends_to_journal_not_rewrites(
 
 
 def test_run_id_format_from_real_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A run id created by gsd run matches YYYYMMDD-HHMM-<4 hex chars>."""
+    """A run id created by jumar run matches YYYYMMDD-HHMM-<4 hex chars>."""
     import re
 
-    from getstuffdone import cli
-    from getstuffdone.harness import AgentResult
+    from jumar import cli
+    from jumar.harness import AgentResult
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "todo.md").write_text("- [ ] Make something @capability=write_fs\n")
@@ -530,7 +530,7 @@ def test_make_run_id_distinct_for_same_minute(tmp_path: Path) -> None:
     """Two calls to make_run_id with the same now produce distinct ids."""
     from datetime import UTC, datetime
 
-    from getstuffdone.clock import make_run_id
+    from jumar.clock import make_run_id
 
     now = datetime(2026, 8, 10, 14, 30, 0, tzinfo=UTC)
     id1 = make_run_id(now)
@@ -553,7 +553,7 @@ def test_make_run_id_distinct_for_same_minute(tmp_path: Path) -> None:
 
 def test_resolve_run_id_exact_match(tmp_path: Path) -> None:
     """An exact run id resolves directly without prefix scanning."""
-    from getstuffdone.cli import _resolve_run_id
+    from jumar.cli import _resolve_run_id
 
     run_id = "20260810-1430-abcd"
     run_dir = tmp_path / "runs" / run_id
@@ -567,7 +567,7 @@ def test_resolve_run_id_exact_match(tmp_path: Path) -> None:
 
 def test_resolve_run_id_unambiguous_prefix(tmp_path: Path) -> None:
     """An unambiguous prefix resolves to the one matching run."""
-    from getstuffdone.cli import _resolve_run_id
+    from jumar.cli import _resolve_run_id
 
     run_id = "20260810-1430-abcd"
     run_dir = tmp_path / "runs" / run_id
@@ -633,7 +633,7 @@ def test_resolve_run_id_latest_empty_dir_errors(tmp_path: Path) -> None:
 
 
 def test_resume_with_prefix_via_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """gsd resume accepts an unambiguous prefix instead of the full run id."""
+    """jumar resume accepts an unambiguous prefix instead of the full run id."""
     monkeypatch.chdir(tmp_path)
     run_id = "20260810-1430-abcd"
     run_dir = _make_run_dir(tmp_path, run_id)
@@ -655,7 +655,7 @@ def test_resume_with_prefix_via_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_resume_latest_via_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """gsd resume latest picks the most recently started run."""
+    """jumar resume latest picks the most recently started run."""
     monkeypatch.chdir(tmp_path)
 
     # Older run (completed).
@@ -740,8 +740,8 @@ def test_resume_not_found_error_hints_runs_dir(
     """When a run id cannot be found, the error hints that runs-dir is relative.
 
     The previous message ("no journal found at runs/<id>/journal.jsonl") gave
-    no indication that 'runs/' is relative to the working directory where gsd
-    was launched, not necessarily where gsd resume is invoked from.
+    no indication that 'runs/' is relative to the working directory where jumar
+    was launched, not necessarily where jumar resume is invoked from.
     """
     monkeypatch.chdir(tmp_path)
     rc = main(["resume", "nonexistent-20260101-0900-abcd"])
@@ -770,7 +770,7 @@ def test_resume_not_found_error_includes_absolute_path(
 
 def test_index_appended_at_run_started(tmp_path: Path) -> None:
     """append_run_started creates a row in index.tsv with status in_progress."""
-    from getstuffdone.index import (
+    from jumar.index import (
         FILENAME,
         STATUS_IN_PROGRESS,
         append_run_started,
@@ -795,7 +795,7 @@ def test_index_appended_at_run_started(tmp_path: Path) -> None:
 
 def test_index_updated_at_run_finished(tmp_path: Path) -> None:
     """update_run_finished rewrites the row with item_id and final status."""
-    from getstuffdone.index import (
+    from jumar.index import (
         FILENAME,
         STATUS_COMPLETED,
         append_run_started,
@@ -821,7 +821,7 @@ def test_index_updated_at_run_finished(tmp_path: Path) -> None:
 
 def test_index_in_progress_on_crash(tmp_path: Path) -> None:
     """A run without a run_finished leaves its index row as in_progress."""
-    from getstuffdone.index import FILENAME, STATUS_IN_PROGRESS, append_run_started
+    from jumar.index import FILENAME, STATUS_IN_PROGRESS, append_run_started
 
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
@@ -837,7 +837,7 @@ def test_index_in_progress_on_crash(tmp_path: Path) -> None:
 
 def test_multiple_runs_each_get_a_row(tmp_path: Path) -> None:
     """Each call to append_run_started adds exactly one new row."""
-    from getstuffdone.index import (
+    from jumar.index import (
         FILENAME,
         STATUS_COMPLETED,
         append_run_started,
@@ -866,7 +866,7 @@ def test_resolve_latest_uses_index_when_present(tmp_path: Path) -> None:
     """_resolve_run_id('latest') returns the highest-started entry from the index."""
     import json as _json
 
-    from getstuffdone.index import STATUS_COMPLETED, append_run_started, update_run_finished
+    from jumar.index import STATUS_COMPLETED, append_run_started, update_run_finished
 
     runs_dir = tmp_path / "runs"
     for rid, started, now_str in [
@@ -912,7 +912,7 @@ def test_resolve_latest_corrupt_index_falls_back_to_journal(tmp_path: Path) -> N
     """A corrupt index.tsv causes _resolve_run_id to fall back to the journal scan."""
     import json as _json
 
-    from getstuffdone.index import FILENAME
+    from jumar.index import FILENAME
 
     runs_dir = tmp_path / "runs"
     rid = "20260811-1200-abcd"
@@ -949,7 +949,7 @@ def test_resolve_latest_absent_index_falls_back_to_journal(tmp_path: Path) -> No
 
 def test_update_run_finished_no_ops_for_absent_row(tmp_path: Path) -> None:
     """update_run_finished silently no-ops when the run_id is not in the index."""
-    from getstuffdone.index import (
+    from jumar.index import (
         FILENAME,
         STATUS_COMPLETED,
         append_run_started,
@@ -968,15 +968,15 @@ def test_update_run_finished_no_ops_for_absent_row(tmp_path: Path) -> None:
     assert lines[0].split("\t")[0] == "20260811-1200-aaaa"
 
 
-def test_gsd_run_writes_index_and_updates_on_finish(
+def test_jumar_run_writes_index_and_updates_on_finish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """End-to-end: gsd run appends to index.tsv and updates status at run_finished."""
+    """End-to-end: jumar run appends to index.tsv and updates status at run_finished."""
     import json as _json
 
-    from getstuffdone import cli
-    from getstuffdone.harness import AgentResult
-    from getstuffdone.index import FILENAME, STATUS_COMPLETED
+    from jumar import cli
+    from jumar.harness import AgentResult
+    from jumar.index import FILENAME, STATUS_COMPLETED
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "todo.md").write_text(
@@ -1017,7 +1017,7 @@ def test_gsd_run_writes_index_and_updates_on_finish(
 
     runs_dir = tmp_path / "runs"
     index = runs_dir / FILENAME
-    assert index.exists(), "index.tsv must be created by gsd run"
+    assert index.exists(), "index.tsv must be created by jumar run"
     lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
     assert len(lines) == 1, f"expected 1 index row, got {lines}"
     parts = lines[0].split("\t")

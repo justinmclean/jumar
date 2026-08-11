@@ -19,14 +19,14 @@ from typing import Any
 
 import pytest
 
-from getstuffdone.clock import stamp
-from getstuffdone.config import Config
-from getstuffdone.journal import (
+from jumar.clock import stamp
+from jumar.config import Config
+from jumar.journal import (
     ATTEMPT_STARTED,
     REPAIR_STARTED,
     Journal,
 )
-from getstuffdone.models import (
+from jumar.models import (
     Capability,
     Check,
     CheckKind,
@@ -38,8 +38,8 @@ from getstuffdone.models import (
     Verdict,
     VerificationResult,
 )
-from getstuffdone.repair import RepairExhausted, repair
-from getstuffdone.verify import VerifyContext
+from jumar.repair import RepairExhausted, repair
+from jumar.verify import VerifyContext
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
