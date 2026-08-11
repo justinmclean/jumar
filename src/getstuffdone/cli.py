@@ -24,6 +24,91 @@ from .models import HarnessInfo
 SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
 
 
+# ---------------------------------------------------------------------------
+# Run-id resolution — prefix matching, "latest", and CWD-aware errors
+# ---------------------------------------------------------------------------
+
+
+class _RunResolveError(Exception):
+    """Raised when a run-id cannot be resolved to a unique run directory."""
+
+
+def _resolve_run_id(runs_dir: Path, run_id: str) -> tuple[str, Path]:
+    """Resolve run_id (exact match, unambiguous prefix, or ``'latest'``) to
+    ``(resolved_run_id, run_dir)``.
+
+    ``runs_dir`` may be relative; error messages convert it to absolute and
+    mention the current working directory so the user knows why a bare id
+    resolves differently depending on which directory they are in.
+
+    Raises :exc:`_RunResolveError` when:
+    - the directory does not exist or contains no runs;
+    - the prefix matches more than one run (ambiguous);
+    - no run matches the given id or prefix.
+    """
+    import json as _json
+
+    _cwd_hint = (
+        f" (path resolved relative to {Path.cwd()}; "
+        "use --runs-dir to specify the correct runs directory)"
+    )
+
+    if not runs_dir.exists():
+        raise _RunResolveError(f"no runs found — {runs_dir.absolute()} does not exist{_cwd_hint}")
+
+    # Collect subdirectories that have a journal file.
+    all_run_dirs: list[Path] = sorted(
+        d for d in runs_dir.iterdir() if d.is_dir() and (d / "journal.jsonl").exists()
+    )
+
+    if run_id == "latest":
+        if not all_run_dirs:
+            raise _RunResolveError(f"no runs found in {runs_dir.absolute()}{_cwd_hint}")
+        best_dir: Path | None = None
+        best_ts = ""
+        for d in all_run_dirs:
+            try:
+                for line in (d / "journal.jsonl").read_text("utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    if entry.get("event") == "run_started":
+                        ts: str = (entry.get("payload") or {}).get("now", "")
+                        if ts > best_ts:
+                            best_ts = ts
+                            best_dir = d
+                        break
+            except OSError:
+                continue
+        if best_dir is None:
+            raise _RunResolveError(
+                f"no run with a run_started event found in {runs_dir.absolute()}{_cwd_hint}"
+            )
+        return best_dir.name, best_dir
+
+    # Exact match takes priority over prefix search.
+    exact = runs_dir / run_id
+    if exact.is_dir() and (exact / "journal.jsonl").exists():
+        return run_id, exact
+
+    # Prefix match.
+    matches = [d for d in all_run_dirs if d.name.startswith(run_id)]
+    if len(matches) == 1:
+        return matches[0].name, matches[0]
+    if len(matches) > 1:
+        names = ", ".join(d.name for d in sorted(matches, key=lambda p: p.name))
+        raise _RunResolveError(f"ambiguous run-id prefix {run_id!r}: matches {names}")
+
+    # Nothing found — surface the relative-path hint so the user knows why.
+    raise _RunResolveError(
+        f"no journal found for run-id {run_id!r} in {runs_dir.absolute()}{_cwd_hint}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the top-level argument parser."""
     parser = argparse.ArgumentParser(
@@ -632,8 +717,13 @@ def _cmd_run(
 
     todo_path = Path(config.todo_path)
 
+    # Capture now before the lock so make_run_id has a real timestamp.
+    from .clock import capture_now, make_run_id
+
+    now = capture_now(config)
+
     # Acquire single-flight lock before ingest (AC10.5, AC10.6).
-    run_id = str(uuid.uuid4())
+    run_id = make_run_id(now)
     lock = Lock(todo_path)
     try:
         lock.acquire(run_id=run_id)
@@ -642,7 +732,6 @@ def _cmd_run(
         return 0
 
     try:
-        from .clock import capture_now
         from .ingest import IngestError, ingest
         from .journal import ITEM_PARKED, LOCK_RECLAIMED, RUN_FINISHED, RUN_STARTED, Journal
         from .report import build_report, format_summary, write_report
@@ -650,7 +739,6 @@ def _cmd_run(
 
         run_dir = Path("runs") / run_id
         journal = Journal(run_dir / "journal.jsonl", run_id)
-        now = capture_now(config)
 
         journal.append(
             RUN_STARTED,
@@ -747,10 +835,10 @@ def _cmd_report(args: argparse.Namespace) -> int:
     )
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
-    run_dir = runs_dir / args.run_id
-
-    if not (run_dir / "journal.jsonl").exists():
-        print(f"error: no journal found at {run_dir / 'journal.jsonl'}", file=sys.stderr)
+    try:
+        _, run_dir = _resolve_run_id(runs_dir, args.run_id)
+    except _RunResolveError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
 
     report = build_report(run_dir)
@@ -906,14 +994,14 @@ def _cmd_resume(
     from .select import CycleError, select_next
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
-    run_dir = runs_dir / args.run_id
+    try:
+        resolved_run_id, run_dir = _resolve_run_id(runs_dir, args.run_id)
+    except _RunResolveError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     journal_path = run_dir / "journal.jsonl"
 
-    if not journal_path.exists():
-        print(f"error: no journal found at {journal_path}", file=sys.stderr)
-        return 1
-
-    journal = Journal(journal_path, args.run_id)
+    journal = Journal(journal_path, resolved_run_id)
     state = journal.replay()
 
     if state.now is None:

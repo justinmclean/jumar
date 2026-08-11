@@ -33,6 +33,11 @@ from getstuffdone.models import (
     TodoItem,
 )
 
+# NOTE: every fake runner below takes `**_: Any`. `decompose()` passes
+# `allow_tools=False` so planning cannot use tools, and a double that rejects
+# kwargs it does not care about breaks the moment the seam grows a parameter —
+# which is a property of the double, not of the code under test.
+
 # ---------------------------------------------------------------------------
 # Fake agent infrastructure
 # ---------------------------------------------------------------------------
@@ -65,6 +70,7 @@ def _fake_runner(responses: list[str | None]) -> Any:
         capabilities: Any,
         timeout_s: int,
         harness: HarnessInfo,
+        **_: Any,
     ) -> _FakeResult:
         idx = call_count[0]
         call_count[0] += 1
@@ -707,6 +713,7 @@ def _capturing_runner(
         capabilities: Any,
         timeout_s: int,
         harness: HarnessInfo,
+        **_: Any,
     ) -> _FakeResult:
         captured.append(harness)
         idx = call_count[0]
@@ -774,6 +781,7 @@ def test_decompose_override_does_not_affect_execute_stage(tmp_path: Path) -> Non
         capabilities: Any,
         timeout_s: int,
         harness: HarnessInfo,
+        **_: Any,
     ) -> Any:
         captured.append(harness)
         return _FakeResult(exit_status=0, stdout="done", agent_claim="done")
@@ -841,6 +849,7 @@ def _prompt_capturing_runner(responses: list[str | None]) -> tuple[Any, list[str
         capabilities: Any,
         timeout_s: int,
         harness: HarnessInfo,
+        **_: Any,
     ) -> _FakeResult:
         captured.append(prompt)
         idx = call_count[0]

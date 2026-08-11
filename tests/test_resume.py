@@ -726,3 +726,37 @@ def test_resume_uuid_format_still_resolves(tmp_path: Path, monkeypatch: pytest.M
 
     rc = main(["resume", run_id, "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# runs-dir-relative-path — error messages hint that the path is CWD-relative
+# ---------------------------------------------------------------------------
+
+
+def test_resume_not_found_error_hints_runs_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When a run id cannot be found, the error hints that runs-dir is relative.
+
+    The previous message ("no journal found at runs/<id>/journal.jsonl") gave
+    no indication that 'runs/' is relative to the working directory where gsd
+    was launched, not necessarily where gsd resume is invoked from.
+    """
+    monkeypatch.chdir(tmp_path)
+    rc = main(["resume", "nonexistent-20260101-0900-abcd"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    # The message must guide the operator to the fix.
+    assert "--runs-dir" in err
+
+
+def test_resume_not_found_error_includes_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The not-found error shows the absolute path so it is unambiguous."""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["resume", "no-such-run"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    # The absolute path of the attempted runs directory appears in the error.
+    assert str(tmp_path) in err
