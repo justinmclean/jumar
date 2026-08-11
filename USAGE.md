@@ -14,11 +14,6 @@ each stage must satisfy.
 ---
 
 
-> **Renamed from `gsd`, 2026-08-11** — config is `jumar.toml` with `[jumar]`
-> sections (old `gsd.toml`/`[gsd]` not read); schedules installed pre-rename
-> must be removed with the old binary and reinstalled; `jumar doctor` names
-> any leftovers. See the README rename note for the full list.
-
 ## 1. Set up a todo file
 
 `todo.md` is git-ignored by default, so your real list never lands in a commit.
