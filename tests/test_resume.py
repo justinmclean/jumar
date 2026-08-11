@@ -517,7 +517,7 @@ def test_run_id_format_from_real_run(tmp_path: Path, monkeypatch: pytest.MonkeyP
     rc = cli._cmd_run(_Args(), _run_agent=agent)  # type: ignore[arg-type]
     assert rc == 0
 
-    runs = list((tmp_path / "runs").iterdir())
+    runs = [d for d in (tmp_path / "runs").iterdir() if d.is_dir()]
     assert len(runs) == 1
     run_id = runs[0].name
     assert re.match(r"^\d{8}-\d{4}-[a-f0-9]{4}$", run_id), (
@@ -726,3 +726,265 @@ def test_resume_uuid_format_still_resolves(tmp_path: Path, monkeypatch: pytest.M
 
     rc = main(["resume", run_id, "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# F2 — run index (runs/index.tsv)
+# ---------------------------------------------------------------------------
+
+
+def test_index_appended_at_run_started(tmp_path: Path) -> None:
+    """append_run_started creates a row in index.tsv with status in_progress."""
+    from getstuffdone.index import (
+        FILENAME,
+        STATUS_IN_PROGRESS,
+        append_run_started,
+    )
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    run_id = "20260811-1200-abcd"
+    started = "2026-08-11T12:00:00Z"
+    append_run_started(runs_dir, run_id, started)
+
+    index = runs_dir / FILENAME
+    assert index.exists()
+    lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lines) == 1
+    parts = lines[0].split("\t")
+    assert parts[0] == run_id
+    assert parts[1] == started
+    assert parts[2] == ""  # item_id unknown at run_started
+    assert parts[3] == STATUS_IN_PROGRESS
+
+
+def test_index_updated_at_run_finished(tmp_path: Path) -> None:
+    """update_run_finished rewrites the row with item_id and final status."""
+    from getstuffdone.index import (
+        FILENAME,
+        STATUS_COMPLETED,
+        append_run_started,
+        update_run_finished,
+    )
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    run_id = "20260811-1200-abcd"
+    started = "2026-08-11T12:00:00Z"
+    append_run_started(runs_dir, run_id, started)
+    update_run_finished(runs_dir, run_id, "my-item-a1b2c3d4", STATUS_COMPLETED)
+
+    index = runs_dir / FILENAME
+    lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lines) == 1
+    parts = lines[0].split("\t")
+    assert parts[0] == run_id
+    assert parts[1] == started  # started column unchanged
+    assert parts[2] == "my-item-a1b2c3d4"
+    assert parts[3] == STATUS_COMPLETED
+
+
+def test_index_in_progress_on_crash(tmp_path: Path) -> None:
+    """A run without a run_finished leaves its index row as in_progress."""
+    from getstuffdone.index import FILENAME, STATUS_IN_PROGRESS, append_run_started
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    run_id = "20260811-1200-abcd"
+    append_run_started(runs_dir, run_id, "2026-08-11T12:00:00Z")
+    # No update_run_finished — simulates a crash before run_finished.
+
+    index = runs_dir / FILENAME
+    lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lines) == 1
+    assert lines[0].split("\t")[3] == STATUS_IN_PROGRESS
+
+
+def test_multiple_runs_each_get_a_row(tmp_path: Path) -> None:
+    """Each call to append_run_started adds exactly one new row."""
+    from getstuffdone.index import (
+        FILENAME,
+        STATUS_COMPLETED,
+        append_run_started,
+        update_run_finished,
+    )
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    runs = [
+        ("20260811-1000-aaaa", "2026-08-11T10:00:00Z"),
+        ("20260811-1100-bbbb", "2026-08-11T11:00:00Z"),
+        ("20260811-1200-cccc", "2026-08-11T12:00:00Z"),
+    ]
+    for rid, started in runs:
+        append_run_started(runs_dir, rid, started)
+        update_run_finished(runs_dir, rid, "item-id", STATUS_COMPLETED)
+
+    index = runs_dir / FILENAME
+    lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lines) == 3
+    ids = [ln.split("\t")[0] for ln in lines]
+    assert ids == [r[0] for r in runs]
+
+
+def test_resolve_latest_uses_index_when_present(tmp_path: Path) -> None:
+    """_resolve_run_id('latest') returns the highest-started entry from the index."""
+    import json as _json
+
+    from getstuffdone.index import STATUS_COMPLETED, append_run_started, update_run_finished
+
+    runs_dir = tmp_path / "runs"
+    for rid, started, now_str in [
+        ("20260101-0900-aaaa", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z"),
+        ("20260811-1200-bbbb", "2026-08-11T12:00:00Z", "2026-08-11T12:00:00Z"),
+    ]:
+        d = runs_dir / rid
+        d.mkdir(parents=True)
+        (d / "journal.jsonl").write_text(
+            _json.dumps({"event": "run_started", "payload": {"now": now_str}}) + "\n",
+            encoding="utf-8",
+        )
+        append_run_started(runs_dir, rid, started)
+        update_run_finished(runs_dir, rid, "item-id", STATUS_COMPLETED)
+
+    resolved_id, resolved_dir = _resolve_run_id(runs_dir, "latest")
+    assert resolved_id == "20260811-1200-bbbb"
+    assert resolved_dir == runs_dir / "20260811-1200-bbbb"
+
+
+def test_resolve_latest_falls_back_to_journal_when_no_index(tmp_path: Path) -> None:
+    """UUID-named runs not in the index resolve via the journal scan fallback."""
+    import json as _json
+
+    runs_dir = tmp_path / "runs"
+    for rid, now_str in [
+        ("uuid-old-run-aaaa", "2026-01-01T09:00:00Z"),
+        ("uuid-new-run-bbbb", "2026-08-11T12:00:00Z"),
+    ]:
+        d = runs_dir / rid
+        d.mkdir(parents=True)
+        (d / "journal.jsonl").write_text(
+            _json.dumps({"event": "run_started", "payload": {"now": now_str}}) + "\n",
+            encoding="utf-8",
+        )
+    # No index.tsv — resolution must fall back to journal scan.
+
+    resolved_id, _ = _resolve_run_id(runs_dir, "latest")
+    assert resolved_id == "uuid-new-run-bbbb"
+
+
+def test_resolve_latest_corrupt_index_falls_back_to_journal(tmp_path: Path) -> None:
+    """A corrupt index.tsv causes _resolve_run_id to fall back to the journal scan."""
+    import json as _json
+
+    from getstuffdone.index import FILENAME
+
+    runs_dir = tmp_path / "runs"
+    rid = "20260811-1200-abcd"
+    d = runs_dir / rid
+    d.mkdir(parents=True)
+    (d / "journal.jsonl").write_text(
+        _json.dumps({"event": "run_started", "payload": {"now": "2026-08-11T12:00:00Z"}}) + "\n",
+        encoding="utf-8",
+    )
+    # Write a corrupt index (wrong column count on every line).
+    (runs_dir / FILENAME).write_text("not\tvalid\nmore\tbad\tdata\n", encoding="utf-8")
+
+    resolved_id, _ = _resolve_run_id(runs_dir, "latest")
+    assert resolved_id == rid
+
+
+def test_resolve_latest_absent_index_falls_back_to_journal(tmp_path: Path) -> None:
+    """An absent index.tsv causes no error; the journal scan resolves 'latest'."""
+    import json as _json
+
+    runs_dir = tmp_path / "runs"
+    rid = "20260811-1200-abcd"
+    d = runs_dir / rid
+    d.mkdir(parents=True)
+    (d / "journal.jsonl").write_text(
+        _json.dumps({"event": "run_started", "payload": {"now": "2026-08-11T12:00:00Z"}}) + "\n",
+        encoding="utf-8",
+    )
+    # No index.tsv.
+
+    resolved_id, _ = _resolve_run_id(runs_dir, "latest")
+    assert resolved_id == rid
+
+
+def test_update_run_finished_no_ops_for_absent_row(tmp_path: Path) -> None:
+    """update_run_finished silently no-ops when the run_id is not in the index."""
+    from getstuffdone.index import (
+        FILENAME,
+        STATUS_COMPLETED,
+        append_run_started,
+        update_run_finished,
+    )
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    append_run_started(runs_dir, "20260811-1200-aaaa", "2026-08-11T12:00:00Z")
+    # Update for a different run_id not in the index — must not raise.
+    update_run_finished(runs_dir, "nonexistent-run-id", "item", STATUS_COMPLETED)
+
+    index = runs_dir / FILENAME
+    lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lines) == 1
+    assert lines[0].split("\t")[0] == "20260811-1200-aaaa"
+
+
+def test_gsd_run_writes_index_and_updates_on_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: gsd run appends to index.tsv and updates status at run_finished."""
+    import json as _json
+
+    from getstuffdone import cli
+    from getstuffdone.harness import AgentResult
+    from getstuffdone.index import FILENAME, STATUS_COMPLETED
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Write marker @capability=write_fs @id=marker-a1b2c3d4\n"
+    )
+
+    _PLAN_JSON = _json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "Create marker.txt",
+                    "capabilities": ["write_fs"],
+                    "depends_on": [],
+                    "check": {
+                        "kind": "file",
+                        "statement": "marker.txt exists",
+                        "path": "marker.txt",
+                    },
+                }
+            ]
+        }
+    )
+
+    def agent(prompt: str, *, cwd: Path, **_: object) -> AgentResult:
+        if "subtasks" in prompt or "JSON" in prompt:
+            return AgentResult(0, _PLAN_JSON, "", False, "done")
+        (cwd / "marker.txt").write_text("ok\n")
+        return AgentResult(0, "wrote marker", "", False, "done")
+
+    class _Args:
+        todo = None
+        dry_run = False
+        approve = False
+        non_interactive = True
+
+    rc = cli._cmd_run(_Args(), _run_agent=agent)  # type: ignore[arg-type]
+    assert rc == 0
+
+    runs_dir = tmp_path / "runs"
+    index = runs_dir / FILENAME
+    assert index.exists(), "index.tsv must be created by gsd run"
+    lines = [ln for ln in index.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lines) == 1, f"expected 1 index row, got {lines}"
+    parts = lines[0].split("\t")
+    assert parts[2] == "marker-a1b2c3d4"
+    assert parts[3] == STATUS_COMPLETED
