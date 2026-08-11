@@ -33,7 +33,7 @@ cp todo.example.md todo.md
 Context lines like this one are attached to the item below them and are passed
 to the agent as background — they are never treated as work.
 
-- [ ] Add a --json flag to the export script @priority=1 @capability=write_fs
+- [ ] Add a --json flag to the export script @id=export-json @priority=1 @capability=write_fs
 - [ ] Update the README install section @depends=export-json
       - [ ] Rewrite the install steps for the new flag
       - [ ] Check every command in the README actually runs
@@ -51,16 +51,16 @@ gates, and prints the decision. **No agent is called and nothing is executed.**
 
 ```console
 $ jumar plan --dry-run
-Run:   9daec9eb-ae52-4223-b6c8-e450fafd52cd
+Run:   20260811-0748-5dc9
 Todo:  todo.md  (4 pending)
-Now:   2026-08-08T00:51:11.729401+00:00
+Now:   2026-08-11T07:48:43.028260+00:00
 
 Selected:  Add a --json flag to the export script
-  id:           add-a-json-flag-to-the-export-script-a67187c5
-  capabilities: read_fs, run_commands, write_fs
+  id:           export-json
+  capabilities: network, read_fs, run_commands, write_fs
 
 Deferred (1):
-  - 'Draft the quarterly summary'  [eligible at 2026-09-01T00:00:00+00:00]
+  - 'Draft the quarterly summary'  [eligible at 2026-08-31T14:00:00+00:00]
 
 Blocked (1):
   - 'Update the README install section'  [depends on unfinished export-json]
@@ -92,13 +92,13 @@ wrong instinct for unattended work:
 ```console
 $ jumar plan --dry-run --todo bad.md
 warning: Line 1: bad schedule token: @due='next': Cannot parse date/datetime: 'next'
-Run:   64fcaeff-0eca-4a7f-ba36-295b6a956e3d
+Run:   20260811-0748-7d5d
 Todo:  bad.md  (1 pending)
-Now:   2026-08-08T00:51:20.666894+00:00
+Now:   2026-08-11T07:48:46.890802+00:00
 
 Selected:  Fine item
   id:           fine-item-334aeee7
-  capabilities: read_fs, run_commands, write_fs
+  capabilities: network, read_fs, run_commands, write_fs
 ```
 
 The malformed item is dropped from consideration; the rest of the file still
@@ -158,15 +158,13 @@ active, so scheduled and piped runs stay silent.
 
 ```console
 $ jumar run
-→ Add a --json flag to the export script
+→ Write two marker files
   planning … (one agent call, up to 12 subtasks)
-  planned 3 subtask(s)
-[1/3] Add argparse argument for --json … verifying (command) … passed
-[2/3] Document the flag in the README … verifying (file) … failed — pattern '--json' not found in README.md
-  repairing (budget 2) …
-  attempt 1/2 … passed
-[3/3] Update the test suite … verifying (command) … passed
+  planned 2 subtask(s)
+[1/2] Write marker.txt containing OK … verifying (file) … passed
+[2/2] Write second.txt containing OK … verifying (file) … passed
 → done
+Run: 1 done
 ```
 
 Reading the output left to right:

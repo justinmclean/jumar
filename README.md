@@ -3,6 +3,8 @@
 
 # Jumar
 
+[![CI](https://github.com/justinmclean/jumar/actions/workflows/ci.yml/badge.svg)](https://github.com/justinmclean/jumar/actions/workflows/ci.yml)
+
 Turn a plain Markdown todo list into **verified** work.
 
 > **Renamed from GetStuffDone (`gsd`), 2026-08-11.** If you used a pre-rename
@@ -127,7 +129,7 @@ Known gaps are tracked in **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**.
 Python 3.11 or newer (the code uses `datetime.UTC`).
 
 ```bash
-git clone <your-remote> Jumar && cd Jumar
+git clone https://github.com/justinmclean/jumar.git Jumar && cd Jumar
 make install      # editable install + dev tools (pytest, ruff, mypy)
 make check        # ruff + mypy + pytest + the build-loop fixture tests
 jumar --version
@@ -152,7 +154,7 @@ Full worked examples, the flag reference, and the config reference are in
 Context prose above an item is passed to the agent as background,
 never treated as work.
 
-- [ ] Add a --json flag to the export script @priority=1 @capability=write_fs
+- [ ] Add a --json flag to the export script @id=export-json @priority=1 @capability=write_fs
 - [ ] Update the README install section @depends=export-json
       - [ ] Rewrite the install steps for the new flag
       - [ ] Check every command in the README actually runs
