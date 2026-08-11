@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from getstuffdone.harness import (
+    SESSION_RESUMABLE_HARNESSES,
     SUPPORTED_HARNESSES,
     AgentResult,
     build_argv,
@@ -839,3 +840,116 @@ def test_claude_always_runs_with_strict_mcp_config() -> None:
         assert "--strict-mcp-config" in argv, f"allow_tools={allow_tools}"
         # Strictness is only meaningful because no config is supplied alongside.
         assert "--mcp-config" not in argv
+
+
+# ---------------------------------------------------------------------------
+# Session resumption — P3 (reuse-the-execution-session)
+# ---------------------------------------------------------------------------
+
+
+def test_session_resumable_harnesses_only_claude() -> None:
+    """Only claude supports --resume; all other harnesses must fall back."""
+    assert {"claude"} == SESSION_RESUMABLE_HARNESSES
+
+
+def test_claude_argv_includes_resume_when_session_id_given() -> None:
+    """--resume <session_id> must appear for claude when session_id is provided."""
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model=None,
+        capabilities=_BASE_CAPS,
+        prompt="x",
+        session_id="deadbeef1234abcd",
+    )
+    assert "--resume" in argv
+    idx = argv.index("--resume")
+    assert argv[idx + 1] == "deadbeef1234abcd"
+
+
+def test_claude_argv_no_resume_when_session_id_none() -> None:
+    """When session_id is None, --resume must not appear (first subtask / fresh context)."""
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model=None,
+        capabilities=_BASE_CAPS,
+        prompt="x",
+        session_id=None,
+    )
+    assert "--resume" not in argv
+
+
+def test_non_resumable_harness_ignores_session_id() -> None:
+    """Harnesses without session support fall back to today's behaviour (no --resume)."""
+    for harness in SUPPORTED_HARNESSES - SESSION_RESUMABLE_HARNESSES:
+        argv = build_argv(
+            agent_bin=harness,
+            harness_name=harness,
+            model=None,
+            capabilities=_BASE_CAPS,
+            prompt="task",
+            session_id="abc123",
+        )
+        assert "--resume" not in argv, f"harness={harness!r} should not emit --resume"
+
+
+def test_claude_resume_does_not_appear_before_strict_mcp_config() -> None:
+    """--resume must not interfere with the argv ordering of security flags."""
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model=None,
+        capabilities=_BASE_CAPS,
+        prompt="x",
+        session_id="abc",
+    )
+    assert "--strict-mcp-config" in argv
+    assert "--resume" in argv
+
+
+def test_judge_verifier_runner_called_without_session_id(tmp_path: Path) -> None:
+    """The judge runner must never receive a session_id — fresh context is the invariant."""
+    import json as _json
+
+    recorded: dict = {}
+
+    def fake_run_agent(
+        prompt: str,
+        *,
+        cwd: object,
+        capabilities: object,
+        timeout_s: int,
+        harness: object,
+        session_id: str | None = None,
+    ) -> AgentResult:
+        recorded["session_id"] = session_id
+        return AgentResult(
+            exit_status=0,
+            stdout=_json.dumps({"verdict": "pass", "reason": "ok", "artefacts_shown": []}),
+            stderr="",
+            timed_out=False,
+            agent_claim="pass",
+        )
+
+    from getstuffdone.models import CheckKind, HarnessInfo
+    from getstuffdone.verify import VerifyContext
+    from getstuffdone.verify.judge import verify_judge
+
+    check_raw = __import__("getstuffdone.models", fromlist=["Check"]).Check(
+        kind=CheckKind.judge,
+        statement="The output is correct.",
+        rationale="No executable check is possible.",
+    )
+    ctx = VerifyContext(
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        evidence_head_bytes=4000,
+        subtask_id="item-01#2",
+        attempt_no=0,
+        harness=HarnessInfo(agent="claude", model="sonnet", harness="claude", invoked_as="claude"),
+        judge_timeout_s=30,
+        judge_run_agent=fake_run_agent,
+    )
+    verify_judge(check_raw, ctx)
+    assert recorded.get("session_id") is None

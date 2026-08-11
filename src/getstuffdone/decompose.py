@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .clock import stamp
+from .clock import make_session_id, stamp
 from .config import Config
 from .harness import AgentResult
 from .harness import run_agent as _default_run_agent
@@ -480,17 +480,21 @@ def decompose(
         if rejection is None:
             # Success — journal the full plan before returning (AC3.6).
             created_at = stamp()
+            session_id = make_session_id()
             plan = Plan(
                 item_id=item.item_id,
                 subtasks=subtasks,
                 source=source,
                 created_at=created_at,
                 harness=harness_info,
+                session_id=session_id,
             )
+            payload = _plan_payload(plan)
+            payload["session_id"] = session_id
             journal.append(
                 PLAN_CREATED,
                 item_id=item.item_id,
-                payload=_plan_payload(plan),
+                payload=payload,
             )
             return plan
 

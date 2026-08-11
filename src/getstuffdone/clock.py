@@ -46,6 +46,18 @@ def make_run_id(now: datetime, *, _suffix: str | None = None) -> str:
     return f"{dt.strftime('%Y%m%d-%H%M')}-{suffix}"
 
 
+def make_session_id(*, _value: str | None = None) -> str:
+    """Generate a unique session id for one item's execution session.
+
+    The returned value is used with the harness ``--resume`` flag so the
+    agent can continue the same conversation across subtasks.  Inject
+    ``_value`` in tests to get a deterministic id.
+    """
+    if _value is not None:
+        return _value
+    return secrets.token_hex(16)
+
+
 def stamp(*, _now: datetime | None = None) -> str:
     """Return the current instant as an ISO-8601 UTC string, for audit fields.
 
