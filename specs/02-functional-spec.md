@@ -576,7 +576,8 @@ half the year.
 ## Stage 11 — Status & machine-readable output
 
 **Where it lives:** `src/getstuffdone/status.py` (`gsd status`); the `--json`
-flag in `cli.py` / `report.py` (`gsd plan --dry-run`, `gsd run`, `gsd report`)
+flag in `cli.py` / `report.py` (`gsd plan --dry-run`, `gsd run`, `gsd report`,
+`gsd status`)
 
 **Behaviour & contract**
 
@@ -616,10 +617,10 @@ on stderr; progress (AC5.6) is suppressed. All timestamps are ISO-8601 UTC.
 
 **Known gaps**
 
-- `gsd status` itself has no `--json` yet; the flag exists on `plan`, `run`,
-  and `report`.
-- No `runs/index.tsv` run index yet: status derives everything by scanning
-  journals (F1 change 4 in `IMPLEMENTATION_PLAN.md`).
+- None. Both gaps previously listed here closed 2026-08-11: `gsd status`
+  gained `--json` (AC11.5, AC11.6), and `runs/index.tsv` now exists as a
+  cache for `latest` resolution (journals remain authoritative; a missing or
+  corrupt index falls back to a journal scan).
 
 ---
 

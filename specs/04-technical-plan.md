@@ -79,6 +79,9 @@ never a partial accept.
 - Subtasks run with `cwd` set to the item's working directory (default: repo
   root) and inherit a **scrubbed environment**: no `GITHUB_TOKEN`, no
   `*_API_KEY` beyond the one the harness itself needs, no SSH agent socket.
+  The Claude harness argv also carries `--strict-mcp-config`, so
+  user-configured MCP servers (e.g. a mail server) are not inherited into the
+  session and cannot bypass the send-boundary deny list below.
 - The enforced boundary is **send, not fetch** (decided 2026-08-08). `network`
   **is** a default capability and `curl`/`wget` are on the allow list — an
   agent that cannot reach a primary source fabricates it instead, the worse

@@ -104,7 +104,7 @@ Everything below is built, tested and merged.
 | `gsd schedule add\|list\|remove\|show` | Install and inspect cron/launchd entries. |
 | `gsd doctor` | Check config, harness binary, allow list, schedules, todo file. |
 
-`--json` is available on `plan`, `report` and `status`; `--verbose` streams the
+`--json` is available on `plan`, `run`, `report` and `status`; `--verbose` streams the
 agent's output during `run`. Progress goes to stderr so stdout stays clean, and
 is suppressed under `--json` or when stderr is not a TTY, so scheduled runs stay
 quiet. CI runs `make check` with a per-module coverage floor.

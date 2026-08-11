@@ -407,7 +407,13 @@ Inspect any run directly — the journal is append-only JSON lines:
 ls runs/
 python3 -m json.tool < runs/<run-id>/journal.jsonl   # per-line
 cat runs/<run-id>/report.md
+column -t -s $'\t' < runs/index.tsv                  # run index: id, started, item, status
 ```
+
+`runs/index.tsv` is a cache for fast `latest` resolution — one line per run,
+appended at `run_started`, status updated at `run_finished`. The journals stay
+authoritative: a missing or corrupt index falls back to a full journal scan,
+and uuid-era run directories without an index row still resolve by prefix.
 
 ---
 
@@ -419,7 +425,7 @@ gsd plan   [--dry-run] [--todo PATH] [--json]
 gsd run    [--dry-run | --approve] [--non-interactive] [--verbose] [--json] [--todo PATH]
 gsd resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
 gsd report RUN_ID [--runs-dir DIR] [--json]             # ditto
-gsd status [--todo PATH] [--runs-dir DIR]
+gsd status [--todo PATH] [--runs-dir DIR] [--json]
 gsd schedule (add | list | remove | show) …
 gsd doctor
 ```
