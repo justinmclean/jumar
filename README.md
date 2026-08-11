@@ -7,17 +7,6 @@
 
 Turn a plain Markdown todo list into **verified** work.
 
-> **Renamed from GetStuffDone (`gsd`), 2026-08-11.** If you used a pre-rename
-> build: the CLI verb is now `jumar`; rename your config file `gsd.toml` →
-> `jumar.toml` and its `[gsd]`/`[gsd.*]` sections → `[jumar]`/`[jumar.*]` (the
-> old names are **not** read — this is a clean break); a run in progress under
-> the old `.gsd.lock` is invisible to the new binary, so let old runs finish
-> first; and any installed schedules keep firing the old command — remove each
-> with the **old** binary (`gsd schedule remove`) or by hand *before*
-> upgrading, then reinstall with `jumar schedule add`. `jumar doctor` detects
-> and names leftover pre-rename schedule entries. Existing `runs/` directories
-> and journals are untouched — they are an append-only historical record.
-
 For each item on the list, Jumar breaks it into concrete subtasks, does
 **one subtask at a time**, and **proves each one worked** — with a real,
 executable check — before starting the next. An item is done when every one of
