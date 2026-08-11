@@ -25,14 +25,19 @@ SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status"
 
 # ---------------------------------------------------------------------------
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Run-id resolution — prefix matching, "latest", and CWD-aware errors
 =======
 # Run-id resolution (prefix matching and "latest")
 >>>>>>> status-json
+=======
+# Run-id resolution (prefix matching and "latest")
+>>>>>>> run-index-tsv
 # ---------------------------------------------------------------------------
 
 
 class _RunResolveError(Exception):
+<<<<<<< HEAD
 <<<<<<< HEAD
     """Raised when a run-id cannot be resolved to a unique run directory."""
 
@@ -112,6 +117,8 @@ def _resolve_run_id(runs_dir: Path, run_id: str) -> tuple[str, Path]:
         f"no journal found for run-id {run_id!r} in {runs_dir.absolute()}{_cwd_hint}"
     )
 =======
+=======
+>>>>>>> run-index-tsv
     """A run-id alias could not be uniquely resolved."""
 
 
@@ -131,6 +138,19 @@ def _resolve_run_id(runs_dir: Path, run_id_alias: str) -> tuple[str, Path]:
         raise _RunResolveError(f"no run found matching '{run_id_alias}'")
 
     if run_id_alias == "latest":
+<<<<<<< HEAD
+=======
+        # Fast path: try the run index before scanning every journal.
+        from .index import resolve_latest_from_index as _resolve_idx
+
+        _idx_id = _resolve_idx(runs_dir)
+        if _idx_id is not None:
+            _idx_dir = runs_dir / _idx_id
+            if _idx_dir.is_dir() and (_idx_dir / "journal.jsonl").exists():
+                return _idx_id, _idx_dir
+
+        # Fall back to full journal scan (no index, corrupt index, or stale entry).
+>>>>>>> run-index-tsv
         best_id: str | None = None
         best_now: str = ""
         for d in runs_dir.iterdir():
@@ -173,7 +193,10 @@ def _resolve_run_id(runs_dir: Path, run_id_alias: str) -> tuple[str, Path]:
         names = ", ".join(sorted(d.name for d in candidates))
         raise _RunResolveError(f"ambiguous prefix '{run_id_alias}' matches: {names}")
     return candidates[0].name, candidates[0]
+<<<<<<< HEAD
 >>>>>>> status-json
+=======
+>>>>>>> run-index-tsv
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -790,6 +813,7 @@ def _cmd_run(
     todo_path = Path(config.todo_path)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     # Capture now before the lock so make_run_id has a real timestamp.
     from .clock import capture_now, make_run_id
 
@@ -806,6 +830,15 @@ def _cmd_run(
 
     # Acquire single-flight lock before ingest (AC10.5, AC10.6).
 >>>>>>> status-json
+=======
+    # Capture now before minting the run id so the id encodes the start time.
+    from .clock import capture_now, make_run_id
+
+    now = capture_now(config)
+    run_id = make_run_id(now)
+
+    # Acquire single-flight lock before ingest (AC10.5, AC10.6).
+>>>>>>> run-index-tsv
     lock = Lock(todo_path)
     try:
         lock.acquire(run_id=run_id)
@@ -833,6 +866,14 @@ def _cmd_run(
                 "trigger": "human",
             },
         )
+        from .index import (
+            STATUS_COMPLETED,
+            STATUS_FAILED,
+            append_run_started,
+            update_run_finished,
+        )
+
+        append_run_started(run_dir.parent, run_id, now.isoformat())
         if lock.reclaimed_info is not None:
             journal.append(LOCK_RECLAIMED, payload=lock.reclaimed_info)
 
@@ -869,6 +910,7 @@ def _cmd_run(
                 for p_item, p_reason in sel.parked:
                     print(f"  - {p_item.text!r}  [paused: {p_reason}]")
             journal.append(RUN_FINISHED, payload={"exit_status": 0})
+            update_run_finished(run_dir.parent, run_id, "", STATUS_COMPLETED)
             return 0
 
         from .progress import Progress
@@ -893,6 +935,12 @@ def _cmd_run(
 
         prog.item_finished("done" if status == 0 else "failed")
         journal.append(RUN_FINISHED, payload={"exit_status": status})
+        update_run_finished(
+            run_dir.parent,
+            run_id,
+            sel.selected.item_id,
+            STATUS_COMPLETED if status == 0 else STATUS_FAILED,
+        )
         report = build_report(run_dir)
         write_report(report, run_dir)
         print(format_summary(report))
@@ -919,10 +967,14 @@ def _cmd_report(args: argparse.Namespace) -> int:
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
     try:
 <<<<<<< HEAD
+<<<<<<< HEAD
         _, run_dir = _resolve_run_id(runs_dir, args.run_id)
 =======
         _run_id, run_dir = _resolve_run_id(runs_dir, args.run_id)
 >>>>>>> status-json
+=======
+        _run_id, run_dir = _resolve_run_id(runs_dir, args.run_id)
+>>>>>>> run-index-tsv
     except _RunResolveError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1086,12 +1138,17 @@ def _cmd_resume(
         print(f"error: {exc}", file=sys.stderr)
         return 1
 <<<<<<< HEAD
+<<<<<<< HEAD
     journal_path = run_dir / "journal.jsonl"
 
 =======
 
     journal_path = run_dir / "journal.jsonl"
 >>>>>>> status-json
+=======
+
+    journal_path = run_dir / "journal.jsonl"
+>>>>>>> run-index-tsv
     journal = Journal(journal_path, resolved_run_id)
     state = journal.replay()
 
@@ -1215,6 +1272,15 @@ def _cmd_resume(
     )
 
     journal.append(RUN_FINISHED, payload={"exit_status": exit_status})
+    from .index import STATUS_COMPLETED, STATUS_FAILED
+    from .index import update_run_finished as _update_idx
+
+    _update_idx(
+        run_dir.parent,
+        resolved_run_id,
+        item.item_id,
+        STATUS_COMPLETED if exit_status == 0 else STATUS_FAILED,
+    )
     report = build_report(run_dir)
     write_report(report, run_dir)
     print(format_summary(report))

@@ -112,7 +112,7 @@ def test_run_writes_a_journal_and_report(workspace: Path) -> None:
     """Every run leaves an auditable journal and report."""
     assert cli._cmd_run(_Args(), _run_agent=honest_agent) == 0
 
-    runs = list((workspace / "runs").iterdir())
+    runs = [d for d in (workspace / "runs").iterdir() if d.is_dir()]
     assert len(runs) == 1
     assert (runs[0] / "journal.jsonl").exists()
     assert (runs[0] / "report.md").exists()
@@ -200,7 +200,7 @@ def test_resume_of_a_completed_run_never_reinvokes_the_agent(
 ) -> None:
     """Verified subtasks are replayed from the journal, not redone (AC-S1)."""
     assert cli._cmd_run(_Args(), _run_agent=honest_agent) == 0
-    run_id = next(iter((workspace / "runs").iterdir())).name
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
 
     def exploding_agent(*_a: Any, **_kw: Any) -> AgentResult:
         raise AssertionError("resume re-invoked the agent for an already-passed subtask")
@@ -330,7 +330,7 @@ def test_retry_failed_reruns_only_the_unverified_subtask(workspace: Path) -> Non
     bug was fixed.
     """
     assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
-    run_id = next(iter((workspace / "runs").iterdir())).name
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
 
     calls: list[str] = []
 
@@ -352,7 +352,7 @@ def test_retry_failed_reruns_only_the_unverified_subtask(workspace: Path) -> Non
 def test_retry_failed_clears_the_stale_failure_from_the_report(workspace: Path) -> None:
     """Status is last-write-wins; the failure detail must not outlive it."""
     assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
-    run_id = next(iter((workspace / "runs").iterdir())).name
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
 
     def fixes_it(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
         if _is_plan_request(prompt):
@@ -369,7 +369,7 @@ def test_retry_failed_clears_the_stale_failure_from_the_report(workspace: Path) 
 def test_without_the_flag_a_failed_item_still_only_reports(workspace: Path) -> None:
     """The default must stay idempotent — resuming twice is not two attempts."""
     assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
-    run_id = next(iter((workspace / "runs").iterdir())).name
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
 
     def exploding(*_a: Any, **_kw: Any) -> AgentResult:
         raise AssertionError("resume without --retry-failed re-invoked the agent")
@@ -380,7 +380,7 @@ def test_without_the_flag_a_failed_item_still_only_reports(workspace: Path) -> N
 def test_retry_failed_never_reopens_a_completed_item(workspace: Path) -> None:
     """Done is done. The flag reopens failures, not successes."""
     assert cli._cmd_run(_Args(), _run_agent=honest_agent) == 0
-    run_id = next(iter((workspace / "runs").iterdir())).name
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
 
     def exploding(*_a: Any, **_kw: Any) -> AgentResult:
         raise AssertionError("a completed item was reopened by --retry-failed")
@@ -399,7 +399,7 @@ def test_retry_failed_does_not_reopen_an_item_completed_on_a_prior_retry(
     """
     # First run: second subtask fails.
     assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
-    run_id = next(iter((workspace / "runs").iterdir())).name
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
 
     def fixes_the_second(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
         if _is_plan_request(prompt):

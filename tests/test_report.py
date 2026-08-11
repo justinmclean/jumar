@@ -596,3 +596,78 @@ def test_report_id_in_header_matches_directory(tmp_path: Path) -> None:
     assert report.run_id == run_id
     md = format_markdown(report)
     assert run_id in md
+
+
+# ---------------------------------------------------------------------------
+# F2 — run index used by gsd report latest
+# ---------------------------------------------------------------------------
+
+
+def test_report_latest_uses_index_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``gsd report latest`` resolves via the index when index.tsv exists."""
+    import json as _json
+
+    from getstuffdone.index import STATUS_COMPLETED, append_run_started, update_run_finished
+
+    monkeypatch.chdir(tmp_path)
+    runs_dir = tmp_path / "runs"
+
+    for run_id, now_str in [
+        ("20260101-0900-aaaa", "2026-01-01T09:00:00Z"),
+        ("20260811-1200-bbbb", "2026-08-11T12:00:00Z"),
+    ]:
+        d = runs_dir / run_id
+        d.mkdir(parents=True)
+        started_entry = {
+            "seq": 1,
+            "event": "run_started",
+            "payload": {"now": now_str, "tz": "UTC", "mode": "auto", "todo_path": "todo.md"},
+        }
+        finished_entry = {"seq": 2, "event": "run_finished", "payload": {"exit_status": 0}}
+        (d / "journal.jsonl").write_text(
+            _json.dumps(started_entry) + "\n" + _json.dumps(finished_entry) + "\n",
+            encoding="utf-8",
+        )
+        append_run_started(runs_dir, run_id, now_str)
+        update_run_finished(runs_dir, run_id, "some-item", STATUS_COMPLETED)
+
+    from getstuffdone.cli import main as cli_main
+
+    rc = cli_main(["report", "latest", "--runs-dir", str(runs_dir)])
+    assert rc == 0
+    assert (runs_dir / "20260811-1200-bbbb" / "report.md").exists()
+    assert not (runs_dir / "20260101-0900-aaaa" / "report.md").exists()
+
+
+def test_report_latest_works_without_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gsd report latest`` resolves via journal scan when no index exists."""
+    import json as _json
+
+    monkeypatch.chdir(tmp_path)
+    runs_dir = tmp_path / "runs"
+
+    for run_id, now_str in [
+        ("uuid-old-aaa", "2026-01-01T09:00:00Z"),
+        ("uuid-new-bbb", "2026-08-11T12:00:00Z"),
+    ]:
+        d = runs_dir / run_id
+        d.mkdir(parents=True)
+        started_entry = {
+            "seq": 1,
+            "event": "run_started",
+            "payload": {"now": now_str, "tz": "UTC", "mode": "auto", "todo_path": "todo.md"},
+        }
+        finished_entry = {"seq": 2, "event": "run_finished", "payload": {"exit_status": 0}}
+        (d / "journal.jsonl").write_text(
+            _json.dumps(started_entry) + "\n" + _json.dumps(finished_entry) + "\n",
+            encoding="utf-8",
+        )
+    # No index.tsv — journal scan must find the newer run.
+
+    from getstuffdone.cli import main as cli_main
+
+    rc = cli_main(["report", "latest", "--runs-dir", str(runs_dir)])
+    assert rc == 0
+    assert (runs_dir / "uuid-new-bbb" / "report.md").exists()
