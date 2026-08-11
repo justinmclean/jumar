@@ -33,8 +33,9 @@ and Phase 14 P2.
 - C1 (`thread-check-rejection-reason`), R1 (`resume-can-retry-a-failed-item`),
   D1 (`validate-depends-targets-at-ingest`), N1 (`choose-the-name`), and
   F1 (`friendly-run-ids`) all landed on 2026-08-10 and 2026-08-11.
-- N1 decision: **jumar** (PyPI 404 confirmed 2026-08-10; human must confirm
-  `jumar.dev` availability at a registrar before N2 begins).
+- N1 decision: **jumar** (PyPI 404 confirmed 2026-08-10; branding coexistence
+  with existing "jumar" uses accepted by the human 2026-08-11; only the
+  `jumar.dev` registrar check remains before N2 begins).
 - F1 shipped items 1–3 (prefix matching, `latest`, new id format). Item 4
   shipped separately as F2 (`run-index-tsv`), merged 2026-08-11.
 - **Sequencing note (stale):** the prior plan said to do N2 before F1. F1 has
@@ -106,10 +107,16 @@ N2. **rename-everything** — One branch, one commit, mechanical. Do it **before
    anything is published**; the cost roughly doubles once a package name exists
    on an index and a schedule exists on someone's machine.
 
-   **Precondition:** human must confirm `jumar.dev` is available at a registrar
-   and that `github.com/jumar` (personal keyboard hobbyist account) does not
-   create a branding conflict. If jumar is disqualified, fall back to `proofstep`
-   (check `proofstep.dev` similarly). Only begin this item after that confirmation.
+   **Precondition:** human must confirm `jumar.dev` is available at a registrar.
+   If it is taken, fall back to `proofstep` (check `proofstep.dev` similarly).
+   Only begin this item after that confirmation.
+
+   **Branding conflict: resolved 2026-08-11.** Known existing uses of the name
+   were re-checked: the `github.com/jumar` personal account (Montreal hobbyist,
+   no software product), Jumar Solutions Ltd / Jumar Technology (UK IT-services
+   company, jumar.co.uk), and "jumar" as the generic climbing-ascender term.
+   The human decided coexistence is acceptable — existing use of the name does
+   not disqualify it. Only domain availability remains to check.
 
    **NOT a build iteration.** This item touches `specs/` — the plan beat and
    update beat may work on it, and the human may merge both halves in one commit;
@@ -308,17 +315,23 @@ P3. **reuse-the-execution-session** — Every subtask spawns `claude -p` in a
 ## Manual follow-ups (USER-side; not loop work items — do not build these)
 
 - **Confirm `jumar.dev` availability** at a domain registrar before N2 begins.
-  If taken, fall back to `proofstep` (check `proofstep.dev` too). Also confirm
-  that `github.com/jumar` (personal account, keyboard hobbyist) does not block
-  creating a `github.com/jumar-dev` or `github.com/jumar-run` org.
-- Decide whether `todo.md` and `runs/` should be git-ignored in your working
-  copy (the shipped `.gitignore` ignores `runs/`, `gsd.toml` and `todo.md` by
-  default — remove those lines if you want the list tracked).
+  If taken, fall back to `proofstep` (check `proofstep.dev` too). The branding
+  question is closed (see N2): coexistence with existing "jumar" uses was
+  accepted 2026-08-11; only the domain check remains.
 - Confirm which agent CLI is on PATH before the first loop run
   (`SPEC_LOOP_AGENT`, default `claude`).
 - Run the loop inside a sandbox with no push credentials in the environment.
 - Regenerate the `USAGE.md` transcripts against the current build — §2 and §4
   still show uuid-era run ids, and the doc promises real output.
+
+Done 2026-08-11 (second doc pass): README `--json` coverage corrected to
+plan/run/report/status; USAGE command reference gained `gsd status --json` and
+a `runs/index.tsv` section (cache only, journals authoritative); `specs/02`
+§Stage 11 known gaps marked closed; `specs/04` §Execution isolation records
+`--strict-mcp-config`. Still pending: regenerate the USAGE §2/§4 transcripts
+(uuid-era run ids) — listed above. The gitignore follow-up was verified already
+satisfied (shipped `.gitignore` ignores `todo.md`, `gsd.toml`, `runs/`) and is
+removed from this list.
 
 Done 2026-08-11 (every "when X lands" spec/doc amendment — X has landed; see
 the Status note at the top for the full list): the proposed ACs are in
