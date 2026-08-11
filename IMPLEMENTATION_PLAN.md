@@ -10,26 +10,25 @@ never weaken a check to get green.
 
 ## Status — 2026-08-11
 
-**BLOCKER (recorded by build beat 2026-08-11):** `main` has pre-existing test
-failures — `test_resume.py` imports `_resolve_run_id` / `_RunResolveError` from
-`cli.py` (added by the F1 commit, ef7a90b), but the implementation lives only on
-the `runs-dir-relative-path` local branch, which is not yet merged. Additional
-failures exist in `test_decompose.py` (14 tests) and `test_report.py` (3 tests),
-also fixed by that branch. `make check` fails on every branch cut from main until
-`runs-dir-relative-path` is merged. **The three local branches below must be
-merged (in any order) before the next build iteration can commit.**
+**RESOLVED 2026-08-11:** the blocker recorded earlier today is cleared. All
+three local branches (`runs-dir-relative-path`, `status-json`, `run-index-tsv`)
+are merged to main and the branches deleted. Post-merge incident: the
+`status-json` and `run-index-tsv` merges were first committed with unresolved
+conflict markers in `cli.py` and `test_resume.py` (199 ruff errors); fixed by a
+follow-up commit that resolved the conflicts properly (kept the CWD-aware
+`_resolve_run_id`, grafted in the index fast path for `latest`, kept the
+`--json` additions and both new test sections). lint and mypy verified green.
 
-Two further pieces of ready-to-commit work exist as uncommitted changes on main:
-1. `src/getstuffdone/harness.py` + `tests/test_harness_argv.py` — adds
-   `--strict-mcp-config` to the Claude harness argv so user-configured MCP
-   servers (e.g. a mail server) cannot bypass the send-boundary deny list.
-   Branch `block-mcp-server-inheritance` was created for this but cannot be
-   committed until the blocker above is resolved.
-2. `IMPLEMENTATION_PLAN.md` — the plan updates below (Phase 14 items, corrected
-   in-flight list). These were uncommitted changes on main; they are included
-   here verbatim.
+The two pieces of formerly uncommitted work on main are also committed:
+1. `--strict-mcp-config` harness work (`src/getstuffdone/harness.py` +
+   `tests/test_harness_argv.py`) — committed directly to main (91f87c6); the
+   planned `block-mcp-server-inheritance` branch was not used.
+2. `IMPLEMENTATION_PLAN.md` — the plan updates (Phase 14 items, in-flight list),
+   committed 2026-08-11 (3b293c1) and superseded by this revision.
 
-All planned phases through Phase 13 N1 and Phase 12 F1 are merged to main.
+All planned phases through Phase 13 N1 and Phase 12 F1 + F2 are merged to
+main. Next open items: N2 (rename-everything, awaiting human registrar check)
+and Phase 14 P2.
 
 - C1 (`thread-check-rejection-reason`), R1 (`resume-can-retry-a-failed-item`),
   D1 (`validate-depends-targets-at-ingest`), N1 (`choose-the-name`), and
@@ -37,7 +36,7 @@ All planned phases through Phase 13 N1 and Phase 12 F1 are merged to main.
 - N1 decision: **jumar** (PyPI 404 confirmed 2026-08-10; human must confirm
   `jumar.dev` availability at a registrar before N2 begins).
 - F1 shipped items 1–3 (prefix matching, `latest`, new id format). Item 4
-  (`runs/index.tsv` run index) was deferred — see F2 below.
+  shipped separately as F2 (`run-index-tsv`), merged 2026-08-11.
 - **Sequencing note (stale):** the prior plan said to do N2 before F1. F1 has
   shipped under the old name. N2 still must happen before any publication —
   the cost is the same, just no longer affects the id format.
@@ -92,18 +91,10 @@ All planned phases through Phase 13 N1 and Phase 12 F1 are merged to main.
 - **validate-depends-targets-at-ingest** — D1. Every `@depends=` target must resolve to an item in the same file; unresolvable target is a startup error with did-you-mean suggestion (AC2.12).
 - **choose-the-name** — N1. Collision checks run against PyPI JSON API, GitHub, and domains for 30+ candidates. Decision: **jumar** (PyPI 404 confirmed 2026-08-10). Human must verify `jumar.dev` at a registrar before N2 begins.
 - **friendly-run-ids** — F1. Items 1–3: new id format `YYYYMMDD-HHMM-<4 hex>` via `clock.make_run_id()`; prefix matching; `latest` resolution. Item 4 (runs/index.tsv) deferred to F2.
-
-### In-flight (local branches — not yet pushed)
-
-- **runs-dir-relative-path** — `_resolve_run_id` + `_RunResolveError` in `cli.py`;
-  prefix matching and `latest` wired into `gsd resume` and `gsd report`; CWD-aware
-  error messages; C1 follow-up (rejection detail in decompose retry). **Must merge
-  first — it fixes the broken test suite on main.**
-- **run-index-tsv** — `runs/index.tsv` appended at `run_started`, status column
-  updated at `run_finished`; `_resolve_run_id` uses the index for `latest` when
-  present, falls back to journal scan (F2).
-- **status-json** — `--json` flag on `gsd status` (AC11.5, AC11.6); run-id
-  symbol correction from F1.
+- **block-mcp-server-inheritance** — `--strict-mcp-config` in the Claude harness argv so user-configured MCP servers (e.g. a mail server) cannot bypass the send-boundary deny list. Landed 2026-08-11 directly on main.
+- **runs-dir-relative-path** — `_resolve_run_id` + `_RunResolveError` in `cli.py`; prefix matching and `latest` wired into `gsd resume` and `gsd report`; CWD-aware error messages; C1 follow-up (rejection detail in decompose retry). Merged 2026-08-11.
+- **status-json** — `--json` flag on `gsd status` (AC11.5, AC11.6); run-id symbol correction from F1. Merged 2026-08-11; closes the known gap noted in `specs/02` §Stage 11.
+- **run-index-tsv** — F2. `runs/index.tsv` appended at `run_started`, status column updated at `run_finished`; `_resolve_run_id` uses the index for `latest` when present, falls back to journal scan. Merged 2026-08-11.
 
 ---
 
@@ -162,50 +153,14 @@ N2. **rename-everything** — One branch, one commit, mechanical. Do it **before
    collaboration.
    *Branch slug:* `rename-everything`
 
-### Phase 12 follow-up — run index
-
-F2. **run-index-tsv** — Item 4 of the `friendly-run-ids` work was deferred:
-   `runs/index.tsv`, one line per run (`id \t started \t item_id \t status`),
-   appended at `run_started` and updated at `run_finished`. Without it, `gsd
-   status` works (it scans all journals via `_scan_runs` in `status.py`) but
-   gets slower as the runs directory grows, and there is no fast way to answer
-   "which run id corresponds to the ASF item?" without opening each journal.
-
-   The index is append-only except for the `status` column update at
-   `run_finished`; the update rewrites that line in place using the run_id as a
-   key. Backwards-compatible: uuid-named runs already in `runs/` get no index
-   entry and are still resumable via prefix matching.
-
-   When the index exists, `_resolve_run_id` in `cli.py` can use it to resolve
-   `latest` without reading journals — but journals remain the authoritative
-   record and the index is a cache only; a missing or corrupt index falls back
-   to the journal scan.
-
-   *Validation:* `make check` + `pytest tests/test_resume.py tests/test_report.py -q`
-   — a fresh run appends a line to `runs/index.tsv`; `run_finished` updates the
-   status column; a run that crashes mid-way leaves its row with status
-   `in_progress`; existing uuid-named runs not in the index still resolve via
-   the journal-scan fallback; a corrupt or absent index.tsv falls back to
-   journal scan without error.
-   *Closes:* deferred from F1 (friendly-run-ids).
-   *Branch slug:* `run-index-tsv`
-
 ### Small items (unscheduled)
 
-- **runs-dir-relative-path** (from R1) — `resume` resolves `--runs-dir`
-  relative to the current working directory (default `runs`), so a bare run id
-  only works from the directory the run was launched in. Either record the
-  absolute runs directory in the journal too, or say so in the error — the
-  current message ("no journal found at runs/<id>/journal.jsonl") does not
-  hint that the path is relative.
 - **implementation-guide-run-context** — The implementation guide needs a
   clearer "what is going on during a run" view than just "read the journal".
   Document how to interpret the live progress output, report, status view, agent
   claims, verifier evidence, repair attempts, and next action together. If that
   write-up exposes a product gap, split the behaviour change into its own work
   item instead of smuggling it into docs.
-- **status-json** — `gsd status` has no `--json` yet (the flag exists on
-  plan/run/report); noted as a known gap in `specs/02` §Stage 11.
 
 ### Phase 14 — the wall-clock ceiling
 
