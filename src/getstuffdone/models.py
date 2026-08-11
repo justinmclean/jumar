@@ -326,6 +326,9 @@ class Plan:
     source: str  # "authored" | "model"
     created_at: str
     harness: HarnessInfo
+    # Session id for harness that supports resumption (e.g. claude --resume).
+    # None means no session tracking for this plan.
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)

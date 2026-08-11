@@ -100,6 +100,7 @@ def execute(
     cwd: Path,
     run_dir: Path,
     attempt_no: int = 0,
+    session_id: str | None = None,
     _run_agent: Any | None = None,
     prompt_override: str | None = None,
 ) -> Attempt:
@@ -120,6 +121,10 @@ def execute(
     cwd:             Working directory for the agent subprocess.
     run_dir:         Directory for artefact files (transcripts).
     attempt_no:      0 for the initial attempt; 1..n for repairs.
+    session_id:      When set, passed to the harness as ``--resume <id>`` so the
+                     agent continues the same conversation started by the first
+                     subtask.  None for the first subtask or for harnesses that
+                     do not support session resumption.
     _run_agent:      Injectable harness callable for tests (default: harness.run_agent).
     prompt_override: When set, replaces the default prompt (used by repair.py).
     """
@@ -161,6 +166,7 @@ def execute(
         capabilities=subtask.capabilities,
         timeout_s=config.subtask_timeout_s,
         harness=harness_info,
+        session_id=session_id,
     )
 
     finished_at = stamp()

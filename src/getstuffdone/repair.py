@@ -122,6 +122,7 @@ def repair(
     journal: Journal,
     cwd: Path,
     run_dir: Path,
+    session_id: str | None = None,
     _run_agent: Any | None = None,
     _run_verify: Any | None = None,
     judge_harness: HarnessInfo | None = None,
@@ -200,6 +201,7 @@ def repair(
             cwd=cwd,
             run_dir=run_dir,
             attempt_no=attempt_no,
+            session_id=session_id,
             _run_agent=_run_agent,
             prompt_override=repair_prompt,
         )

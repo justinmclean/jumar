@@ -28,6 +28,11 @@ SUPPORTED_HARNESSES: frozenset[str] = frozenset(
     {"claude", "codex", "cursor", "gemini", "opencode", "kiro"}
 )
 
+# Harnesses that support session resumption via a --resume flag.
+# Only claude accepts --resume <session-id>; all others run a fresh context
+# every invocation and must fall back to today's behaviour.
+SESSION_RESUMABLE_HARNESSES: frozenset[str] = frozenset({"claude"})
+
 # Harnesses that cannot express tool-level denials (git push, gh, sendmail…).
 # Using one of these without allow_unrestricted_harness = true is a startup error.
 UNRESTRICTED_HARNESSES: frozenset[str] = frozenset(
@@ -112,6 +117,7 @@ def build_argv(
     capabilities: frozenset[Capability],
     prompt: str,
     allow_tools: bool = True,
+    session_id: str | None = None,
 ) -> list[str]:
     """Build the argv list for one agent invocation.
 
@@ -124,6 +130,10 @@ def build_argv(
     (claude, codex) the prompt is NOT embedded in the returned argv; the
     caller must write it to stdin.  For all others it appears as the final
     positional argument.
+
+    ``session_id`` is only honoured by harnesses in SESSION_RESUMABLE_HARNESSES
+    (currently only "claude").  When provided for a non-resumable harness it is
+    silently ignored, preserving today's behaviour for those callers.
 
     Raises ValueError for an unsupported harness name.
     """
@@ -163,6 +173,8 @@ def build_argv(
         for tool in disallowed:
             argv += ["--disallowedTools", tool]
         argv += model_args
+        if session_id is not None:
+            argv += ["--resume", session_id]
         # Prompt is piped to stdin; not embedded in argv.
 
     elif harness_name == "codex":
@@ -243,6 +255,7 @@ def run_agent(
     timeout_s: int,
     harness: HarnessInfo,
     allow_tools: bool = True,
+    session_id: str | None = None,
 ) -> AgentResult:
     """Build argv, scrub env, and run the agent subprocess.
 
@@ -260,6 +273,7 @@ def run_agent(
         capabilities=capabilities,
         prompt=prompt,
         allow_tools=allow_tools,
+        session_id=session_id,
     )
     env = scrub_env(harness_name)
     stdin_bytes = prompt.encode() if prompt_via_stdin(harness_name) else None

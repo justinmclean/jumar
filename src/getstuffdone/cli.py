@@ -553,6 +553,11 @@ def run_item(
             continue  # AC-S1: never redo verified work
 
         prog.subtask_started(subtask.index, total, subtask.description)
+        # Pass the session id for every subtask after the first so the harness
+        # can resume the same agent conversation (--resume <session_id>).  The
+        # first subtask always starts a fresh context; subsequent subtasks
+        # benefit from the model having already seen the prior work.
+        exec_session_id = plan.session_id if subtask.index > 0 else None
         attempt = execute(
             subtask,
             item=item,
@@ -562,6 +567,7 @@ def run_item(
             cwd=cwd,
             run_dir=run_dir,
             attempt_no=0,
+            session_id=exec_session_id,
             _run_agent=_run_agent,
         )
 
@@ -613,6 +619,7 @@ def run_item(
                     journal=journal,
                     cwd=cwd,
                     run_dir=run_dir,
+                    session_id=exec_session_id,
                     _run_agent=_run_agent,
                     judge_harness=judge_harness,
                     judge_run_agent=_run_agent,
@@ -994,12 +1001,16 @@ def _rebuild_plan(
 
     from .clock import stamp
 
+    raw_session_id = payload.get("session_id")
+    session_id: str | None = str(raw_session_id) if isinstance(raw_session_id, str) else None
+
     return Plan(
         item_id=item_id,
         subtasks=tuple(subtasks),
         source=str(payload.get("source", "model")),
         created_at=str(payload.get("created_at", stamp())),
         harness=harness,
+        session_id=session_id,
     )
 
 

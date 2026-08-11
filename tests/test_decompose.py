@@ -963,3 +963,41 @@ def test_first_attempt_never_has_retry_prefix(
 
     assert len(prompts) == 1
     assert "Retry because:" not in prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# Session id — P3 (reuse-the-execution-session)
+# ---------------------------------------------------------------------------
+
+
+def test_plan_has_session_id(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """decompose() returns a Plan with a non-empty session_id."""
+    runner = _fake_runner([_valid_response(1)])
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert plan.session_id is not None
+    assert len(plan.session_id) > 0
+
+
+def test_plan_created_payload_contains_session_id(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The plan_created journal event must carry session_id so resume can recover it."""
+    runner = _fake_runner([_valid_response(1)])
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    state = journal.replay()
+    created = next(e for e in state.entries if e["event"] == PLAN_CREATED)
+    assert "session_id" in created["payload"]
+    assert created["payload"]["session_id"] == plan.session_id
+
+
+def test_session_id_is_unique_across_plans(tmp_path: Path, cfg: Config) -> None:
+    """Each plan gets a distinct session_id (no repeated ids)."""
+    ids: set[str] = set()
+    for i in range(3):
+        j = Journal(tmp_path / f"journal_{i}.jsonl", f"run-{i:02d}")
+        runner = _fake_runner([_valid_response(1)])
+        plan = _decompose(_make_item(), runner, j, cfg, tmp_path)
+        assert plan.session_id not in ids
+        ids.add(plan.session_id)

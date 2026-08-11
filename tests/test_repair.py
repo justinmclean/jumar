@@ -146,6 +146,7 @@ def _make_fake_runner() -> Any:
         capabilities: Any,
         timeout_s: int,
         harness: HarnessInfo,
+        session_id: str | None = None,
     ) -> _R:
         calls.append(prompt)
         return _R()

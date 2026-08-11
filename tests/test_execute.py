@@ -54,6 +54,7 @@ class _FakeResult:
 def _fake_runner(responses: list[_FakeResult]) -> Any:
     """Return a fake run_agent callable that replays *responses* in order."""
     calls: list[str] = []
+    session_ids: list[str | None] = []
 
     def runner(
         prompt: str,
@@ -62,14 +63,17 @@ def _fake_runner(responses: list[_FakeResult]) -> Any:
         capabilities: Any,
         timeout_s: int,
         harness: HarnessInfo,
+        session_id: str | None = None,
     ) -> _FakeResult:
         calls.append(prompt)
+        session_ids.append(session_id)
         idx = len(calls) - 1
         if idx < len(responses):
             return responses[idx]
         return _FakeResult(exit_status=1, stdout="")
 
     runner.calls = calls  # type: ignore[attr-defined]
+    runner.session_ids = session_ids  # type: ignore[attr-defined]
     return runner
 
 
@@ -386,3 +390,60 @@ def test_transcript_written_to_run_dir(journal: Journal, cfg: Config, tmp_path: 
     content = transcript.read_text()
     assert "hello" in content
     assert "err" in content
+
+
+# ---------------------------------------------------------------------------
+# Session-id threading — P3 (reuse-the-execution-session)
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_none_by_default(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """When session_id is omitted, the runner receives None (first subtask / fresh context)."""
+    runner = _fake_runner([_FakeResult(exit_status=0, stdout="")])
+    execute(
+        _make_subtask(index=0),
+        item=_make_item(),
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+    )
+    assert runner.session_ids[0] is None  # type: ignore[attr-defined]
+
+
+def test_session_id_passed_to_runner(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """When session_id is provided, the runner receives it so it can use --resume."""
+    runner = _fake_runner([_FakeResult(exit_status=0, stdout="")])
+    execute(
+        _make_subtask(index=1),
+        item=_make_item(),
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        session_id="deadbeef",
+        _run_agent=runner,
+    )
+    assert runner.session_ids[0] == "deadbeef"  # type: ignore[attr-defined]
+
+
+def test_session_id_passed_on_repair(journal: Journal, cfg: Config, tmp_path: Path) -> None:
+    """session_id is forwarded to a repair attempt so the agent continues the session."""
+    runner = _fake_runner([_FakeResult(exit_status=0, stdout="")])
+    # Repairs use attempt_no >= 1.
+    execute(
+        _make_subtask(index=2),
+        item=_make_item(),
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        attempt_no=1,
+        session_id="cafef00d",
+        _run_agent=runner,
+    )
+    assert runner.session_ids[0] == "cafef00d"  # type: ignore[attr-defined]
