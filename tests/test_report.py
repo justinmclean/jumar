@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from getstuffdone.journal import (
     ITEM_COMPLETED,
     ITEM_FAILED,
@@ -469,3 +471,128 @@ def test_report_metadata_from_run_started(tmp_path: Path) -> None:
     assert report.tz == "Australia/Sydney"
     assert report.todo_path == "/home/user/todo.md"
     assert report.mode == "approve"
+
+
+# ---------------------------------------------------------------------------
+# F1 — friendly-run-ids: prefix matching and "latest" in gsd report
+# ---------------------------------------------------------------------------
+
+
+def test_report_unambiguous_prefix_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``gsd report <prefix>`` resolves when the prefix matches exactly one run."""
+    import json as _json
+
+    monkeypatch.chdir(tmp_path)
+    run_id = "20260810-1430-abcd"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    journal = run_dir / "journal.jsonl"
+    journal.write_text(
+        _json.dumps(
+            {
+                "seq": 1,
+                "event": "run_started",
+                "ts": "2026-08-10T14:30:00+00:00",
+                "payload": {
+                    "now": "2026-08-10T14:30:00Z",
+                    "tz": "UTC",
+                    "mode": "auto",
+                    "todo_path": "todo.md",
+                },
+            }
+        )
+        + "\n"
+        + _json.dumps(
+            {
+                "seq": 2,
+                "event": "run_finished",
+                "ts": "2026-08-10T14:30:01+00:00",
+                "payload": {"exit_status": 0},
+            }
+        )
+        + "\n"
+    )
+
+    from getstuffdone.cli import main as cli_main
+
+    rc = cli_main(["report", "20260810-1430", "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+    assert (run_dir / "report.md").exists()
+
+
+def test_report_ambiguous_prefix_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``gsd report <ambiguous-prefix>`` exits 1 and names the candidates."""
+    import json as _json
+
+    monkeypatch.chdir(tmp_path)
+    for suffix in ("abcd", "ef01"):
+        d = tmp_path / "runs" / f"20260810-1430-{suffix}"
+        d.mkdir(parents=True)
+        entry = {"seq": 1, "event": "run_started", "ts": "t", "payload": {"now": "t"}}
+        (d / "journal.jsonl").write_text(_json.dumps(entry) + "\n")
+
+    from getstuffdone.cli import main as cli_main
+
+    rc = cli_main(["report", "20260810-1430", "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "ambiguous" in err
+    assert "20260810-1430-abcd" in err
+    assert "20260810-1430-ef01" in err
+
+
+def test_report_latest_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``gsd report latest`` resolves to the run with the highest run_started.now."""
+    import json as _json
+
+    monkeypatch.chdir(tmp_path)
+
+    for run_id, now_str in [
+        ("20260101-0900-aaaa", "2026-01-01T09:00:00Z"),
+        ("20260810-1430-bbbb", "2026-08-10T14:30:00Z"),
+    ]:
+        d = tmp_path / "runs" / run_id
+        d.mkdir(parents=True)
+        started = {
+            "seq": 1,
+            "event": "run_started",
+            "ts": now_str,
+            "payload": {"now": now_str, "tz": "UTC", "mode": "auto", "todo_path": "todo.md"},
+        }
+        finished = {
+            "seq": 2,
+            "event": "run_finished",
+            "ts": now_str,
+            "payload": {"exit_status": 0},
+        }
+        lines = [_json.dumps(started), _json.dumps(finished)]
+        (d / "journal.jsonl").write_text("\n".join(lines) + "\n")
+
+    from getstuffdone.cli import main as cli_main
+
+    rc = cli_main(["report", "latest", "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+    # The newer run's report was written.
+    assert (tmp_path / "runs" / "20260810-1430-bbbb" / "report.md").exists()
+    # The older run's report was NOT generated this time.
+    assert not (tmp_path / "runs" / "20260101-0900-aaaa" / "report.md").exists()
+
+
+def test_report_id_in_header_matches_directory(tmp_path: Path) -> None:
+    """The run id in the report header matches the directory name (new format)."""
+    run_id = "20260810-1430-abcd"
+    run_dir = _make_run_dir(tmp_path, run_id)
+    j = _make_journal(run_dir)
+    j.append(RUN_STARTED, payload=_RUN_STARTED_PAYLOAD)
+    j.append(RUN_FINISHED, payload={"exit_status": 0})
+
+    report = build_report(run_dir)
+    assert report.run_id == run_id
+    md = format_markdown(report)
+    assert run_id in md

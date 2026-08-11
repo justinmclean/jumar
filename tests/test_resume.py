@@ -9,6 +9,10 @@ Acceptance criteria exercised here:
 - AC9.2  Resume exits 0 on success and 1 on failure.
 - Negative: non-existent run-id exits with error; corrupt-only journal exits
   with error when there is no run_started.
+- F1 (friendly-run-ids): new run ids match YYYYMMDD-HHMM-<4 hex chars>; two
+  runs started in the same minute get distinct ids; uuid-format ids still
+  resolve; unambiguous prefix resolves; ambiguous prefix errors; ``latest``
+  resolves to the most-recent by run_started.now.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from getstuffdone.cli import main
+from getstuffdone.cli import _resolve_run_id, _RunResolveError, main
 from getstuffdone.journal import (
     ATTEMPT_FINISHED,
     ATTEMPT_STARTED,
@@ -462,3 +466,263 @@ def test_resume_appends_to_journal_not_rewrites(
     all_lines = [ln for ln in journal_path.read_text().splitlines() if ln.strip()]
     assert all_lines[: len(original_lines)] == original_lines
     assert len(all_lines) > len(original_lines), "resume must have appended new events"
+
+
+# ---------------------------------------------------------------------------
+# F1 — Friendly run ids
+# ---------------------------------------------------------------------------
+
+
+def test_run_id_format_from_real_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run id created by gsd run matches YYYYMMDD-HHMM-<4 hex chars>."""
+    import re
+
+    from getstuffdone import cli
+    from getstuffdone.harness import AgentResult
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text("- [ ] Make something @capability=write_fs\n")
+
+    import json as _json
+
+    _PLAN = _json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "Write marker",
+                    "capabilities": ["write_fs"],
+                    "depends_on": [],
+                    "check": {
+                        "kind": "file",
+                        "statement": "marker.txt exists",
+                        "path": "marker.txt",
+                    },
+                }
+            ]
+        }
+    )
+
+    def agent(prompt: str, *, cwd: Path, **_: object) -> AgentResult:
+        if "subtasks" in prompt or "JSON" in prompt:
+            return AgentResult(0, _PLAN, "", False, "done")
+        (cwd / "marker.txt").write_text("ok\n")
+        return AgentResult(0, "wrote marker", "", False, "done")
+
+    class _Args:
+        todo = None
+        dry_run = False
+        approve = False
+        non_interactive = True
+
+    rc = cli._cmd_run(_Args(), _run_agent=agent)  # type: ignore[arg-type]
+    assert rc == 0
+
+    runs = list((tmp_path / "runs").iterdir())
+    assert len(runs) == 1
+    run_id = runs[0].name
+    assert re.match(r"^\d{8}-\d{4}-[a-f0-9]{4}$", run_id), (
+        f"run id {run_id!r} does not match YYYYMMDD-HHMM-<4 hex chars>"
+    )
+
+
+def test_make_run_id_distinct_for_same_minute(tmp_path: Path) -> None:
+    """Two calls to make_run_id with the same now produce distinct ids."""
+    from datetime import UTC, datetime
+
+    from getstuffdone.clock import make_run_id
+
+    now = datetime(2026, 8, 10, 14, 30, 0, tzinfo=UTC)
+    id1 = make_run_id(now)
+    id2 = make_run_id(now)
+    # Both valid format.
+    import re
+
+    pat = re.compile(r"^\d{8}-\d{4}-[a-f0-9]{4}$")
+    assert pat.match(id1), f"{id1!r} does not match pattern"
+    assert pat.match(id2), f"{id2!r} does not match pattern"
+    # They share the date-time prefix.
+    assert id1.startswith("20260810-1430-")
+    assert id2.startswith("20260810-1430-")
+    # The random suffix makes them different (with overwhelming probability).
+    # Use injectable suffix to guarantee it deterministically.
+    id_a = make_run_id(now, _suffix="aaaa")
+    id_b = make_run_id(now, _suffix="bbbb")
+    assert id_a != id_b
+
+
+def test_resolve_run_id_exact_match(tmp_path: Path) -> None:
+    """An exact run id resolves directly without prefix scanning."""
+    from getstuffdone.cli import _resolve_run_id
+
+    run_id = "20260810-1430-abcd"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "journal.jsonl").write_text('{"event": "run_started"}\n')
+
+    resolved_id, resolved_dir = _resolve_run_id(tmp_path / "runs", run_id)
+    assert resolved_id == run_id
+    assert resolved_dir == run_dir
+
+
+def test_resolve_run_id_unambiguous_prefix(tmp_path: Path) -> None:
+    """An unambiguous prefix resolves to the one matching run."""
+    from getstuffdone.cli import _resolve_run_id
+
+    run_id = "20260810-1430-abcd"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "journal.jsonl").write_text('{"event": "run_started"}\n')
+
+    resolved_id, resolved_dir = _resolve_run_id(tmp_path / "runs", "20260810")
+    assert resolved_id == run_id
+    assert resolved_dir == run_dir
+
+
+def test_resolve_run_id_ambiguous_prefix_errors(tmp_path: Path) -> None:
+    """An ambiguous prefix raises _RunResolveError naming the candidates."""
+    for suffix in ("abcd", "ef01"):
+        run_dir = tmp_path / "runs" / f"20260810-1430-{suffix}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "journal.jsonl").write_text('{"event": "run_started"}\n')
+
+    with pytest.raises(_RunResolveError) as exc_info:
+        _resolve_run_id(tmp_path / "runs", "20260810")
+    msg = str(exc_info.value)
+    assert "ambiguous" in msg
+    assert "20260810-1430-abcd" in msg
+    assert "20260810-1430-ef01" in msg
+
+
+def test_resolve_run_id_no_match_errors(tmp_path: Path) -> None:
+    """A prefix matching nothing raises _RunResolveError."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True)
+
+    with pytest.raises(_RunResolveError):
+        _resolve_run_id(runs_dir, "nonexistent-prefix")
+
+
+def test_resolve_run_id_latest_picks_most_recent(tmp_path: Path) -> None:
+    """``latest`` resolves to the run with the highest run_started.now value."""
+    import json as _json
+
+    runs_dir = tmp_path / "runs"
+    for run_id, now_str in [
+        ("20260101-0900-aaaa", "2026-01-01T09:00:00Z"),
+        ("20260810-1430-bbbb", "2026-08-10T14:30:00Z"),
+        ("20260601-1200-cccc", "2026-06-01T12:00:00Z"),
+    ]:
+        d = runs_dir / run_id
+        d.mkdir(parents=True)
+        entry = {"event": "run_started", "payload": {"now": now_str}}
+        (d / "journal.jsonl").write_text(_json.dumps(entry) + "\n")
+
+    resolved_id, resolved_dir = _resolve_run_id(runs_dir, "latest")
+    assert resolved_id == "20260810-1430-bbbb"
+    assert resolved_dir == runs_dir / "20260810-1430-bbbb"
+
+
+def test_resolve_run_id_latest_empty_dir_errors(tmp_path: Path) -> None:
+    """``latest`` on an empty runs directory raises _RunResolveError."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True)
+
+    with pytest.raises(_RunResolveError):
+        _resolve_run_id(runs_dir, "latest")
+
+
+def test_resume_with_prefix_via_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """gsd resume accepts an unambiguous prefix instead of the full run id."""
+    monkeypatch.chdir(tmp_path)
+    run_id = "20260810-1430-abcd"
+    run_dir = _make_run_dir(tmp_path, run_id)
+    todo_path = _write_todo(tmp_path, run_id, "Prefix task @id=prefix-a1b2c3d4")
+
+    j = _make_journal(run_dir)
+    j.append(RUN_STARTED, payload={**_RUN_STARTED_PAYLOAD, "todo_path": str(todo_path)})
+    j.append(
+        ITEM_SELECTED,
+        item_id="prefix-a1b2c3d4",
+        payload={"text": "Prefix task", "is_overdue": False},
+    )
+    j.append(ITEM_COMPLETED, item_id="prefix-a1b2c3d4")
+    j.append(RUN_FINISHED, payload={"exit_status": 0})
+
+    # Use only the date portion as prefix — unambiguous since there's one run.
+    rc = main(["resume", "20260810-1430", "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+
+
+def test_resume_latest_via_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """gsd resume latest picks the most recently started run."""
+    monkeypatch.chdir(tmp_path)
+
+    # Older run (completed).
+    old_id = "20260101-0900-aaaa"
+    old_dir = _make_run_dir(tmp_path, old_id)
+    old_todo = _write_todo(tmp_path, old_id, "Old task @id=old-a1b2c3d4")
+    j_old = _make_journal(old_dir)
+    j_old.append(
+        RUN_STARTED,
+        payload={
+            "now": "2026-01-01T09:00:00Z",
+            "tz": "UTC",
+            "mode": "auto",
+            "todo_path": str(old_todo),
+        },
+    )
+    j_old.append(
+        ITEM_SELECTED,
+        item_id="old-a1b2c3d4",
+        payload={"text": "Old task", "is_overdue": False},
+    )
+    j_old.append(ITEM_COMPLETED, item_id="old-a1b2c3d4")
+    j_old.append(RUN_FINISHED, payload={"exit_status": 0})
+
+    # Newer run (completed).
+    new_id = "20260810-1430-bbbb"
+    new_dir = _make_run_dir(tmp_path, new_id)
+    new_todo = _write_todo(tmp_path, new_id, "New task @id=new-a1b2c3d4")
+    j_new = _make_journal(new_dir)
+    j_new.append(
+        RUN_STARTED,
+        payload={
+            "now": "2026-08-10T14:30:00Z",
+            "tz": "UTC",
+            "mode": "auto",
+            "todo_path": str(new_todo),
+        },
+    )
+    j_new.append(
+        ITEM_SELECTED,
+        item_id="new-a1b2c3d4",
+        payload={"text": "New task", "is_overdue": False},
+    )
+    j_new.append(ITEM_COMPLETED, item_id="new-a1b2c3d4")
+    j_new.append(RUN_FINISHED, payload={"exit_status": 0})
+
+    rc = main(["resume", "latest", "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+    # The report must be for the NEW run directory.
+    assert (new_dir / "report.md").exists()
+
+
+def test_resume_uuid_format_still_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A UUID-format run id (legacy format) resolves via exact match."""
+    monkeypatch.chdir(tmp_path)
+    run_id = "9c23ddee-8263-477b-a98a-99efff7540b6"
+    run_dir = _make_run_dir(tmp_path, run_id)
+    todo_path = _write_todo(tmp_path, run_id, "Legacy task @id=legacy-a1b2c3d4")
+
+    j = _make_journal(run_dir)
+    j.append(RUN_STARTED, payload={**_RUN_STARTED_PAYLOAD, "todo_path": str(todo_path)})
+    j.append(
+        ITEM_SELECTED,
+        item_id="legacy-a1b2c3d4",
+        payload={"text": "Legacy task", "is_overdue": False},
+    )
+    j.append(ITEM_COMPLETED, item_id="legacy-a1b2c3d4")
+    j.append(RUN_FINISHED, payload={"exit_status": 0})
+
+    rc = main(["resume", run_id, "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
