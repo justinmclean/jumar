@@ -21,6 +21,7 @@ never-attempted – eligible but no journal entry has ever touched this item.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -313,6 +314,11 @@ def build_status(
 # ---------------------------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------------------------
+
+
+def format_status_json(report: StatusReport) -> str:
+    """Return a JSON document representing the status report (AC11.5, AC11.6)."""
+    return json.dumps(dataclasses.asdict(report), indent=2)
 
 
 def format_status(report: StatusReport) -> str:

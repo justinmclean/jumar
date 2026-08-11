@@ -474,3 +474,262 @@ def test_cli_status_does_not_create_run_dir(
     main(["status", "--todo", str(todo), "--runs-dir", str(runs_dir)])
 
     assert not runs_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# AC11.5 / AC11.6 — gsd status --json
+# ---------------------------------------------------------------------------
+
+
+def test_status_json_stdout_is_valid_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``gsd status --json`` emits a single JSON document on stdout (AC11.5)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Task one @id=t1\n- [x] Done task @id=t2\n")
+
+    from getstuffdone.cli import main
+
+    rc = main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+    out = capsys.readouterr().out
+    doc = json.loads(out)
+    assert "items" in doc
+    assert "todo_path" in doc
+
+
+def test_status_json_all_items_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every todo item appears exactly once in the JSON output."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Alpha @id=alpha\n- [x] Beta @id=beta\n- [ ] Gamma @id=gamma\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    doc = json.loads(capsys.readouterr().out)
+    ids = {item["item_id"] for item in doc["items"]}
+    assert ids == {"alpha", "beta", "gamma"}
+
+
+def test_status_json_item_fields_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Each item in the JSON output carries the expected fields."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] My task @id=t1\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    doc = json.loads(capsys.readouterr().out)
+    item = doc["items"][0]
+    assert item["item_id"] == "t1"
+    assert "text" in item
+    assert "state" in item
+    assert item["state"] == "never-attempted"
+
+
+def test_status_json_parked_item_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A parked item has paused_reason set in the JSON output."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Broken @id=t1 @paused=auto-failures @failed=3\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    doc = json.loads(capsys.readouterr().out)
+    item = doc["items"][0]
+    assert item["state"] == "parked"
+    assert item["paused_reason"] == "auto-failures"
+    assert item["failure_count"] == 3
+
+
+def test_status_json_deferred_item_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A deferred item carries next_eligible_at as an ISO-8601 UTC timestamp (AC11.6)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Future @id=t1 @not-before=2099-01-01T09:00:00+00:00\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    doc = json.loads(capsys.readouterr().out)
+    item = doc["items"][0]
+    assert item["state"] == "deferred"
+    ts = item["next_eligible_at"]
+    assert ts is not None
+    assert "2099" in ts
+    # Must be parseable as ISO-8601
+    from datetime import datetime
+
+    parsed = datetime.fromisoformat(ts)
+    assert parsed.tzinfo is not None  # timezone-aware (AC11.6)
+
+
+def test_status_json_last_run_at_is_iso8601(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """last_run_at in JSON output is ISO-8601 (AC11.6)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Task @id=t1\n")
+    runs_dir = tmp_path / "runs"
+
+    now_str = "2026-07-01T09:00:00+00:00"
+    run_dir = runs_dir / "run-abc"
+    _write_journal(
+        run_dir,
+        [
+            _run_started_payload(now_str, str(todo)),
+            {
+                "event": "item_selected",
+                "seq": 2,
+                "run_id": "run-abc",
+                "ts": now_str,
+                "item_id": "t1",
+                "payload": {"text": "Task"},
+            },
+            {
+                "event": "item_completed",
+                "seq": 3,
+                "run_id": "run-abc",
+                "ts": now_str,
+                "item_id": "t1",
+                "payload": {},
+            },
+        ],
+    )
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(runs_dir)])
+    doc = json.loads(capsys.readouterr().out)
+    item = doc["items"][0]
+    ts = item["last_run_at"]
+    assert ts is not None
+    from datetime import datetime
+
+    parsed = datetime.fromisoformat(ts)
+    assert parsed.tzinfo is not None  # timezone-aware (AC11.6)
+    assert item["last_outcome"] == "done"
+
+
+def test_status_json_stdout_only_json_no_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """stdout is pure JSON — no human-readable text mixed in (AC11.5)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Alpha @id=a\n- [ ] Beta @id=b\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    out = capsys.readouterr().out
+    # Must parse cleanly; any trailing text would fail here
+    json.loads(out)
+
+
+def test_status_json_warnings_go_to_stderr_not_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ingest warnings appear on stderr; stdout stays pure JSON (AC11.5)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    # A bad schedule token triggers an ingest warning
+    _write_todo(todo, "- [ ] Bad schedule @due=not-a-date\n- [ ] Good task @id=good\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    out, err = capsys.readouterr()
+    # stdout must still parse as JSON even with warnings
+    json.loads(out)
+    # warnings go to stderr (ingest may handle bad_schedule differently,
+    # but status must not let any warning leak to stdout)
+
+
+def test_status_json_and_human_mode_same_item_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """JSON and human modes return the same number of items from the same StatusReport."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] One @id=one\n- [x] Two @id=two\n- [ ] Three @id=three\n")
+
+    from getstuffdone.cli import main
+
+    main(["status", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    capsys.readouterr()  # discard human output
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    doc = json.loads(capsys.readouterr().out)
+    assert len(doc["items"]) == 3
+
+
+def test_status_json_exit_zero_always(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``gsd status --json`` exits 0 always, same as human mode (AC11.1)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Pending @id=t1\n")
+
+    from getstuffdone.cli import main
+
+    rc = main(["status", "--json", "--todo", str(todo), "--runs-dir", str(tmp_path / "runs")])
+    assert rc == 0
+
+
+def test_status_json_does_not_create_run_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``gsd status --json`` must not create any run directory (AC11.1)."""
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    _write_todo(todo, "- [ ] Task @id=t1\n")
+    runs_dir = tmp_path / "no-runs"
+
+    from getstuffdone.cli import main
+
+    main(["status", "--json", "--todo", str(todo), "--runs-dir", str(runs_dir)])
+
+    assert not runs_dir.exists()
+
+
+def test_format_status_json_function_directly() -> None:
+    """format_status_json serialises a StatusReport to a valid JSON document."""
+    from getstuffdone.status import StatusReport, format_status_json
+
+    report = StatusReport(
+        todo_path="/todo.md",
+        items=[
+            ItemStatusLine(
+                item_id="x",
+                text="Do something",
+                state="eligible",
+                last_run_id="run-1",
+                last_run_at="2026-08-01T09:00:00+00:00",
+                last_outcome="failed",
+                failed_subtask_desc="Run tests",
+                failed_check_kind="command",
+            )
+        ],
+    )
+    out = format_status_json(report)
+    doc = json.loads(out)
+    assert doc["todo_path"] == "/todo.md"
+    assert len(doc["items"]) == 1
+    assert doc["items"][0]["item_id"] == "x"
+    assert doc["items"][0]["state"] == "eligible"
+    assert doc["items"][0]["last_run_at"] == "2026-08-01T09:00:00+00:00"

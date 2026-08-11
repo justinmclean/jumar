@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -25,11 +24,16 @@ SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status"
 
 
 # ---------------------------------------------------------------------------
+<<<<<<< HEAD
 # Run-id resolution — prefix matching, "latest", and CWD-aware errors
+=======
+# Run-id resolution (prefix matching and "latest")
+>>>>>>> status-json
 # ---------------------------------------------------------------------------
 
 
 class _RunResolveError(Exception):
+<<<<<<< HEAD
     """Raised when a run-id cannot be resolved to a unique run directory."""
 
 
@@ -107,6 +111,69 @@ def _resolve_run_id(runs_dir: Path, run_id: str) -> tuple[str, Path]:
     raise _RunResolveError(
         f"no journal found for run-id {run_id!r} in {runs_dir.absolute()}{_cwd_hint}"
     )
+=======
+    """A run-id alias could not be uniquely resolved."""
+
+
+def _resolve_run_id(runs_dir: Path, run_id_alias: str) -> tuple[str, Path]:
+    """Resolve *run_id_alias* to ``(run_id, run_dir)`` inside *runs_dir*.
+
+    Accepts:
+    - ``"latest"`` — the run with the highest ``run_started.now`` in its journal.
+    - An exact run id (directory name).
+    - An unambiguous prefix of a run id.
+
+    Raises :exc:`_RunResolveError` with a user-facing message on failure.
+    """
+    import json as _json
+
+    if not runs_dir.is_dir():
+        raise _RunResolveError(f"no run found matching '{run_id_alias}'")
+
+    if run_id_alias == "latest":
+        best_id: str | None = None
+        best_now: str = ""
+        for d in runs_dir.iterdir():
+            if not d.is_dir():
+                continue
+            j = d / "journal.jsonl"
+            if not j.exists():
+                continue
+            try:
+                with j.open(encoding="utf-8") as fh:
+                    line = fh.readline()
+                entry = _json.loads(line)
+                if entry.get("event") == "run_started":
+                    run_now = str((entry.get("payload") or {}).get("now", ""))
+                    if run_now > best_now:
+                        best_now = run_now
+                        best_id = d.name
+            except (_json.JSONDecodeError, OSError):
+                continue
+        if best_id is None:
+            raise _RunResolveError(
+                "no runs found (runs directory is empty or has no valid journals)"
+            )
+        return best_id, runs_dir / best_id
+
+    # Exact match.
+    exact = runs_dir / run_id_alias
+    if exact.is_dir() and (exact / "journal.jsonl").exists():
+        return run_id_alias, exact
+
+    # Prefix match — only directories that have a journal are candidates.
+    candidates = [
+        d
+        for d in runs_dir.iterdir()
+        if d.is_dir() and d.name.startswith(run_id_alias) and (d / "journal.jsonl").exists()
+    ]
+    if not candidates:
+        raise _RunResolveError(f"no run found matching '{run_id_alias}'")
+    if len(candidates) > 1:
+        names = ", ".join(sorted(d.name for d in candidates))
+        raise _RunResolveError(f"ambiguous prefix '{run_id_alias}' matches: {names}")
+    return candidates[0].name, candidates[0]
+>>>>>>> status-json
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -243,6 +310,11 @@ def build_parser() -> argparse.ArgumentParser:
     status_p.add_argument(
         "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
     )
+    status_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the status as a JSON document on stdout (warnings still go to stderr).",
+    )
 
     return parser
 
@@ -282,7 +354,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         print("gsd plan: full pipeline not yet implemented — use --dry-run to preview")
         return 2
 
-    from .clock import capture_now
+    from .clock import capture_now, make_run_id
     from .config import load_config
     from .ingest import IngestError, ingest
     from .journal import RUN_STARTED, Journal
@@ -302,7 +374,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     config = load_config(cli_overrides=cli_overrides or None)
 
     now = capture_now(config)
-    run_id = str(uuid.uuid4())
+    run_id = make_run_id(now)
 
     journal_path = Path("runs") / run_id / "journal.jsonl"
     journal = Journal(journal_path, run_id)
@@ -717,6 +789,7 @@ def _cmd_run(
 
     todo_path = Path(config.todo_path)
 
+<<<<<<< HEAD
     # Capture now before the lock so make_run_id has a real timestamp.
     from .clock import capture_now, make_run_id
 
@@ -724,6 +797,15 @@ def _cmd_run(
 
     # Acquire single-flight lock before ingest (AC10.5, AC10.6).
     run_id = make_run_id(now)
+=======
+    # Capture now before minting the run id so the id encodes the start time.
+    from .clock import capture_now, make_run_id
+
+    now = capture_now(config)
+    run_id = make_run_id(now)
+
+    # Acquire single-flight lock before ingest (AC10.5, AC10.6).
+>>>>>>> status-json
     lock = Lock(todo_path)
     try:
         lock.acquire(run_id=run_id)
@@ -836,7 +918,11 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
     try:
+<<<<<<< HEAD
         _, run_dir = _resolve_run_id(runs_dir, args.run_id)
+=======
+        _run_id, run_dir = _resolve_run_id(runs_dir, args.run_id)
+>>>>>>> status-json
     except _RunResolveError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -999,8 +1085,13 @@ def _cmd_resume(
     except _RunResolveError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+<<<<<<< HEAD
     journal_path = run_dir / "journal.jsonl"
 
+=======
+
+    journal_path = run_dir / "journal.jsonl"
+>>>>>>> status-json
     journal = Journal(journal_path, resolved_run_id)
     state = journal.replay()
 
@@ -1052,7 +1143,8 @@ def _cmd_resume(
     # the journal provides. The default stays report-and-exit so that resuming
     # twice is idempotent.
     retry_failed = bool(getattr(args, "retry_failed", False))
-    reopenable = state.items_failed if retry_failed else frozenset()
+    # Exclude items that subsequently completed: once in items_done, always done.
+    reopenable = (state.items_failed - state.items_done) if retry_failed else frozenset()
 
     item = None
     if resumed_item_id is not None:
@@ -1232,13 +1324,13 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    """Implement ``gsd status``.
+    """Implement ``gsd status [--json]``.
 
     Read-only: never creates a run directory.  Exit 0 always.
     """
     from .clock import capture_now
     from .config import load_config
-    from .status import build_status, format_status
+    from .status import build_status, format_status, format_status_json
 
     cli_overrides: dict[str, object] = {}
     if getattr(args, "todo", None):
@@ -1250,7 +1342,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
 
     report = build_status(todo_path, runs_dir, config, now)
-    print(format_status(report))
+    use_json: bool = getattr(args, "json", False)
+    if use_json:
+        print(format_status_json(report))
+    else:
+        print(format_status(report))
     return 0
 
 
