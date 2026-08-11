@@ -3,7 +3,21 @@
 name = "jumar"
 version = "0.1.0"
 description = "Turn a todo list into verified work: decompose, do one subtask at a time, prove each one before the next."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{name = "Justin Mclean"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Utilities",
+]
 dependencies = []
 
 [project.optional-dependencies]
@@ -11,6 +25,11 @@ dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 jumar = "jumar.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/justinmclean/jumar"
+Repository = "https://github.com/justinmclean/jumar"
+Issues = "https://github.com/justinmclean/jumar/issues"
 
 [build-system]
 requires = ["setuptools>=68"]
