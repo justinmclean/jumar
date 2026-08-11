@@ -10,8 +10,26 @@ never weaken a check to get green.
 
 ## Status — 2026-08-11
 
+**BLOCKER (recorded by build beat 2026-08-11):** `main` has pre-existing test
+failures — `test_resume.py` imports `_resolve_run_id` / `_RunResolveError` from
+`cli.py` (added by the F1 commit, ef7a90b), but the implementation lives only on
+the `runs-dir-relative-path` local branch, which is not yet merged. Additional
+failures exist in `test_decompose.py` (14 tests) and `test_report.py` (3 tests),
+also fixed by that branch. `make check` fails on every branch cut from main until
+`runs-dir-relative-path` is merged. **The three local branches below must be
+merged (in any order) before the next build iteration can commit.**
+
+Two further pieces of ready-to-commit work exist as uncommitted changes on main:
+1. `src/getstuffdone/harness.py` + `tests/test_harness_argv.py` — adds
+   `--strict-mcp-config` to the Claude harness argv so user-configured MCP
+   servers (e.g. a mail server) cannot bypass the send-boundary deny list.
+   Branch `block-mcp-server-inheritance` was created for this but cannot be
+   committed until the blocker above is resolved.
+2. `IMPLEMENTATION_PLAN.md` — the plan updates below (Phase 14 items, corrected
+   in-flight list). These were uncommitted changes on main; they are included
+   here verbatim.
+
 All planned phases through Phase 13 N1 and Phase 12 F1 are merged to main.
-No local work-item branches remain.
 
 - C1 (`thread-check-rejection-reason`), R1 (`resume-can-retry-a-failed-item`),
   D1 (`validate-depends-targets-at-ingest`), N1 (`choose-the-name`), and
@@ -77,7 +95,15 @@ No local work-item branches remain.
 
 ### In-flight (local branches — not yet pushed)
 
-None.
+- **runs-dir-relative-path** — `_resolve_run_id` + `_RunResolveError` in `cli.py`;
+  prefix matching and `latest` wired into `gsd resume` and `gsd report`; CWD-aware
+  error messages; C1 follow-up (rejection detail in decompose retry). **Must merge
+  first — it fixes the broken test suite on main.**
+- **run-index-tsv** — `runs/index.tsv` appended at `run_started`, status column
+  updated at `run_finished`; `_resolve_run_id` uses the index for `latest` when
+  present, falls back to journal scan (F2).
+- **status-json** — `--json` flag on `gsd status` (AC11.5, AC11.6); run-id
+  symbol correction from F1.
 
 ---
 
@@ -172,8 +198,127 @@ F2. **run-index-tsv** — Item 4 of the `friendly-run-ids` work was deferred:
   absolute runs directory in the journal too, or say so in the error — the
   current message ("no journal found at runs/<id>/journal.jsonl") does not
   hint that the path is relative.
+- **implementation-guide-run-context** — The implementation guide needs a
+  clearer "what is going on during a run" view than just "read the journal".
+  Document how to interpret the live progress output, report, status view, agent
+  claims, verifier evidence, repair attempts, and next action together. If that
+  write-up exposes a product gap, split the behaviour change into its own work
+  item instead of smuggling it into docs.
 - **status-json** — `gsd status` has no `--json` yet (the flag exists on
   plan/run/report); noted as a known gap in `specs/02` §Stage 11.
+
+### Phase 14 — the wall-clock ceiling
+
+P2. **parallel-independent-subtasks** — **Measured 2026-08-11**, not assumed.
+   Across five runs, decompose takes 256–581s and the median subtask execution
+   is 258–505s. Agent process startup was measured directly at **4.1s**, and
+   `--strict-mcp-config` changed it by 46ms — so essentially none of it is
+   overhead that can be tuned away. A subtask is a full agentic session: read
+   prompt, tool call, read result, tool call, write, summarise — eight to ten
+   model round trips. Subtask 0 of the tou-osd item ("fetch two documents into
+   `sources/`") took **132s**, of which ~4s was startup.
+
+   Execution is strictly serial, so wall clock is the *sum* of every subtask
+   plus every repair. Fifteen subtasks at ~4 minutes is an hour before repairs.
+   Trimming the plan or picking cheaper models reduces the total; only
+   concurrency changes the ceiling.
+
+   **The design question, which must be answered before any code.** "One
+   subtask at a time, verified before the next starts" is the product's central
+   claim. Does it mean *verification order* or *wall-clock exclusivity*? The
+   argument that it means order: two subtasks with no `depends_on` edge between
+   them, by construction, neither consumes the other's output nor can invalidate
+   the other's check — that is exactly what the DAG asserts, and `decompose`
+   already rejects a cyclic one. Running them concurrently and verifying each
+   against its own check changes nothing about what is proven.
+
+   The argument for caution, and it is not weak: subtasks that share no declared
+   dependency can still collide in the filesystem, and `depends_on` is authored
+   by the same model that authors the checks — the graph is a *claim* about
+   independence, not a proof of it. Two subtasks that both append to
+   `drafts/inventory.md` are independent in the DAG and racing in reality.
+
+   If it goes ahead, the shape that keeps the guarantee:
+   - Concurrency only within a dependency level; never across an edge.
+   - A bounded worker count (`max_parallel`, default **1** — opt in, never a
+     silent behaviour change for existing users).
+   - **Verification stays serial and stays ordered**, so the journal remains a
+     single linear record and `already_passed` replay is unchanged on resume.
+   - A subtask declaring `write_fs` on a path another concurrent subtask
+     declares is a planning-time rejection, not a runtime race.
+   - `--approve` forces `max_parallel=1`: a human cannot meaningfully approve
+     two things at once.
+
+   *Validation:* `make check` + `pytest tests/test_run.py -q` — with
+   `max_parallel=1` the observable behaviour is byte-identical to today
+   (same journal event order); with `max_parallel=2` two independent subtasks
+   overlap in wall clock and their verifications still appear in index order;
+   a dependent pair never overlaps; `--approve` pins it to 1; a resume of a
+   partially-complete parallel run replays passed subtasks and re-executes only
+   the unverified ones.
+   *Closes:* nothing yet — this reverses a stated v1 non-goal and needs a
+   decision first. `specs/04-technical-plan.md` §Deferred lists parallel
+   subtasks; that line and the guardrail below must move together, and specs
+   are a human/`update`-beat edit.
+   *Branch slug:* `parallel-independent-subtasks`
+
+   **Do not start this before the decision is recorded.** If the answer is that
+   serial execution is part of what the tool promises, close the item and say so
+   here — an hour for fifteen verified subtasks is then the honest price, and
+   the README should quote it rather than leave users to discover it.
+
+
+P3. **reuse-the-execution-session** — Every subtask spawns `claude -p` in a
+   **brand-new conversation**. Measured 2026-08-11: process startup is 4.1s
+   (`--strict-mcp-config` changed it by 46ms, so MCP boot is not a factor), and
+   a subtask that fetched two documents took 132s. Startup is ~3% — the rest is
+   the model working. But a meaningful slice of that work is the model
+   re-orienting: every call re-sends the item text, the context prose block and
+   the prior-evidence summary, uncached, and the model rebuilds from nothing.
+
+   The comparison that makes it concrete: the same research in a single desktop
+   conversation feels far faster, and part of that is real — one conversation
+   means prompt-cached input turn over turn, and by step seven the model already
+   knows what it did at step three. gsd throws that away fifteen times.
+
+   **This does not touch the product's thesis.** The fresh-context requirement
+   is a property of **verification**, not execution — the verifier must never
+   see the executing agent's reasoning, only the world it left behind (AC6.4).
+   Nothing requires the *executor* to forget. `claude` supports `--session-id`
+   and `--resume`, so execution can run as one continued session per item while
+   every verifier still gets a brand-new context.
+
+   Shape:
+   - One session id per **item**, minted at `plan_created` and journalled so a
+     resume can rejoin or deliberately start fresh.
+   - `execute()` passes `--resume <id>` for every subtask after the first.
+   - **Verification and the judge are unchanged** — always a new context, never
+     the execution session. If that separation is ever blurred the adversarial
+     judge becomes self-assessment and the guarantee goes with it.
+   - Harnesses that cannot resume a session fall back to today's behaviour, the
+     same way `allow_tools` degrades for `UNRESTRICTED_HARNESSES`.
+   - A repair continues the same session: it is the same subtask, and the
+     failing evidence is more useful in context than re-explained.
+
+   **Honest limits.** It will not halve an hour. The dominant cost is output
+   generation and tool round trips, which session reuse does not reduce; it
+   removes re-reading and re-orientation, so it helps short subtasks more than
+   long ones. And it weakens isolation: a session that goes wrong stays wrong
+   for the remaining subtasks, where today each starts clean. If that trade is
+   unacceptable, say so here and close the item — but it is a smaller trade than
+   P2's, because the DAG is not being trusted for anything.
+
+   *Validation:* `make check` + `pytest tests/test_execute.py tests/test_verify_judge.py -q`
+   — subtask 2 onwards carries `--resume` with the session id journalled at
+   `plan_created`; the judge verifier's argv never carries a session id; a
+   harness without resume support produces today's argv unchanged; a resumed run
+   either rejoins the recorded session or starts a new one and journals which.
+   *Closes:* new behaviour — USER-side spec amendment to `specs/04` §Harness.
+   *Branch slug:* `reuse-the-execution-session`
+
+   Do this **before** P2. It is smaller, it needs no decision about what "one
+   subtask at a time" means, and it makes every subtask cheaper whether or not
+   they ever run concurrently.
 
 ---
 
@@ -192,12 +337,16 @@ F2. **run-index-tsv** — Item 4 of the `friendly-run-ids` work was deferred:
   reachable it is defence in depth, and the container is the control.
 - **No `shell=True`.** Every subprocess is argv. Do not plan a shell-string
   escape hatch.
-- **Out of scope for v1** (do not plan): parallel subtask execution, cross-item
+- **Out of scope for v1** (do not plan): cross-item
   planning, non-Markdown todo inputs, sync with external trackers (Jira, Asana,
   Todoist), a resident daemon, a web UI, Windows Task Scheduler, and
   **cross-file `@depends=`** (decided with D1: one file's eligibility must not
   depend on another file's run history — two related lists state their run
   order in prose).
+- **Parallel subtask execution is no longer an automatic "do not plan"** — it is
+  now an open question with a written-up item (P2, Phase 14) and an undecided
+  premise. It remains **not to be built** until the design question in that item
+  is answered. Do not treat its removal from the list above as approval.
 - **The product pointing at its own plan** is a milestone, not a dependency.
   Nothing in `src/getstuffdone/` may assume it is being run against this repo.
 
