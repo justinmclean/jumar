@@ -729,7 +729,6 @@ def test_resume_uuid_format_still_resolves(tmp_path: Path, monkeypatch: pytest.M
 
 
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
 # runs-dir-relative-path — error messages hint that the path is CWD-relative
 # ---------------------------------------------------------------------------
 
@@ -761,7 +760,9 @@ def test_resume_not_found_error_includes_absolute_path(
     err = capsys.readouterr().err
     # The absolute path of the attempted runs directory appears in the error.
     assert str(tmp_path) in err
-=======
+
+
+# ---------------------------------------------------------------------------
 # F2 — run index (runs/index.tsv)
 # ---------------------------------------------------------------------------
 
@@ -1021,4 +1022,3 @@ def test_gsd_run_writes_index_and_updates_on_finish(
     parts = lines[0].split("\t")
     assert parts[2] == "marker-a1b2c3d4"
     assert parts[3] == STATUS_COMPLETED
->>>>>>> run-index-tsv
