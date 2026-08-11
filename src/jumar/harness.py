@@ -310,3 +310,11 @@ def run_agent(
             timed_out=True,
             agent_claim=None,
         )
+    except OSError as exc:
+        return AgentResult(
+            exit_status=-1,
+            stdout="",
+            stderr=str(exc),
+            timed_out=False,
+            agent_claim=None,
+        )
