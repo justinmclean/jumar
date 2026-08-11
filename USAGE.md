@@ -143,7 +143,177 @@ Modes (`specs/02-functional-spec.md` §Stage 4):
 
 ---
 
-## 4. Read a run — `gsd report`
+## 4. What happens during a run — reading the live output
+
+`gsd run` emits per-stage progress to **stderr**. Standard output carries only
+the run summary (and, under `--json`, a single machine-readable document).
+Progress is suppressed when the stream is not a TTY and when `--json` is
+active, so scheduled and piped runs stay silent.
+
+```console
+$ gsd run
+→ Add a --json flag to the export script
+  planning … (one agent call, up to 12 subtasks)
+  planned 3 subtask(s)
+[1/3] Add argparse argument for --json … verifying (command) … passed
+[2/3] Document the flag in the README … verifying (file) … failed — pattern '--json' not found in README.md
+  repairing (budget 2) …
+  attempt 1/2 … passed
+[3/3] Update the test suite … verifying (command) … passed
+→ done
+```
+
+Reading the output left to right:
+
+- **`→ <item>`** — the item selected by `select`. Exactly one item per
+  invocation.
+- **`planning …`** — the model is decomposing the item into subtasks and
+  authoring a check for each. One agent call. On a long item this is minutes
+  of silence — the blank terminal is expected.
+- **`[N/T] <description> …`** — subtask N of T has been sent to the agent.
+  Nothing is trusted yet; this line stays open until the verifier closes it.
+- **`verifying (<kind>) …`** — the verifier is running the check
+  **independently of what the agent reported**. The agent's claim does not
+  appear on this line; only the verifier's result does.
+- **`passed` / `failed — <reason>` / `inconclusive — <reason>`** — what the
+  verifier confirmed. A `passed` result closes the subtask; anything else
+  enters the repair loop.
+- **`repairing (budget N) …`** — the check was not passed; the repair loop
+  begins with N attempts remaining.
+- **`attempt K/N … <verdict>`** — one repair attempt, followed by its
+  verdict. The same original check is always re-run after each repair —
+  a repair may never substitute a different check.
+- **`→ done`** / **`→ failed`** — the item's final outcome, emitted after all
+  subtasks have been processed (or after the run is aborted by exhausted
+  repairs or a halt).
+
+### Agent claims and verifier evidence — the trust gap
+
+The agent's own "I'm done" is captured in the journal as `agent_claim` on the
+`attempt_finished` event. It is never the verdict. The verifier runs as a
+separate invocation — a subprocess, a file check, or an independent judge call
+— with no access to the agent's reasoning chain. The gap between the two is
+the product's trust boundary: **a passed subtask means the check passed**, not
+that the agent's description sounded plausible.
+
+To see claim and evidence side by side:
+
+```bash
+python3 -m json.tool < runs/20260808-0851-a3f9/journal.jsonl
+```
+
+Each `attempt_finished` event carries `agent_claim` (what the agent said it
+did) and `files_touched` (git status before vs. after). The `verify_result`
+event that follows carries the verifier's `verdict` and `evidence` dict —
+the concrete artefact that proved the claim, or the concrete observation that
+falsified it.
+
+### Verbose mode — echo the agent's output after each initial attempt
+
+```bash
+gsd run --verbose
+```
+
+Under `--verbose`, the agent's captured stdout is echoed to stderr after each
+initial subtask execution, prefixed with `│`:
+
+```console
+[2/3] Document the flag in the README …
+    │ I've updated the README. The --json flag is now documented in
+    │ section 5 with a usage example.
+  verifying (file) … failed — pattern '--json' not found in README.md
+```
+
+The transcript is what the agent returned, unchanged. The verifier result
+below it is independent.
+
+Note: the `--verbose` echo applies to the **initial** execution of each
+subtask. Repair attempts show only the verdict line — the repair agent's
+transcript is written to `runs/<run-id>/artifacts/` and must be read from
+there if needed.
+
+### The repair cycle
+
+When a check returns `failed` or `inconclusive`, the repair loop re-runs the
+agent with the failing check and its evidence in the prompt:
+
+```console
+[2/3] Document the flag in the README … verifying (file) … failed — pattern '--json' not found in README.md
+  repairing (budget 2) …
+  attempt 1/2 … passed
+```
+
+When the budget is exhausted without a pass:
+
+```console
+[2/3] Document the flag in the README … verifying (file) … failed — pattern '--json' not found in README.md
+  repairing (budget 2) …
+  attempt 1/2 … failed — pattern '--json' not found in README.md
+  attempt 2/2 … failed — pattern '--json' not found in README.md
+repairs exhausted — pattern '--json' not found in README.md
+→ failed
+```
+
+`max_repairs` from config controls the budget (default 2). On exhaustion the
+item fails at that subtask. If `halt_on_fail = true`, the entire run stops;
+otherwise the next eligible item is selected.
+
+### Status — item-centric view across all runs
+
+While `gsd report` answers "what happened to this run?", `gsd status` answers
+"where does each item stand right now?":
+
+```console
+$ gsd status
+Status for: todo.md
+
+  [ELIGIBLE        ] Add a --json flag to the export script
+    last: run=20260808-0851-a3f9  at=2026-08-08T08:51:11.729401+00:00  outcome=failed
+    failing subtask: Document the flag in the README
+    check kind: file
+  [NEVER-ATTEMPTED ] Update the README install section
+  [DEFERRED        ] Draft the quarterly summary  [eligible: 2026-09-01T00:00:00+00:00]
+  [BLOCKED         ] Fetch the invoice report
+  [PARKED          ] Rotate the backup logs  (paused: auto-failures)  [failures: 3]
+  [DONE            ] This one is already done
+```
+
+`gsd status` scans every journal under `runs/` and merges the results with the
+current todo file. One row per item.
+
+| State | Meaning |
+|---|---|
+| `ELIGIBLE` | Pending, no blocking gate. Last-run info shown below if any. |
+| `NEVER-ATTEMPTED` | Eligible, but no journal has ever touched this item. |
+| `DEFERRED` | `@not-before=` is in the future; next eligibility instant shown. |
+| `BLOCKED` | Unsatisfied `@depends=` edge. |
+| `PARKED` | `@paused=` token present; the item is skipped until you remove it. |
+| `DONE` | Checkbox checked in the file. |
+
+For a failed item, `status` shows which subtask failed and what check kind —
+so you know whether to inspect a file, a command's exit code, or a judge
+artefact before retrying.
+
+`gsd status --json` emits the same data as a JSON document.
+
+### Putting it together — the next-action loop
+
+```
+gsd run                         # attempt the next eligible item
+ ↓ if it reports "failed":
+gsd status                      # which item, which subtask, which check kind
+gsd report <run-id>             # full evidence trail for that run
+ ↓ once you have addressed the cause:
+gsd resume <run-id> --retry-failed    # re-enter from the first unverified subtask
+```
+
+All three views read the same journal files. `gsd resume --retry-failed` never
+re-executes a subtask that already carries a `passed` verdict — verified side
+effects are not repeated.
+
+---
+
+## 5. Read a run — `gsd report`
 
 ```console
 $ gsd report demo-run
@@ -201,7 +371,7 @@ gsd report <run-id> --runs-dir /path/to/runs   # non-default runs directory
 
 ---
 
-## 5. Resume an interrupted run — `gsd resume`
+## 6. Resume an interrupted run — `gsd resume`
 
 Replays `runs/<run-id>/journal.jsonl` and continues from the first subtask
 **without a `passed` verdict**.
@@ -236,7 +406,7 @@ contract as `gsd report`.
 
 ---
 
-## 6. Scheduling
+## 7. Scheduling
 
 Two independent mechanisms. Keeping them separate matters.
 
@@ -292,7 +462,7 @@ crashed run is reclaimed with a journalled note.
 
 ---
 
-## 7. Configuration
+## 8. Configuration
 
 `gsd.toml` in the working directory, or a `[tool.gsd]` table in
 `pyproject.toml`. CLI flags override config. Current effective defaults:
@@ -355,7 +525,7 @@ Notes that matter:
 
 ---
 
-## 8. Check kinds
+## 9. Check kinds
 
 Every subtask carries exactly one `Check`. A subtask whose plan has no check is
 rejected at planning time — the decomposition is retried once, then the item
@@ -387,7 +557,7 @@ by four real additions rather than one.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -417,7 +587,7 @@ and uuid-era run directories without an index row still resolve by prefix.
 
 ---
 
-## 10. Command reference
+## 11. Command reference
 
 ```
 gsd [--version] [--help]
