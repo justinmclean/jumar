@@ -79,9 +79,14 @@ never a partial accept.
 - Subtasks run with `cwd` set to the item's working directory (default: repo
   root) and inherit a **scrubbed environment**: no `GITHUB_TOKEN`, no
   `*_API_KEY` beyond the one the harness itself needs, no SSH agent socket.
-- `network` is not a default capability. Without it the harness is launched with
-  its offline/no-tool-network flags where the CLI supports them, and `curl`,
-  `wget`, `ssh`, `scp` are on the standing deny list regardless.
+- The enforced boundary is **send, not fetch** (decided 2026-08-08). `network`
+  **is** a default capability and `curl`/`wget` are on the allow list — an
+  agent that cannot reach a primary source fabricates it instead, the worse
+  failure. The standing deny list is the outbound-transmission vectors:
+  `mail`, `mailx`, `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`,
+  `rsync`. The allow list is defence in depth, not a sandbox — with `python3`
+  allowed and the network reachable, the real control is running gsd in a
+  container/VM with restricted egress and no push credentials.
 - `git push` and `gh` are **hard-denied** in every dispatched argv, mirroring the
   spec loop's `--disallowedTools` defence in depth. AC8.4 tests this.
 - Command checks use `subprocess.run` with an argv list, `shell=False`, a

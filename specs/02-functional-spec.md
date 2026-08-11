@@ -23,6 +23,8 @@ Stages 5–7 are the **inner loop**, run once per subtask. Stages 2–8 are the
 **outer loop**, run once per todo item.
 
 Stage 10 sits outside both: it installs the schedule that starts a run at all.
+Stage 11 also sits outside them: it reads what the runs left behind, and
+defines the machine-readable (`--json`) output contract.
 
 ---
 
@@ -96,9 +98,15 @@ Markdown task list items into `TodoItem` records.
 
 **Behaviour & contract**
 
-Chooses the single next item to work, applying two gates in order —
-**time eligibility**, then **dependency eligibility** — and then ordering what
-survives.
+Chooses the single next item to work, applying its gates in order —
+**parking**, then **time eligibility**, then **dependency eligibility** — and
+then ordering what survives.
+
+*Parking.* An item carrying a `@paused=` token is excluded before every other
+gate and reported as **Parked** with the token's value as the reason. Parking is
+a human-facing brake: stage 8 applies it automatically after repeated failures
+(`@paused=auto-failures`), and the human releases it by deleting the token from
+the line — there is no unpark command.
 
 *Time eligibility.* Every selection is evaluated against a single `now`,
 captured once per run and journalled, so a long run cannot see time move
@@ -115,6 +123,9 @@ underneath it:
 detected up front and reported as a configuration error before any work starts.
 A dependency that is merely `deferred` blocks its dependant too — the dependant
 reports the *dependency's* eligibility instant, so the reason is actionable.
+A `@depends=` target that names no item in the file at all is malformed input,
+refused at ingest before any work starts (AC2.12) — a typo must be an error,
+not a permanently and silently blocked item.
 
 *Ordering.* Among eligible items: **overdue first** (`due < now`, most overdue
 first), then explicit `@priority` ascending, then `@due` ascending, then file
@@ -145,6 +156,14 @@ loosens a check, or skips verification.
   names the dependency's eligibility instant, not its own.
 - AC2.10 A run in which every item is deferred exits cleanly (status 0) with a
   "nothing eligible" summary and the next eligibility instant.
+- AC2.11 An item with a `@paused=` token is never selected — before time and
+  dependency gates — and is reported as Parked with its reason; the next
+  eligible item is selected instead.
+- AC2.12 A `@depends=` target that names no item in the same file is a startup
+  error (enforced at ingest, before any agent call) naming the item, the
+  missing id, and the line, with a did-you-mean suggestion for near-miss
+  typos; a forward reference to a later item still resolves, and a dependency
+  on a `- [x]` completed item leaves the dependant eligible.
 
 ---
 
@@ -174,6 +193,15 @@ Hard rules enforced by the code, not by the prompt:
 - A `judge` check (an independent agent verdict) is only accepted when the
   subtask's nature makes an executable check impossible — and the plan must say
   why in `check.rationale`.
+- A `command` check must be a **real argv, never a shell string in disguise**: a
+  shell (`bash`, `sh`, `zsh`, …) invoked with an inline-program flag (`-c`,
+  `--command`) is rejected at `Check` construction. A shell running a script
+  *file* stays legal. Without this rule, one argv element re-opens everything
+  the no-shell rule and the argv[0] allow list close.
+- A `command` check must be **falsifiable**: an argv whose head cannot fail for
+  any reason connected to the work (`true`, `echo`, `date`, `ls` with no
+  operands, …) is rejected at construction. A check that always passes is
+  "trust me" with extra steps.
 - The plan is capped at `max_subtasks` (config, default 12; `@max-subtasks=`
   overrides). A longer plan is rejected and the item is flagged for the human to
   split — a 40-step item is a mis-sized todo, not a long run.
@@ -193,6 +221,11 @@ Hard rules enforced by the code, not by the prompt:
 - AC3.4 A `judge` check without `rationale` is rejected.
 - AC3.5 A cyclic `depends_on` within a plan is rejected as `invalid_plan`.
 - AC3.6 The full plan (subtasks + checks) is journalled before any execution.
+- AC3.7 A `kind=command` check invoking a shell with an inline-program flag
+  (`bash -c …`, `sh -c …`, `zsh --command …`) is rejected at construction; the
+  same shell running a script file is accepted.
+- AC3.8 A `kind=command` check whose argv cannot fail (`true`, `echo`, `date`,
+  bare `ls`) is rejected as unfalsifiable at construction.
 
 **Known gaps**
 
@@ -259,6 +292,13 @@ The executor never marks a subtask successful. It records an `Attempt`
 touched) and hands straight to stage 6. The agent's own "I'm done" is stored as
 a *claim* on the attempt, never as the outcome.
 
+**Progress output.** A run emits one human-facing line per stage transition on
+**stderr only** (`progress.py`); `--verbose` additionally echoes the agent's
+captured output after each attempt. Progress is suppressed under `--json` and
+whenever stderr is not a TTY, so scheduled and piped runs stay silent. stdout
+carries the report summary — and under `--json`, a single JSON document — and
+is never contaminated by progress.
+
 **Acceptance criteria**
 
 - AC5.1 Exactly one subtask is dispatched per execute call; subtask `n+1` is
@@ -269,6 +309,9 @@ a *claim* on the attempt, never as the outcome.
   the current subtask.
 - AC5.4 A subtask's attempt is journalled before its verification runs.
 - AC5.5 An agent claiming success never by itself produces a `passed` subtask.
+- AC5.6 Progress lines go to stderr only, and are suppressed under `--json` and
+  when stderr is not a TTY; stdout is byte-identical with progress enabled or
+  disabled.
 
 ---
 
@@ -302,6 +345,13 @@ Rules:
   **not** a pass. It routes to repair like a failure, and if unresolved the item
   ends as `inconclusive`, distinct from `failed`.
 - A `manual` check in a non-interactive run is `inconclusive`, never auto-passed.
+- A `file` check on a **zero-byte** path is `failed` with `file_is_empty`
+  evidence, before any pattern matching runs — a fetch that produced an empty
+  file must not pass on "the path exists". On a pattern miss, the evidence
+  includes a `content_head` excerpt so the report shows what was actually there.
+- The `command` verifier consults the argv allow/deny policy (`is_allowed()`)
+  **before** spawning: a denied argv is `inconclusive` with `capability_denied`
+  evidence and no process is ever started.
 - Verifier output is truncated to a configured byte cap in the journal, with the
   full output written alongside as an artefact file.
 
@@ -319,6 +369,11 @@ Rules:
   starts.
 - AC6.7 Adding a new check kind requires only registering a verifier in the
   registry — asserted by a test that registers a dummy kind end to end.
+- AC6.8 A `file` check on a zero-byte path yields `failed` with `file_is_empty`
+  evidence, regardless of any pattern.
+- AC6.9 A `command` check whose argv is refused by the allow/deny policy yields
+  `inconclusive` with `capability_denied` evidence, and no process is spawned —
+  asserted by a test that fails if `subprocess.run` is reached.
 
 ---
 
@@ -376,6 +431,15 @@ verdict. On completion:
   changes are committed on a per-item branch (never the base branch), with the
   item text as the subject. **The system never pushes and never opens a PR.**
 
+**Failure backoff** (`backoff.py`). An item reaching a failed terminal state
+advances a `@failed=N` count on its todo line, journal-before-write and
+byte-preserving outside that line. When the count reaches
+`max_consecutive_failures` (config, default 3), `@paused=auto-failures` is
+appended **once** — the item is parked (AC2.11) so an unattended schedule stops
+burning attempts on it. A later success removes `@failed=` but leaves
+`@paused=` in place: resuming a parked item is a deliberate human act (delete
+the token), never an automatic one.
+
 **Acceptance criteria**
 
 - AC8.1 An item with any non-passed subtask is never marked `- [x]`.
@@ -391,6 +455,10 @@ verdict. On completion:
   single next occurrence after `now`, not to a backlog of missed ones.
 - AC8.7 A recurring item that **failed** has its schedule left untouched — a
   failure must not silently defer the item past its next occurrence.
+- AC8.8 A failed terminal state advances `@failed=N` on the item's line
+  (journalled before the write; whole-file diff is exactly one line); reaching
+  `max_consecutive_failures` appends `@paused=auto-failures` exactly once; a
+  subsequent success removes `@failed=` and leaves `@paused=` untouched.
 
 ---
 
@@ -505,6 +573,56 @@ half the year.
 
 ---
 
+## Stage 11 — Status & machine-readable output
+
+**Where it lives:** `src/getstuffdone/status.py` (`gsd status`); the `--json`
+flag in `cli.py` / `report.py` (`gsd plan --dry-run`, `gsd run`, `gsd report`)
+
+**Behaviour & contract**
+
+*`gsd status`* answers "where is everything?" without opening twelve journals:
+one line per todo item, aggregated from the todo file **and every run journal**
+in the runs directory.
+
+- It is **read-only**: it creates no run directory, appends no journal entry,
+  acquires no lock, and always exits 0.
+- Each item reports a state: `done` (checkbox checked), `parked` (`@paused=`
+  token, with its reason and `@failed=` count), `deferred` (with the next
+  eligibility instant), `blocked` (unmet `@depends=`), `eligible`, or
+  `never-attempted` (eligible, but no journal has ever touched it).
+- For items the journals know about, the line carries the last run's id, its
+  `run_started` instant, and its outcome; for a failure, the failing subtask's
+  description and check kind — the same "which subtask, which check" contract
+  as stage 9, one level up.
+
+*`--json`* (on `gsd plan --dry-run`, `gsd run`, and `gsd report`) makes stdout
+a **single JSON document** and nothing else. The schema is the existing
+dataclasses serialised — not a parallel shape maintained by hand. Warnings stay
+on stderr; progress (AC5.6) is suppressed. All timestamps are ISO-8601 UTC.
+
+**Acceptance criteria**
+
+- AC11.1 `gsd status` creates no run directory, appends to no journal, and
+  exits 0 — including when the runs directory is empty or absent.
+- AC11.2 Every item in the todo file appears exactly once, with a state drawn
+  from `done | parked | deferred | blocked | eligible | never-attempted`.
+- AC11.3 A parked item shows its `@paused=` reason and `@failed=` count; a
+  deferred item shows its next eligibility instant.
+- AC11.4 Last-run id, instant, and outcome come from the journals; an item
+  absent from every journal is `never-attempted`, not an error.
+- AC11.5 Under `--json`, stdout parses as a single JSON document; warnings and
+  progress appear only on stderr.
+- AC11.6 Every timestamp in `--json` output is ISO-8601 UTC.
+
+**Known gaps**
+
+- `gsd status` itself has no `--json` yet; the flag exists on `plan`, `run`,
+  and `report`.
+- No `runs/index.tsv` run index yet: status derives everything by scanning
+  journals (F1 change 4 in `IMPLEMENTATION_PLAN.md`).
+
+---
+
 ## Cross-cutting: state & resume
 
 **Where it lives:** `src/getstuffdone/journal.py`
@@ -512,6 +630,14 @@ half the year.
 Every stage transition is appended to `runs/<run-id>/journal.jsonl` **before**
 the next stage begins. `gsd resume <run-id>` replays the journal, restores item
 and subtask status, and continues from the first subtask without a verdict.
+
+By default, resume continues an **interrupted** run only: an item already
+terminal (`done` or `failed`) is reported, not re-executed. `gsd resume
+<run-id> --retry-failed` reopens a **failed** item — re-entering it at the
+first subtask without a `passed` verdict, replaying (never re-executing) the
+passed ones. The retry appends to the same journal, so the report must take the
+**latest** terminal event per item, and the retry must not advance `@failed=`
+a second time. A `done` item is never reopened, flag or no flag.
 
 - AC-S1 A run killed mid-execution and resumed does not re-execute any subtask
   that already has a `passed` verdict.
@@ -522,3 +648,9 @@ and subtask status, and continues from the first subtask without a verdict.
   `run_started`, and a resumed run reuses the original `now` for eligibility
   rather than re-reading the clock — a resume must not change which items were
   eligible.
+- AC-S5 A journal ending in `item_failed` resumes under `--retry-failed` and
+  re-executes only the subtasks without a `passed` verdict; the same journal
+  without the flag reports and exits; passed subtasks never re-invoke the
+  agent; the report reflects the retry's outcome (latest terminal event), not
+  the original failure; `@failed=` is not double-counted on retry and is
+  cleared by a subsequent success; a `done` item is never reopened.

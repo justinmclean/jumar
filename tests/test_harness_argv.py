@@ -742,3 +742,72 @@ def test_git_c_non_push_is_still_allowed() -> None:
     from getstuffdone.config import Config, is_allowed
 
     assert is_allowed(["git", "-C", ".", "status"], Config()) is True
+
+
+# ---------------------------------------------------------------------------
+# Planning must not be able to do the work it is planning
+# ---------------------------------------------------------------------------
+
+
+def test_planning_disables_every_claude_tool() -> None:
+    """Decompose is one structured completion, not an agent session.
+
+    Observed 2026-08-11: a plan call for a 15-subtask audit item ran past
+    twenty minutes because the planner had WebFetch and went browsing vendor
+    sites instead of authoring checks.
+    """
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model="sonnet",
+        capabilities=frozenset({Capability.write_fs, Capability.network}),
+        prompt="plan it",
+        allow_tools=False,
+    )
+    joined = " ".join(argv)
+    for tool in ("Bash", "Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch", "Task"):
+        assert f"--disallowedTools {tool}" in joined, tool
+
+
+def test_execution_keeps_its_tools() -> None:
+    """The restriction is for planning only — execution still needs to work."""
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model="sonnet",
+        capabilities=frozenset({Capability.write_fs, Capability.network}),
+        prompt="do it",
+    )
+    joined = " ".join(argv)
+    assert "--disallowedTools Read" not in joined
+    assert "--disallowedTools WebFetch" not in joined
+    # The hard denials survive regardless of mode.
+    assert "Bash(git push:*)" in joined
+    assert "Bash(gh:*)" in joined
+
+
+def test_planning_still_hard_denies_push_and_gh() -> None:
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model="sonnet",
+        capabilities=frozenset(),
+        prompt="plan it",
+        allow_tools=False,
+    )
+    joined = " ".join(argv)
+    assert "Bash(git push:*)" in joined
+    assert "Bash(gh:*)" in joined
+
+
+def test_allow_tools_is_a_noop_for_harnesses_that_cannot_express_it() -> None:
+    """Honest limitation: only claude takes tool denials, so say so in a test."""
+    argv = build_argv(
+        agent_bin="cursor",
+        harness_name="cursor",
+        model="auto",
+        capabilities=frozenset({Capability.network}),
+        prompt="plan it",
+        allow_tools=False,
+    )
+    assert "--disallowedTools" not in " ".join(argv)

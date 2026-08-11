@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -21,75 +22,6 @@ from . import __version__
 from .models import HarnessInfo
 
 SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
-
-
-# ---------------------------------------------------------------------------
-# Run-id resolution (prefix matching and "latest")
-# ---------------------------------------------------------------------------
-
-
-class _RunResolveError(Exception):
-    """A run-id alias could not be uniquely resolved."""
-
-
-def _resolve_run_id(runs_dir: Path, run_id_alias: str) -> tuple[str, Path]:
-    """Resolve *run_id_alias* to ``(run_id, run_dir)`` inside *runs_dir*.
-
-    Accepts:
-    - ``"latest"`` — the run with the highest ``run_started.now`` in its journal.
-    - An exact run id (directory name).
-    - An unambiguous prefix of a run id.
-
-    Raises :exc:`_RunResolveError` with a user-facing message on failure.
-    """
-    import json as _json
-
-    if not runs_dir.is_dir():
-        raise _RunResolveError(f"no run found matching '{run_id_alias}'")
-
-    if run_id_alias == "latest":
-        best_id: str | None = None
-        best_now: str = ""
-        for d in runs_dir.iterdir():
-            if not d.is_dir():
-                continue
-            j = d / "journal.jsonl"
-            if not j.exists():
-                continue
-            try:
-                with j.open(encoding="utf-8") as fh:
-                    line = fh.readline()
-                entry = _json.loads(line)
-                if entry.get("event") == "run_started":
-                    run_now = str((entry.get("payload") or {}).get("now", ""))
-                    if run_now > best_now:
-                        best_now = run_now
-                        best_id = d.name
-            except (_json.JSONDecodeError, OSError):
-                continue
-        if best_id is None:
-            raise _RunResolveError(
-                "no runs found (runs directory is empty or has no valid journals)"
-            )
-        return best_id, runs_dir / best_id
-
-    # Exact match.
-    exact = runs_dir / run_id_alias
-    if exact.is_dir() and (exact / "journal.jsonl").exists():
-        return run_id_alias, exact
-
-    # Prefix match — only directories that have a journal are candidates.
-    candidates = [
-        d
-        for d in runs_dir.iterdir()
-        if d.is_dir() and d.name.startswith(run_id_alias) and (d / "journal.jsonl").exists()
-    ]
-    if not candidates:
-        raise _RunResolveError(f"no run found matching '{run_id_alias}'")
-    if len(candidates) > 1:
-        names = ", ".join(sorted(d.name for d in candidates))
-        raise _RunResolveError(f"ambiguous prefix '{run_id_alias}' matches: {names}")
-    return candidates[0].name, candidates[0]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -265,7 +197,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         print("gsd plan: full pipeline not yet implemented — use --dry-run to preview")
         return 2
 
-    from .clock import capture_now, make_run_id
+    from .clock import capture_now
     from .config import load_config
     from .ingest import IngestError, ingest
     from .journal import RUN_STARTED, Journal
@@ -285,7 +217,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     config = load_config(cli_overrides=cli_overrides or None)
 
     now = capture_now(config)
-    run_id = make_run_id(now)
+    run_id = str(uuid.uuid4())
 
     journal_path = Path("runs") / run_id / "journal.jsonl"
     journal = Journal(journal_path, run_id)
@@ -392,6 +324,17 @@ def _verifications_from_journal(
     return rebuilt
 
 
+def _item_max_subtasks(item: Any, config: Any) -> int:
+    """The plan-length cap for this item: @max-subtasks= overrides config."""
+    raw = getattr(item, "meta", {}).get("max-subtasks")
+    if raw:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return int(getattr(config, "max_subtasks", 12))
+
+
 def run_item(
     item: Any,
     *,
@@ -451,6 +394,7 @@ def run_item(
 
     # --- decompose (skipped when resuming with a plan already in the journal)
     if plan is None:
+        prog.planning(item.text, _item_max_subtasks(item, config))
         try:
             plan = decompose(
                 item,
@@ -458,6 +402,9 @@ def run_item(
                 journal=journal,
                 cwd=cwd,
                 _run_agent=_run_agent,
+                on_rejected=lambda reason, attempt, retrying: prog.plan_rejected(
+                    reason, attempt, 2, retrying
+                ),
             )
         except DecomposeError as exc:
             journal.append(
@@ -685,13 +632,8 @@ def _cmd_run(
 
     todo_path = Path(config.todo_path)
 
-    # Capture now before minting the run id so the id encodes the start time.
-    from .clock import capture_now, make_run_id
-
-    now = capture_now(config)
-    run_id = make_run_id(now)
-
     # Acquire single-flight lock before ingest (AC10.5, AC10.6).
+    run_id = str(uuid.uuid4())
     lock = Lock(todo_path)
     try:
         lock.acquire(run_id=run_id)
@@ -700,6 +642,7 @@ def _cmd_run(
         return 0
 
     try:
+        from .clock import capture_now
         from .ingest import IngestError, ingest
         from .journal import ITEM_PARKED, LOCK_RECLAIMED, RUN_FINISHED, RUN_STARTED, Journal
         from .report import build_report, format_summary, write_report
@@ -707,6 +650,7 @@ def _cmd_run(
 
         run_dir = Path("runs") / run_id
         journal = Journal(run_dir / "journal.jsonl", run_id)
+        now = capture_now(config)
 
         journal.append(
             RUN_STARTED,
@@ -803,10 +747,10 @@ def _cmd_report(args: argparse.Namespace) -> int:
     )
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
-    try:
-        _run_id, run_dir = _resolve_run_id(runs_dir, args.run_id)
-    except _RunResolveError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    run_dir = runs_dir / args.run_id
+
+    if not (run_dir / "journal.jsonl").exists():
+        print(f"error: no journal found at {run_dir / 'journal.jsonl'}", file=sys.stderr)
         return 1
 
     report = build_report(run_dir)
@@ -962,14 +906,14 @@ def _cmd_resume(
     from .select import CycleError, select_next
 
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
-    try:
-        resolved_run_id, run_dir = _resolve_run_id(runs_dir, args.run_id)
-    except _RunResolveError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    run_dir = runs_dir / args.run_id
+    journal_path = run_dir / "journal.jsonl"
+
+    if not journal_path.exists():
+        print(f"error: no journal found at {journal_path}", file=sys.stderr)
         return 1
 
-    journal_path = run_dir / "journal.jsonl"
-    journal = Journal(journal_path, resolved_run_id)
+    journal = Journal(journal_path, args.run_id)
     state = journal.replay()
 
     if state.now is None:
@@ -1020,8 +964,7 @@ def _cmd_resume(
     # the journal provides. The default stays report-and-exit so that resuming
     # twice is idempotent.
     retry_failed = bool(getattr(args, "retry_failed", False))
-    # Exclude items that subsequently completed: once in items_done, always done.
-    reopenable = (state.items_failed - state.items_done) if retry_failed else frozenset()
+    reopenable = state.items_failed if retry_failed else frozenset()
 
     item = None
     if resumed_item_id is not None:

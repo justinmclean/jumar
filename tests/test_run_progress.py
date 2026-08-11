@@ -323,3 +323,77 @@ def test_repair_progress_is_suppressed_when_disabled(
 
     assert "attempt" not in err
     assert "repairing" not in err
+
+
+# ---------------------------------------------------------------------------
+# The planning phase must not be silent
+# ---------------------------------------------------------------------------
+
+
+def test_planning_is_announced_before_the_agent_is_called(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Decomposition is one agent call and used to print nothing.
+
+    `prog.item_started` needs a subtask count, which does not exist until the
+    plan does — so the longest single wait in a run happened before the first
+    line of output. On a real item that was eight minutes of blank terminal.
+    """
+    cli._cmd_run(_Args(), _run_agent=honest_agent, _progress_force=True)
+    err = capsys.readouterr().err
+
+    assert "planning" in err
+    assert err.index("planning") < err.index("[1/")
+
+
+def test_a_rejected_plan_says_so_and_says_it_is_retrying(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A retry silently doubles the wait. It must be visible."""
+    state = {"n": 0}
+    unfalsifiable = json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "Do it",
+                    "capabilities": ["write_fs"],
+                    "depends_on": [],
+                    "check": {
+                        "kind": "command",
+                        "statement": "it is done",
+                        "command": ["true"],
+                    },
+                }
+            ]
+        }
+    )
+
+    def rejected_once(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_decomposition(prompt):
+            state["n"] += 1
+            return _result(unfalsifiable if state["n"] == 1 else _PLAN)
+        name = "second.txt" if "Subtask 2" in prompt else "marker.txt"
+        (Path(cwd) / name).write_text("OK\n")
+        return _result(_AGENT_CHATTER)
+
+    cli._cmd_run(_Args(), _run_agent=rejected_once, _progress_force=True)
+    err = capsys.readouterr().err
+
+    assert "plan rejected" in err
+    assert "retrying" in err
+
+
+def test_the_item_header_is_not_printed_twice(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli._cmd_run(_Args(), _run_agent=honest_agent, _progress_force=True)
+    err = capsys.readouterr().err
+
+    assert err.count("→ Do the thing") == 1
+
+
+def test_planning_is_silent_when_progress_is_suppressed(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli._cmd_run(_Args(json=True), _run_agent=honest_agent)
+    assert "planning" not in capsys.readouterr().err

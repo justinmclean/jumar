@@ -36,6 +36,7 @@ class Progress:
         self._verbose = verbose
         self._stream: IO[str] = stream if stream is not None else sys.stderr
         self._open_line = False
+        self._item_announced = False
 
     # -- construction --------------------------------------------------
 
@@ -83,6 +84,10 @@ class Progress:
 
     def item_started(self, text: str, subtask_count: int) -> None:
         self._close_line()
+        # `planning()` already printed the item header; don't repeat it.
+        if self._item_announced:
+            self._write(f"  planned {subtask_count} subtask(s)\n")
+            return
         self._write(f"→ {text}  ({subtask_count} subtask(s))\n")
 
     def subtask_started(self, index: int, total: int, description: str) -> None:
@@ -118,6 +123,24 @@ class Progress:
         self._close_line()
         for line in text.rstrip("\n").splitlines():
             self._write(f"    │ {line}\n")
+
+    def planning(self, text: str, max_subtasks: int) -> None:
+        """Announce decomposition — the longest silent stretch in a run.
+
+        `decompose()` is one agent call that authors every subtask and every
+        check, and nothing else prints until it returns because the first
+        subtask line needs a subtask count. On a long item that is minutes of
+        blank terminal before any evidence the run is alive.
+        """
+        self._close_line()
+        self._write(f"\u2192 {text}\n")
+        self._write(f"  planning \u2026 (one agent call, up to {max_subtasks} subtasks)\n")
+        self._item_announced = True
+
+    def plan_rejected(self, reason: str, attempt: int, of: int, retrying: bool) -> None:
+        """A rejected plan silently doubles the wait. Say so."""
+        tail = f" \u2014 retrying ({attempt}/{of})" if retrying else " \u2014 giving up"
+        self._write(f"  plan rejected: {reason}{tail}\n")
 
     def verifying(self, kind: Any) -> None:
         self._write(f"verifying ({kind}) … ")

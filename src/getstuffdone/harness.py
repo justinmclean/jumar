@@ -41,6 +41,28 @@ _CLAUDE_HARD_DENY_TOOLS: tuple[str, ...] = ("Bash(git push:*)", "Bash(gh:*)")
 # claude tool names to disable when network capability is not granted.
 _CLAUDE_NO_NETWORK_TOOLS: tuple[str, ...] = ("WebSearch", "WebFetch")
 
+# Every tool claude exposes. Disabled wholesale for PLANNING calls.
+#
+# Decomposition wants one structured completion — a JSON plan — not an agent
+# session. Left with tools, a planner handed an item about fetching documents
+# will go and fetch them: observed 2026-08-11, where a plan call for a
+# 15-subtask audit item ran past twenty minutes because the planner started
+# browsing vendor sites instead of authoring checks. Planning must not touch
+# the world it is planning against.
+_CLAUDE_ALL_TOOLS: tuple[str, ...] = (
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "WebSearch",
+    "WebFetch",
+    "Task",
+    "TodoWrite",
+)
+
 # The single env var each harness needs (empty string means none).
 _HARNESS_API_KEY: dict[str, str] = {
     "claude": "ANTHROPIC_API_KEY",
@@ -89,8 +111,14 @@ def build_argv(
     model: str | None,
     capabilities: frozenset[Capability],
     prompt: str,
+    allow_tools: bool = True,
 ) -> list[str]:
     """Build the argv list for one agent invocation.
+
+    ``allow_tools=False`` is for planning: the agent must answer from the
+    prompt alone. Only harnesses that can express tool restrictions honour it —
+    see UNRESTRICTED_HARNESSES — so for the others it is a no-op and the
+    caller gets an agent that may still reach for the world.
 
     Pure function — does not launch anything.  For stdin-based harnesses
     (claude, codex) the prompt is NOT embedded in the returned argv; the
@@ -107,7 +135,9 @@ def build_argv(
 
     if harness_name == "claude":
         disallowed: list[str] = list(_CLAUDE_HARD_DENY_TOOLS)
-        if not has_network:
+        if not allow_tools:
+            disallowed.extend(_CLAUDE_ALL_TOOLS)
+        elif not has_network:
             disallowed.extend(_CLAUDE_NO_NETWORK_TOOLS)
         argv: list[str] = [
             agent_bin,
@@ -196,6 +226,7 @@ def run_agent(
     capabilities: frozenset[Capability],
     timeout_s: int,
     harness: HarnessInfo,
+    allow_tools: bool = True,
 ) -> AgentResult:
     """Build argv, scrub env, and run the agent subprocess.
 
@@ -212,6 +243,7 @@ def run_agent(
         model=model,
         capabilities=capabilities,
         prompt=prompt,
+        allow_tools=allow_tools,
     )
     env = scrub_env(harness_name)
     stdin_bytes = prompt.encode() if prompt_via_stdin(harness_name) else None

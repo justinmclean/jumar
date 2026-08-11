@@ -111,17 +111,14 @@ $ echo $?
 
 ## 3. Run an item — `gsd run`
 
-**Not yet wired.** The flag validation is live; the pipeline behind it is not:
+The full pipeline: select → decompose → gate → execute → verify → repair →
+complete → report, one item per invocation, under the single-flight lock.
+Progress goes to stderr (one line per stage; `--verbose` echoes the agent's
+captured output), and `--json` turns stdout into a single machine-readable
+document.
 
-```console
-$ gsd run
-gsd run: full pipeline not yet implemented — see IMPLEMENTATION_PLAN.md
-$ echo $?
-2
-```
-
-The startup gate *does* work, and is worth knowing about, because it is the one
-flag combination with no safe resolution — auto-approving would defeat the gate,
+One startup gate is worth knowing about, because it is the one flag
+combination with no safe resolution — auto-approving would defeat the gate,
 auto-declining would silently drop every item:
 
 ```console
@@ -133,7 +130,7 @@ $ echo $?
 2
 ```
 
-Planned modes, once wired (`specs/02-functional-spec.md` §Stage 4):
+Modes (`specs/02-functional-spec.md` §Stage 4):
 
 | Flag | Behaviour |
 |---|---|
@@ -141,8 +138,8 @@ Planned modes, once wired (`specs/02-functional-spec.md` §Stage 4):
 | `--dry-run` | Print the plan and its checks, journal it, execute nothing. |
 | `--approve` | Print the plan and wait for `y/n` before executing. |
 | `--non-interactive` | Never block on a prompt. Required for scheduled runs; makes `manual` checks resolve `inconclusive` rather than hanging. |
-
-Until then, `gsd resume` is the working path through the full loop — see §5.
+| `--verbose` | Echo the agent's captured output after each attempt (stderr). |
+| `--json` | Machine-readable stdout; progress suppressed. |
 
 ---
 
@@ -206,13 +203,24 @@ gsd report <run-id> --runs-dir /path/to/runs   # non-default runs directory
 
 ## 5. Resume an interrupted run — `gsd resume`
 
-This is currently the only command that drives the full execute → verify →
-repair loop. It replays `runs/<run-id>/journal.jsonl` and continues from the
-first subtask **without a `passed` verdict**.
+Replays `runs/<run-id>/journal.jsonl` and continues from the first subtask
+**without a `passed` verdict**.
 
 ```bash
-gsd resume 9daec9eb-ae52-4223-b6c8-e450fafd52cd
+gsd resume 20260809-1543-a3f9        # full id: YYYYMMDD-HHMM-<4 hex>
+gsd resume 2026 --retry-failed       # any unambiguous prefix works
+gsd resume latest                    # most recently *started* run
 ```
+
+Run ids sort chronologically under `ls runs/` and are typeable: anywhere a run
+id is accepted (`resume`, `report`), an unambiguous prefix resolves (an
+ambiguous one errors, naming the candidates) and `latest` resolves to the run
+with the most recent journalled start. Old uuid-named runs still resolve.
+
+By default resume continues an **interrupted** run; an item the journal
+records as terminally failed is reported, not re-run. `--retry-failed`
+reopens a failed item at its first unverified subtask — the command that makes
+"fix the bug, then retry the run" possible without redoing verified work.
 
 Two properties worth understanding, because they are what make resume safe:
 
@@ -263,22 +271,24 @@ its `@not-before=` advanced in place; the rest of the line is byte-identical. A
 missed occurrence advances to the single next occurrence after `now`, never a
 backlog of catch-up runs. A *failed* recurring item's schedule is left untouched.
 
-### Recurring runs — not yet built
+### Recurring runs — `gsd schedule`
 
-`gsd schedule` is a stub. When built it will write a `cron`/`launchd` entry that
-invokes `gsd run --non-interactive` and exit — there is no resident daemon:
+Writes a `cron`/`launchd` entry that invokes `gsd run --non-interactive` and
+exits — there is no resident daemon:
 
 ```bash
-gsd schedule add "0 9 * * 1-5" --todo ~/todo.md --dry-run   # print, install nothing
+gsd schedule show "0 9 * * 1-5" --todo ~/todo.md            # print, install nothing
+gsd schedule add "0 9 * * 1-5" --todo ~/todo.md --dry-run   # ditto
 gsd schedule add "0 9 * * 1-5" --todo ~/todo.md
 gsd schedule list
 gsd schedule remove <schedule-id>
 ```
 
-**Do not hand-roll a cron entry for `gsd run` in the meantime.** `lock.py`
-(single-flight) is also unbuilt, so two overlapping firings would run two agents
-over the same files with nothing to stop them. The plan ships the lock before
-the scheduler for exactly this reason.
+Installed entries are wrapped in `gsd <schedule-id>` markers and `remove` only
+ever deletes inside its own block — your existing crontab lines are never
+reformatted. Overlapping firings are safe: the single-flight lock (`lock.py`)
+makes the second firing exit 0 with `already_running`, and a stale lock from a
+crashed run is reclaimed with a journalled note.
 
 ---
 
@@ -293,27 +303,51 @@ todo_path           = "todo.md"
 timezone            = "Australia/Sydney"   # defaults to the system zone
 max_subtasks        = 12
 max_repairs         = 2
+max_consecutive_failures = 3   # @failed= threshold before auto-parking
 subtask_timeout_s   = 900
 halt_on_fail        = false
 commit_on_complete  = false
-capabilities        = ["read_fs", "write_fs", "run_commands"]   # network NOT default
+capabilities        = ["read_fs", "write_fs", "run_commands", "network"]
 evidence_head_bytes = 4000
+allow_unrestricted_harness = false
 
 [gsd.harness]
 agent = "claude"       # claude | codex | cursor | gemini | opencode | kiro
-model = "sonnet"
+model = "sonnet"       # the default for every stage
+
+# Per-stage overrides. Valid stage tables: decompose, execute, judge.
+# Omitted keys inherit [gsd.harness]; an unknown stage name or key is a
+# startup error, never a silently ignored typo.
+[gsd.harness.decompose]
+model = "opus"
+
+[gsd.harness.judge]
+model = "opus"
 
 [gsd.commands]
-allow = ["python3", "pytest", "ruff", "git", "make"]
-deny  = ["curl", "wget", "ssh", "scp"]
+allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]
+deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]
 ```
 
 Notes that matter:
 
 - **`deny` beats `allow`.** An `argv[0]` outside `allow` is refused *before* the
   process is spawned, with `capability_denied`.
-- **`network` is not granted by default.** Add it per item with
-  `@capability=network` when a task genuinely needs it, rather than globally.
+- **The boundary is send, not fetch.** `network` *is* a default capability and
+  `curl`/`wget` are allowed — an agent that cannot read a primary source
+  fabricates it instead. The deny list is the outbound-transmission vectors
+  (mail, ssh, scp, rsync, …), and `git push` / `gh` are hard-denied in every
+  dispatched argv. None of this is a sandbox: run gsd in a container/VM with
+  restricted egress and no push credentials (see README §Security posture).
+- **Choosing per-stage models:** put the strong model where the leverage is —
+  **decompose high** (a bad plan poisons every later stage), **execute cheap**
+  (the bulk of calls, each one verified anyway), **judge independent** (ideally
+  a different model from the executor, so the verdict is not the executor
+  grading its own homework).
+- **`max_consecutive_failures`**: each failed run advances `@failed=N` on the
+  item's line; at the threshold `@paused=auto-failures` is appended and the
+  item is parked — `gsd status` shows it, and you unpark by deleting the
+  `@paused=` token from the line.
 - **`commit_on_complete`** commits a finished item on a per-item branch. It
   never pushes and never opens a PR.
 - **`timezone`** resolves bare dates like `@due=2026-09-05`. Set it explicitly if
@@ -381,12 +415,13 @@ cat runs/<run-id>/report.md
 
 ```
 gsd [--version] [--help]
-gsd plan   [--dry-run] [--todo PATH]
-gsd run    [--dry-run | --approve] [--non-interactive] [--todo PATH]
-gsd resume RUN_ID [--runs-dir DIR]
-gsd report RUN_ID [--runs-dir DIR]
-gsd schedule                                   # stub
-gsd doctor                                     # stub
+gsd plan   [--dry-run] [--todo PATH] [--json]
+gsd run    [--dry-run | --approve] [--non-interactive] [--verbose] [--json] [--todo PATH]
+gsd resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
+gsd report RUN_ID [--runs-dir DIR] [--json]             # ditto
+gsd status [--todo PATH] [--runs-dir DIR]
+gsd schedule (add | list | remove | show) …
+gsd doctor
 ```
 
 Exit statuses: `0` success (including nothing eligible), `1` a run failed or was

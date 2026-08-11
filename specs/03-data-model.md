@@ -53,6 +53,12 @@ Produced by stage 1 (ingest).
 `decomposition` is derived: `authored` when `authored_subtasks` is non-empty,
 else `model`.
 
+Two `meta` tokens are **written by the tool** as well as read (stage 8,
+`backoff.py`): `@failed=N` — consecutive-failure count, cleared on success —
+and `@paused=<reason>` — parks the item (AC2.11); `auto-failures` is the
+reason stage 8 writes at the threshold, and the human unparks by deleting the
+token.
+
 ## Schedule
 
 Item-level **eligibility**, parsed by stage 1, consumed by stage 2 and
@@ -173,7 +179,7 @@ Evidence by kind:
 
 | field | type | notes |
 |---|---|---|
-| `run_id` | str | `<UTC timestamp>-<6 random chars>` |
+| `run_id` | str | `<YYYYMMDD>-<HHMM>-<4 hex chars>`, e.g. `20260809-1543-a3f9` |
 | `todo_path` | str | |
 | `mode` | str | `auto` \| `dry-run` \| `approve` |
 | `interactive` | bool | false for scheduled runs |
@@ -188,6 +194,19 @@ Evidence by kind:
 `ItemResult` = `{item_id, status, plan, failure_code, failed_subtask_index,
 verifications, eligible_at, was_overdue, next_occurrence}` — `eligible_at` is
 set on a `deferred` item, `next_occurrence` on a completed recurring one.
+
+**Run-id format and resolution** (`clock.make_run_id`, `cli._resolve_run_id`):
+
+- The id is minted from the run's journalled `now` (via `clock.py`, never the
+  wall clock), rendered in UTC, plus 4 random hex chars — so `ls runs/` sorts
+  chronologically, a date greps, and two runs in the same minute stay distinct.
+- Anywhere a run id is accepted (`resume`, `report`), an **unambiguous prefix**
+  resolves to the full id; an ambiguous prefix is an error naming the
+  candidates.
+- `latest` resolves to the run with the highest `run_started.now` in its
+  journal — by journalled instant, not filesystem mtime.
+- Pre-existing uuid-named run directories remain resolvable (exact name or
+  prefix); nothing is ever renamed.
 
 ## ScheduleEntry
 
@@ -238,7 +257,8 @@ One JSON object per line in `runs/<run-id>/journal.jsonl`:
 `event` ∈ `run_started | item_selected | item_deferred | plan_created |
 plan_rejected | gate_decision | attempt_started | attempt_finished |
 verification | repair_started | item_completed | item_failed |
-schedule_advanced | lock_reclaimed | run_finished`.
+schedule_advanced | lock_reclaimed | already_running |
+failure_count_advanced | failure_count_cleared | item_parked | run_finished`.
 
 `run_started` carries the run's `now`, `tz`, `trigger`, and `interactive` flag —
 which is what makes an eligibility decision reproducible after the fact, and what
@@ -263,15 +283,23 @@ todo_path       = "todo.md"
 timezone        = "Australia/Sydney"   # resolves bare dates; defaults to system zone
 max_subtasks    = 12
 max_repairs     = 2
+max_consecutive_failures = 3           # @failed= threshold before @paused=auto-failures
 subtask_timeout_s = 900
 halt_on_fail    = false
 commit_on_complete = false
-capabilities    = ["read_fs", "write_fs", "run_commands"]   # network NOT default
+capabilities    = ["read_fs", "write_fs", "run_commands", "network"]  # send, not fetch, is the boundary
 evidence_head_bytes = 4000
+allow_unrestricted_harness = false
 
 [gsd.harness]
-agent = "claude"
+agent = "claude"       # defaults for every stage
 model = "sonnet"
+
+[gsd.harness.decompose]   # per-stage overrides; omitted keys inherit [gsd.harness]
+model = "opus"
+
+[gsd.harness.judge]
+model = "opus"            # valid stage tables: decompose, execute, judge
 
 [gsd.schedule]
 backend    = "auto"        # auto | cron | launchd | systemd
@@ -279,9 +307,15 @@ log_dir    = "runs/logs"
 lock_dir   = "runs"
 
 [gsd.commands]
-allow = ["python3", "pytest", "ruff", "git", "make"]        # argv[0] allow-list
-deny  = ["curl", "wget", "ssh", "scp"]
+allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]  # argv[0] allow-list (fetchers allowed)
+deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]  # send vectors
 ```
 
 `deny` wins over `allow`. An argv[0] outside `allow` is refused at execution
-time with `capability_denied`, before the process is spawned.
+time with `capability_denied`, before the process is spawned. The deny list
+holds the **send** vectors: the enforced boundary is outbound transmission,
+not outbound reading — `network` is a default capability and `curl`/`wget`
+are allowed, because an agent that cannot fetch a primary source fabricates it
+instead. `git push` and `gh` are hard-denied regardless of these lists. An
+unknown key under `[gsd.harness]` or a stage table other than
+`decompose`/`execute`/`judge` is a startup error, not a silent no-op.
