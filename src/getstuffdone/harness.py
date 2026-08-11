@@ -143,6 +143,22 @@ def build_argv(
             agent_bin,
             "-p",
             "--dangerously-skip-permissions",
+            # No MCP servers, ever. Two reasons, and the second is the serious
+            # one:
+            #
+            # 1. Startup cost. Every invocation boots every configured server
+            #    before reading the prompt, and gsd spawns a fresh agent per
+            #    subtask. On a machine with a dozen servers that dominates the
+            #    run.
+            # 2. The send boundary. `config.py` denies sendmail, ssh, scp and
+            #    friends — and an MCP mail or calendar server would hand the
+            #    agent exactly the capability the deny list exists to withhold,
+            #    without appearing in any argv we inspect. A boundary that an
+            #    unrelated user config can open is not a boundary.
+            #
+            # `--strict-mcp-config` with no `--mcp-config` means: use only the
+            # servers named there, and none are.
+            "--strict-mcp-config",
         ]
         for tool in disallowed:
             argv += ["--disallowedTools", tool]

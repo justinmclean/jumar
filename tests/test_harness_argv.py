@@ -811,3 +811,31 @@ def test_allow_tools_is_a_noop_for_harnesses_that_cannot_express_it() -> None:
         allow_tools=False,
     )
     assert "--disallowedTools" not in " ".join(argv)
+
+
+# ---------------------------------------------------------------------------
+# MCP servers are never inherited from the user's configuration
+# ---------------------------------------------------------------------------
+
+
+def test_claude_always_runs_with_strict_mcp_config() -> None:
+    """Both a startup-cost fix and a hole in the send boundary.
+
+    Every invocation boots every configured MCP server before reading the
+    prompt, and gsd spawns a fresh agent per subtask. Worse: `config.py` denies
+    sendmail/ssh/scp, and an MCP mail server would hand the agent that exact
+    capability without appearing in any argv. A boundary an unrelated user
+    config can open is not a boundary.
+    """
+    for allow_tools in (True, False):
+        argv = build_argv(
+            agent_bin="claude",
+            harness_name="claude",
+            model="sonnet",
+            capabilities=frozenset({Capability.write_fs, Capability.network}),
+            prompt="x",
+            allow_tools=allow_tools,
+        )
+        assert "--strict-mcp-config" in argv, f"allow_tools={allow_tools}"
+        # Strictness is only meaningful because no config is supplied alongside.
+        assert "--mcp-config" not in argv
