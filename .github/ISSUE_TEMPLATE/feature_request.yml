@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Feature request
+description: Propose a change to what jumar does
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Behaviour is defined by the numbered acceptance criteria in
+        [`specs/02-functional-spec.md`](../../blob/main/specs/02-functional-spec.md).
+        A feature lands as a change to those criteria first, then code — so the
+        most useful proposal says what the new criterion would be. Note the
+        stated v1 non-goals (cross-item planning, external tracker sync, a
+        daemon, a web UI) are unlikely to be accepted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, or what goes wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should jumar do instead? If you can, phrase it as a testable acceptance criterion.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
