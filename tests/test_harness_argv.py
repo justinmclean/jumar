@@ -868,7 +868,7 @@ def test_claude_argv_includes_resume_when_session_id_given() -> None:
 
 
 def test_claude_argv_no_resume_when_session_id_none() -> None:
-    """When session_id is None, --resume must not appear (first subtask / fresh context)."""
+    """When session_id is None, neither session flag may appear."""
     argv = build_argv(
         agent_bin="claude",
         harness_name="claude",
@@ -878,6 +878,44 @@ def test_claude_argv_no_resume_when_session_id_none() -> None:
         session_id=None,
     )
     assert "--resume" not in argv
+    assert "--session-id" not in argv
+
+
+def test_claude_argv_uses_session_id_flag_when_session_is_new() -> None:
+    """session_is_new=True must emit --session-id (create), never --resume.
+
+    The claude CLI can only --resume a session that already exists; the first
+    subtask of an item has to create the session under the plan's UUID or
+    every later subtask's --resume fails with 'does not match any session'.
+    """
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model=None,
+        capabilities=_BASE_CAPS,
+        prompt="x",
+        session_id="1c9e2f6a-8b3d-4e5f-9a7b-2c4d6e8f0a1b",
+        session_is_new=True,
+    )
+    assert "--session-id" in argv
+    assert "--resume" not in argv
+    idx = argv.index("--session-id")
+    assert argv[idx + 1] == "1c9e2f6a-8b3d-4e5f-9a7b-2c4d6e8f0a1b"
+
+
+def test_make_session_id_is_a_canonical_uuid() -> None:
+    """make_session_id must mint dashed UUIDs — claude validates --resume as UUID.
+
+    Regression guard: token_hex(16) output (32 hex chars, no dashes) is
+    rejected by the CLI with 'is not a UUID and does not match any session
+    title', which burned the whole repair budget on every multi-subtask item.
+    """
+    import uuid as _uuid
+
+    from jumar.clock import make_session_id
+
+    sid = make_session_id()
+    assert str(_uuid.UUID(sid)) == sid
 
 
 def test_non_resumable_harness_ignores_session_id() -> None:

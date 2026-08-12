@@ -553,11 +553,12 @@ def run_item(
             continue  # AC-S1: never redo verified work
 
         prog.subtask_started(subtask.index, total, subtask.description)
-        # Pass the session id for every subtask after the first so the harness
-        # can resume the same agent conversation (--resume <session_id>).  The
-        # first subtask always starts a fresh context; subsequent subtasks
-        # benefit from the model having already seen the prior work.
-        exec_session_id = plan.session_id if subtask.index > 0 else None
+        # One execution session per item: the first subtask CREATES it
+        # (--session-id <session_id>) and every later subtask RESUMES it
+        # (--resume <session_id>), so the agent keeps the context of prior
+        # work.  Repairs always resume — by then the session exists, and a
+        # second --session-id with the same UUID is an error.
+        exec_session_id = plan.session_id
         attempt = execute(
             subtask,
             item=item,
@@ -568,6 +569,7 @@ def run_item(
             run_dir=run_dir,
             attempt_no=0,
             session_id=exec_session_id,
+            session_is_new=subtask.index == 0,
             _run_agent=_run_agent,
         )
 

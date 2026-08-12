@@ -971,12 +971,19 @@ def test_first_attempt_never_has_retry_prefix(
 
 
 def test_plan_has_session_id(journal: Journal, cfg: Config, tmp_path: Path) -> None:
-    """decompose() returns a Plan with a non-empty session_id."""
+    """decompose() returns a Plan whose session_id is a canonical dashed UUID.
+
+    Not just non-empty: the claude CLI validates --resume as a UUID, so a
+    format drift here (e.g. token_hex) passes every jumar-internal test and
+    then fails on the first real multi-subtask item.
+    """
+    import uuid as _uuid
+
     runner = _fake_runner([_valid_response(1)])
     plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
 
     assert plan.session_id is not None
-    assert len(plan.session_id) > 0
+    assert str(_uuid.UUID(plan.session_id)) == plan.session_id
 
 
 def test_plan_created_payload_contains_session_id(
