@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Question
+description: Ask about using jumar — no journal excerpts required
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are welcome as issues. Worth a quick look first:
+        [USAGE.md](../../blob/main/USAGE.md) has worked examples, the flag
+        reference, the config reference, and a troubleshooting section.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What you're trying to do
+      description: Optional, but often turns a one-line answer into a useful one.

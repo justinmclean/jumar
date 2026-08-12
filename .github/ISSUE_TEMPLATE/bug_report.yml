@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Bug report
+description: Something failed, or succeeded when it should have failed
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Jumar keeps a forensic journal of every run —
+        attaching the right excerpt usually makes a bug diagnosable on the
+        first read.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `jumar --version` (or the commit hash if running from source).
+      placeholder: jumar 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you run, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: todo-item
+    attributes:
+      label: Todo item (if relevant)
+      description: |
+        The item (and any indented subtasks) from your todo file that triggered
+        the problem, with anything private redacted.
+      render: markdown
+  - type: textarea
+    id: journal
+    attributes:
+      label: Journal excerpt
+      description: |
+        The relevant lines from `runs/<run-id>/journal.jsonl`, or the output of
+        `jumar report <run-id>`. Redact anything private.
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`jumar doctor` output"
+      render: text
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, and which agent harness is on PATH.
+      placeholder: macOS 15, Python 3.12, claude
