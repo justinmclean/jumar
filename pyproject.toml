@@ -28,8 +28,10 @@ jumar = "jumar.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/justinmclean/jumar"
+Documentation = "https://github.com/justinmclean/jumar/blob/main/USAGE.md"
 Repository = "https://github.com/justinmclean/jumar"
 Issues = "https://github.com/justinmclean/jumar/issues"
+Changelog = "https://github.com/justinmclean/jumar/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=68"]
