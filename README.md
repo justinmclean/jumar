@@ -4,6 +4,7 @@
 # Jumar
 
 [![CI](https://github.com/justinmclean/jumar/actions/workflows/ci.yml/badge.svg)](https://github.com/justinmclean/jumar/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Turn a plain Markdown todo list into **verified** work.
 
@@ -247,6 +248,13 @@ stops a determined agent — it is defence in depth, not a sandbox. The real
 control is the execution environment: run jumar inside a container or VM with
 restricted egress and no push credentials. The agent CLI runs with its
 unattended flag, which bypasses the *agent's* permission prompts, not the OS.
+
+## Contributing
+
+Hand-written PRs are welcome — the spec-loop is how this repo is usually
+built, not a requirement for contributing. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through
+[SECURITY.md](SECURITY.md), not the public issue tracker.
 
 ## Licence
 
