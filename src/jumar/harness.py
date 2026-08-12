@@ -118,6 +118,7 @@ def build_argv(
     prompt: str,
     allow_tools: bool = True,
     session_id: str | None = None,
+    session_is_new: bool = False,
 ) -> list[str]:
     """Build the argv list for one agent invocation.
 
@@ -134,6 +135,12 @@ def build_argv(
     ``session_id`` is only honoured by harnesses in SESSION_RESUMABLE_HARNESSES
     (currently only "claude").  When provided for a non-resumable harness it is
     silently ignored, preserving today's behaviour for those callers.
+
+    ``session_is_new`` selects the flag: True emits ``--session-id`` (create
+    the session with this UUID — first subtask of an item), False emits
+    ``--resume`` (continue it — every later subtask and all repairs).  A
+    session must be created before it can be resumed; resuming an id claude
+    has never seen is an error.
 
     Raises ValueError for an unsupported harness name.
     """
@@ -174,7 +181,7 @@ def build_argv(
             argv += ["--disallowedTools", tool]
         argv += model_args
         if session_id is not None:
-            argv += ["--resume", session_id]
+            argv += ["--session-id" if session_is_new else "--resume", session_id]
         # Prompt is piped to stdin; not embedded in argv.
 
     elif harness_name == "codex":
@@ -256,6 +263,7 @@ def run_agent(
     harness: HarnessInfo,
     allow_tools: bool = True,
     session_id: str | None = None,
+    session_is_new: bool = False,
 ) -> AgentResult:
     """Build argv, scrub env, and run the agent subprocess.
 
@@ -274,6 +282,7 @@ def run_agent(
         prompt=prompt,
         allow_tools=allow_tools,
         session_id=session_id,
+        session_is_new=session_is_new,
     )
     env = scrub_env(harness_name)
     stdin_bytes = prompt.encode() if prompt_via_stdin(harness_name) else None

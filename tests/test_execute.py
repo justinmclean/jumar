@@ -55,6 +55,7 @@ def _fake_runner(responses: list[_FakeResult]) -> Any:
     """Return a fake run_agent callable that replays *responses* in order."""
     calls: list[str] = []
     session_ids: list[str | None] = []
+    session_is_new_flags: list[bool] = []
 
     def runner(
         prompt: str,
@@ -64,9 +65,11 @@ def _fake_runner(responses: list[_FakeResult]) -> Any:
         timeout_s: int,
         harness: HarnessInfo,
         session_id: str | None = None,
+        session_is_new: bool = False,
     ) -> _FakeResult:
         calls.append(prompt)
         session_ids.append(session_id)
+        session_is_new_flags.append(session_is_new)
         idx = len(calls) - 1
         if idx < len(responses):
             return responses[idx]
@@ -74,6 +77,7 @@ def _fake_runner(responses: list[_FakeResult]) -> Any:
 
     runner.calls = calls  # type: ignore[attr-defined]
     runner.session_ids = session_ids  # type: ignore[attr-defined]
+    runner.session_is_new_flags = session_is_new_flags  # type: ignore[attr-defined]
     return runner
 
 
