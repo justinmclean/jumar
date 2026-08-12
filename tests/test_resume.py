@@ -62,6 +62,7 @@ def _fake_runner_factory(responses: list[_FakeResult]) -> Any:
         timeout_s: int,
         harness: Any,
         session_id: str | None = None,
+        session_is_new: bool = False,
     ) -> _FakeResult:
         calls.append(prompt)
         idx = len(calls) - 1

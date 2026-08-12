@@ -9,6 +9,7 @@ may call ``datetime.now()`` or ``datetime.utcnow()`` directly.
 from __future__ import annotations
 
 import secrets
+import uuid
 from datetime import UTC, datetime
 
 from jumar.config import Config
@@ -49,13 +50,16 @@ def make_run_id(now: datetime, *, _suffix: str | None = None) -> str:
 def make_session_id(*, _value: str | None = None) -> str:
     """Generate a unique session id for one item's execution session.
 
-    The returned value is used with the harness ``--resume`` flag so the
-    agent can continue the same conversation across subtasks.  Inject
-    ``_value`` in tests to get a deterministic id.
+    The returned value is passed to the harness as ``--session-id`` on the
+    first subtask (creating the session) and ``--resume`` on every later
+    subtask.  It MUST be a canonical dashed UUID: the claude CLI validates
+    ``--resume`` as a UUID and rejects anything else — a bare ``token_hex``
+    string fails with 'is not a UUID'.  Inject ``_value`` in tests to get a
+    deterministic id.
     """
     if _value is not None:
         return _value
-    return secrets.token_hex(16)
+    return str(uuid.uuid4())
 
 
 def stamp(*, _now: datetime | None = None) -> str:

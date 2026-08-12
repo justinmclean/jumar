@@ -307,6 +307,7 @@ def _fake_execute_runner(responses: list[Any]) -> Any:
         timeout_s: int,
         harness: HarnessInfo,
         session_id: str | None = None,
+        session_is_new: bool = False,
     ) -> Any:
         from dataclasses import dataclass
 
