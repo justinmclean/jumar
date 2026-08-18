@@ -8,6 +8,9 @@ advance_failure_count() – increment @failed= on an item's line; append
                           @paused=auto-failures when the threshold is reached.
                           Journal-before-write: the FAILURE_COUNT_ADVANCED event
                           is appended before any file modification.
+                          No-ops (does not touch the file or journal) when the
+                          current attempt's failure was a harness-level outage
+                          — see "Harness outages" below.
 clear_failure_count()  – remove @failed= from an item's line on success.
                           Journal-before-write: the FAILURE_COUNT_CLEARED event
                           is appended before any file modification.
@@ -22,6 +25,22 @@ Rules
 - A successful completion removes @failed= only; @paused= is left for the
   human to remove deliberately.
 - --dry-run (dry_run=True) journals the intent but leaves the file byte-identical.
+
+Harness outages
+----------------
+A harness-level outage (usage limit, auth failure, missing agent binary) is
+not evidence the item is unhealthy — the harness CLI never ran the prompt at
+all. Evidence: run 20260812-0525-c9f7's agent_stdout_head was "You've hit
+your session limit ...", which nothing inspected; it was journalled as an
+ordinary failure and advanced @failed= toward the parking threshold on a
+perfectly good item. ``decompose.py`` and ``execute.py`` journal a
+``harness_error`` event (see ``journal.HARNESS_ERROR``) the moment they detect
+one (``harness.detect_harness_error``). ``advance_failure_count`` checks the
+journal for such an event since the item was last selected in this run and,
+if found, returns without advancing the count or writing @paused= — which
+also means it can never park the item. There is nothing to opt into; the
+exclusion is automatic and derived from the journal, the same record the
+budget itself is read from.
 """
 
 from __future__ import annotations
@@ -30,7 +49,13 @@ import re
 from pathlib import Path
 
 from .config import Config
-from .journal import FAILURE_COUNT_ADVANCED, FAILURE_COUNT_CLEARED, Journal
+from .journal import (
+    FAILURE_COUNT_ADVANCED,
+    FAILURE_COUNT_CLEARED,
+    HARNESS_ERROR,
+    ITEM_SELECTED,
+    Journal,
+)
 from .models import TodoItem
 
 # ---------------------------------------------------------------------------
@@ -98,6 +123,32 @@ def _get_line(lines: list[bytes], item: TodoItem) -> tuple[int, str]:
 
 
 # ---------------------------------------------------------------------------
+# Harness-outage detection (journal-derived)
+# ---------------------------------------------------------------------------
+
+
+def _item_has_harness_error_since_selected(journal: Journal, item_id: str) -> bool:
+    """True if a ``harness_error`` was journalled for *item_id* since it was
+    last selected in this run.
+
+    Scoped to "since selected" so a harness outage on an *earlier* attempt at
+    this item does not mask a genuine, later failure of the item's own work —
+    only the outage that caused *this* call is excluded.  Entries are walked
+    newest-first; the scan stops at the most recent ``item_selected`` for this
+    item (or exhausts the journal if there is none, e.g. in a unit test that
+    journals only the ``harness_error`` entry directly).
+    """
+    for entry in reversed(journal.replay().entries):
+        if entry.get("item_id") != item_id:
+            continue
+        if entry.get("event") == ITEM_SELECTED:
+            return False
+        if entry.get("event") == HARNESS_ERROR:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
 
@@ -131,7 +182,15 @@ def advance_failure_count(
         written *before* the file is modified (write-ahead rule).
     dry_run:
         When ``True``, the event is journalled but the file is not touched.
+
+    A harness-level outage is excluded: when the journal shows a
+    ``harness_error`` was recorded for *item* since it was last selected in
+    this run, this call is a no-op — no ``failure_count_advanced`` event, no
+    file write, no parking (see "Harness outages" in the module docstring).
     """
+    if _item_has_harness_error_since_selected(journal, item.item_id):
+        return
+
     current_count = int(item.meta.get("failed", "0"))
     new_count = current_count + 1
     threshold_reached = new_count >= config.max_consecutive_failures
