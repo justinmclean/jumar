@@ -21,10 +21,14 @@ from pathlib import Path
 import pytest
 
 from jumar.harness import (
+    HARNESS_ERROR_AUTH_FAILURE,
+    HARNESS_ERROR_BINARY_MISSING,
+    HARNESS_ERROR_USAGE_LIMIT,
     SESSION_RESUMABLE_HARNESSES,
     SUPPORTED_HARNESSES,
     AgentResult,
     build_argv,
+    detect_harness_error,
     prompt_via_stdin,
     run_agent,
     scrub_env,
@@ -991,3 +995,71 @@ def test_judge_verifier_runner_called_without_session_id(tmp_path: Path) -> None
     )
     verify_judge(check_raw, ctx)
     assert recorded.get("session_id") is None
+
+
+# ---------------------------------------------------------------------------
+# detect_harness_error() — harness-level outage classification
+# ---------------------------------------------------------------------------
+
+
+def _result(
+    stdout: str = "",
+    stderr: str = "",
+    exit_status: int = 0,
+    timed_out: bool = False,
+) -> AgentResult:
+    return AgentResult(
+        exit_status=exit_status,
+        stdout=stdout,
+        stderr=stderr,
+        timed_out=timed_out,
+        agent_claim=None,
+    )
+
+
+def test_detect_harness_error_none_for_ordinary_response() -> None:
+    assert detect_harness_error(_result(stdout='{"subtasks": []}', exit_status=0)) is None
+
+
+def test_detect_harness_error_none_for_timeout() -> None:
+    """A timeout is already modelled separately (FailureCode.timed_out) —
+    retrying can plausibly fix it, unlike a genuine outage."""
+    assert (
+        detect_harness_error(_result(stdout="session limit", exit_status=-1, timed_out=True))
+        is None
+    )
+
+
+def test_detect_harness_error_usage_limit() -> None:
+    # Evidence run 20260812-0525-c9f7: this exact text landed in agent_stdout_head.
+    result = _result(stdout="You've hit your session limit for this session.", exit_status=1)
+    assert detect_harness_error(result) == HARNESS_ERROR_USAGE_LIMIT
+
+
+def test_detect_harness_error_rate_limit_in_stderr() -> None:
+    result = _result(stderr="Error: rate limit exceeded, please retry later", exit_status=1)
+    assert detect_harness_error(result) == HARNESS_ERROR_USAGE_LIMIT
+
+
+def test_detect_harness_error_auth_failure_phrase() -> None:
+    result = _result(stdout="Failed to authenticate. API Error: 401 API key is invalid.")
+    assert detect_harness_error(result) == HARNESS_ERROR_AUTH_FAILURE
+
+
+def test_detect_harness_error_auth_failure_bare_401() -> None:
+    result = _result(stdout="API Error: 401", exit_status=1)
+    assert detect_harness_error(result) == HARNESS_ERROR_AUTH_FAILURE
+
+
+def test_detect_harness_error_binary_missing() -> None:
+    result = _result(
+        stderr="[Errno 2] No such file or directory: 'claude'",
+        exit_status=-1,
+    )
+    assert detect_harness_error(result) == HARNESS_ERROR_BINARY_MISSING
+
+
+def test_detect_harness_error_word_boundary_does_not_match_substring() -> None:
+    """'login' must match as a whole word, not inside e.g. 'logins' or '4012'."""
+    result = _result(stdout="Add a logins table with 4012 rows.", exit_status=0)
+    assert detect_harness_error(result) is None

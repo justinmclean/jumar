@@ -27,9 +27,9 @@ from typing import Any
 
 from .clock import make_session_id, stamp
 from .config import Config
-from .harness import AgentResult
+from .harness import AgentResult, detect_harness_error
 from .harness import run_agent as _default_run_agent
-from .journal import PLAN_CREATED, PLAN_REJECTED, Journal
+from .journal import HARNESS_ERROR, PLAN_CREATED, PLAN_REJECTED, Journal
 from .models import (
     Capability,
     Check,
@@ -458,6 +458,25 @@ def decompose(
             # planner do the work it is supposed to be planning.
             allow_tools=False,
         )
+
+        # A harness-level outage (usage limit, auth failure, missing binary)
+        # is not a bad plan — the CLI never ran the prompt. Journal it so the
+        # evidence is inspectable (nothing inspected it before: see run
+        # 20260812-0525-c9f7), without changing today's parse/retry path.
+        harness_error = detect_harness_error(result)
+        if harness_error is not None:
+            journal.append(
+                HARNESS_ERROR,
+                item_id=item.item_id,
+                payload={
+                    "stage": "decompose",
+                    "attempt": attempt_no + 1,
+                    "reason": harness_error,
+                    "exit_status": result.exit_status,
+                    "agent_stdout_head": result.stdout[:500],
+                    "agent_stderr_head": result.stderr[:500],
+                },
+            )
 
         data: dict[str, Any] | None = None
         if result.exit_status == 0 and not result.timed_out:

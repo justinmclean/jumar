@@ -19,9 +19,9 @@ from typing import Any
 
 from .clock import stamp
 from .config import Config
-from .harness import AgentResult
+from .harness import AgentResult, detect_harness_error
 from .harness import run_agent as _default_run_agent
-from .journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, Journal
+from .journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, HARNESS_ERROR, Journal
 from .models import Attempt, HarnessInfo, Subtask, TodoItem, VerificationResult
 
 # ---------------------------------------------------------------------------
@@ -174,6 +174,25 @@ def execute(
 
     finished_at = stamp()
     touched = _files_touched(cwd)
+
+    # A harness-level outage (usage limit, auth failure, missing binary) is
+    # not the agent failing the subtask — the CLI never ran the prompt.
+    # Journal it so the evidence is inspectable; see harness.detect_harness_error.
+    harness_error = detect_harness_error(result)
+    if harness_error is not None:
+        journal.append(
+            HARNESS_ERROR,
+            subtask_id=subtask.subtask_id,
+            item_id=item.item_id,
+            payload={
+                "stage": "execute",
+                "attempt_no": attempt_no,
+                "reason": harness_error,
+                "exit_status": result.exit_status,
+                "agent_stdout_head": result.stdout[:500],
+                "agent_stderr_head": result.stderr[:500],
+            },
+        )
 
     # Write agent transcript as an artefact file.
     artefacts_dir = run_dir / "artifacts"
