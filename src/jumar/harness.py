@@ -3,17 +3,21 @@
 
 Public API
 ----------
-SUPPORTED_HARNESSES : frozenset[str]
-AgentResult         – outcome of one agent invocation
-build_argv()        – pure argv construction, testable without launching anything
-prompt_via_stdin()  – True iff this harness reads the prompt from stdin
-scrub_env()         – return a cleaned environment dict
-run_agent()         – dispatch one agent invocation and return its result
+SUPPORTED_HARNESSES  : frozenset[str]
+AgentResult          – outcome of one agent invocation
+build_argv()         – pure argv construction, testable without launching anything
+prompt_via_stdin()   – True iff this harness reads the prompt from stdin
+scrub_env()          – return a cleaned environment dict
+run_agent()          – dispatch one agent invocation and return its result
+detect_harness_error() – classify a result as a harness-level infrastructure
+                        outage (usage limit, auth failure, missing binary), or
+                        None when it is an ordinary agent response.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +101,77 @@ class AgentResult:
     timed_out: bool
     # Last non-empty stdout line — stored as a *claim*, never as a verdict.
     agent_claim: str | None
+
+
+# ---------------------------------------------------------------------------
+# Harness-level outage detection
+# ---------------------------------------------------------------------------
+#
+# A harness-level outage — the CLI itself never got to run the prompt — is a
+# different kind of failure than a working agent producing a bad response.
+# Undetected, it is misread as the latter: run 20260812-0525-c9f7's
+# agent_stdout_head was "You've hit your session limit ...", which the
+# decompose stage parsed as a rejected JSON plan and journalled as an
+# ordinary `plan_rejected`. Nothing downstream inspected the text, so the
+# item's @failed= budget burned on infrastructure the item's author had no
+# way to fix by rewriting their todo line.
+#
+# Categories, and the signatures that name them. Matched case-insensitively
+# against stdout+stderr combined. Phrase signatures are safe as substrings;
+# short/generic ones (401, login) are matched as whole words to cut down on
+# false positives from an agent legitimately discussing HTTP status codes or
+# writing a login form.
+
+HARNESS_ERROR_USAGE_LIMIT = "usage_limit"
+HARNESS_ERROR_AUTH_FAILURE = "auth_failure"
+HARNESS_ERROR_BINARY_MISSING = "binary_missing"
+
+_USAGE_LIMIT_PHRASES: tuple[str, ...] = (
+    "session limit",
+    "rate limit",
+    "credit balance",
+    "usage limit",
+)
+_AUTH_FAILURE_PHRASES: tuple[str, ...] = (
+    "failed to authenticate",
+    "invalid api key",
+)
+_AUTH_FAILURE_WORDS: tuple[str, ...] = ("401", "login")
+_BINARY_MISSING_PHRASES: tuple[str, ...] = (
+    "no such file or directory",
+    "command not found",
+    "is not recognized as an internal or external command",
+)
+
+
+def detect_harness_error(result: AgentResult) -> str | None:
+    """Classify *result* as a harness-level infrastructure outage, or None.
+
+    Returns one of HARNESS_ERROR_USAGE_LIMIT / HARNESS_ERROR_AUTH_FAILURE /
+    HARNESS_ERROR_BINARY_MISSING when stdout/stderr carries the signature of
+    a usage-limit hit, an authentication failure, or a missing agent binary —
+    the harness CLI failed to run at all, as opposed to running and producing
+    a bad response. Returns None for everything else, including a genuine
+    timeout (already modelled separately as ``AgentResult.timed_out`` /
+    ``FailureCode.timed_out``, which retrying can plausibly fix — an outage
+    cannot).
+
+    Pure function: only inspects fields already on *result*. Callers decide
+    what to do with the classification (journal it, skip a retry, exclude it
+    from @failed= accounting); this function only detects and names it.
+    """
+    if result.timed_out:
+        return None
+    haystack = f"{result.stdout}\n{result.stderr}".lower()
+    if any(phrase in haystack for phrase in _BINARY_MISSING_PHRASES):
+        return HARNESS_ERROR_BINARY_MISSING
+    if any(phrase in haystack for phrase in _USAGE_LIMIT_PHRASES):
+        return HARNESS_ERROR_USAGE_LIMIT
+    if any(phrase in haystack for phrase in _AUTH_FAILURE_PHRASES) or any(
+        re.search(rf"\b{re.escape(word)}\b", haystack) for word in _AUTH_FAILURE_WORDS
+    ):
+        return HARNESS_ERROR_AUTH_FAILURE
+    return None
 
 
 # ---------------------------------------------------------------------------

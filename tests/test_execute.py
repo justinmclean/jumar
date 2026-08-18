@@ -22,7 +22,7 @@ import pytest
 from jumar.clock import stamp
 from jumar.config import Config
 from jumar.execute import execute
-from jumar.journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, Journal
+from jumar.journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, HARNESS_ERROR, Journal
 from jumar.models import (
     Attempt,
     Capability,
@@ -250,6 +250,46 @@ def test_execute_timeout_journalled(journal: Journal, cfg: Config, tmp_path: Pat
     state = journal.replay()
     finished = next(e for e in state.entries if e["event"] == ATTEMPT_FINISHED)
     assert finished["payload"]["timed_out"] is True
+
+
+def test_harness_outage_journalled_as_harness_error(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A missing-binary signature in stderr is journalled as `harness_error`.
+
+    This is additive: attempt_started/attempt_finished still journal as today
+    (see harness.detect_harness_error for what does — and does not — change).
+    """
+    runner = _fake_runner(
+        [
+            _FakeResult(
+                exit_status=-1,
+                stdout="",
+                stderr="[Errno 2] No such file or directory: 'claude'",
+                agent_claim=None,
+            )
+        ]
+    )
+    execute(
+        _make_subtask(),
+        item=_make_item(),
+        prior_evidence=[],
+        config=cfg,
+        journal=journal,
+        cwd=tmp_path,
+        run_dir=tmp_path,
+        _run_agent=runner,
+    )
+
+    state = journal.replay()
+    events = [e for e in state.entries if e["event"] == HARNESS_ERROR]
+    assert len(events) == 1
+    assert events[0]["payload"]["reason"] == "binary_missing"
+    assert events[0]["payload"]["stage"] == "execute"
+    assert events[0]["subtask_id"] == "item-01#0"
+    # attempt_finished is unaffected — still journalled as today.
+    finished = next(e for e in state.entries if e["event"] == ATTEMPT_FINISHED)
+    assert finished["payload"]["exit_status"] == -1
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,9 @@ from jumar.config import Config
 from jumar.journal import (
     FAILURE_COUNT_ADVANCED,
     FAILURE_COUNT_CLEARED,
+    HARNESS_ERROR,
     ITEM_PARKED,
+    ITEM_SELECTED,
     RUN_FINISHED,
     RUN_STARTED,
     Journal,
@@ -170,6 +172,138 @@ def test_advance_preserves_other_tokens(tmp_path: Path) -> None:
     assert "@priority=1" in content
     assert "@due=2026-09-01" in content
     assert "@failed=1" in content
+
+
+# ---------------------------------------------------------------------------
+# advance_failure_count — harness-level outages are excluded
+# ---------------------------------------------------------------------------
+
+
+def test_harness_error_excluded_from_failed_budget(tmp_path: Path) -> None:
+    """A harness_error journal entry for this item's current attempt means
+    advance_failure_count() is a no-op: no @failed= write, no
+    failure_count_advanced event, no parking — the item's budget is untouched.
+
+    Evidence: run 20260812-0525-c9f7's agent_stdout_head was "You've hit your
+    session limit ...", which used to burn @failed= on a healthy item.
+    """
+    todo = tmp_path / "todo.md"
+    original = "- [ ] My task\n"
+    todo.write_text(original)
+
+    item = _make_item(raw_line=original)
+    journal = _make_journal(tmp_path)
+    journal.append(ITEM_SELECTED, item_id=item.item_id, payload={})
+    journal.append(
+        HARNESS_ERROR,
+        item_id=item.item_id,
+        payload={
+            "stage": "decompose",
+            "reason": "usage_limit",
+            "agent_stdout_head": "You've hit your session limit for this session.",
+        },
+    )
+
+    advance_failure_count(todo, item, _make_config(), journal)
+
+    # The file is byte-identical — no @failed= token was written.
+    assert todo.read_text() == original
+
+    # No failure_count_advanced event was journalled either.
+    events = [e["event"] for e in journal.replay().entries]
+    assert FAILURE_COUNT_ADVANCED not in events
+
+
+def test_harness_error_excluded_even_at_parking_threshold(tmp_path: Path) -> None:
+    """A harness_error is excluded even when the new count would have parked
+    the item — the outage must never trigger @paused=auto-failures either."""
+    todo = tmp_path / "todo.md"
+    original = "- [ ] My task @failed=2\n"
+    todo.write_text(original)
+
+    item = _make_item(raw_line=original, meta={"failed": "2"})
+    journal = _make_journal(tmp_path)
+    journal.append(ITEM_SELECTED, item_id=item.item_id, payload={})
+    journal.append(
+        HARNESS_ERROR,
+        item_id=item.item_id,
+        payload={"stage": "execute", "reason": "auth_failure"},
+    )
+
+    advance_failure_count(todo, item, _make_config(max_consecutive_failures=3), journal)
+
+    content = todo.read_text()
+    assert content == original
+    assert "@paused=auto-failures" not in content
+
+
+def test_stale_harness_error_from_earlier_selection_does_not_suppress(tmp_path: Path) -> None:
+    """A harness_error from a *prior* selection of this item (already
+    superseded by a fresh item_selected) must not suppress a genuine new
+    failure — only the outage that caused *this* call is excluded."""
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] My task\n")
+
+    item = _make_item(raw_line="- [ ] My task\n")
+    journal = _make_journal(tmp_path)
+    journal.append(ITEM_SELECTED, item_id=item.item_id, payload={})
+    journal.append(HARNESS_ERROR, item_id=item.item_id, payload={"reason": "usage_limit"})
+    journal.append(ITEM_SELECTED, item_id=item.item_id, payload={})  # re-selected, no outage since
+
+    advance_failure_count(todo, item, _make_config(), journal)
+
+    content = todo.read_text()
+    assert "@failed=1" in content
+
+
+def test_harness_error_does_not_trigger_auto_park(tmp_path: Path) -> None:
+    """An item that only ever hits harness-level outages is never auto-parked,
+    however many attempts it goes through — parking requires genuine,
+    non-harness failures to reach the threshold.
+
+    Simulates ``config.max_consecutive_failures`` separate attempts at the
+    same item, each selected fresh and each failing only on a harness_error
+    (usage limit / auth failure / missing binary) — exactly the run
+    20260812-0525-c9f7 scenario repeated. A pre-fix implementation would have
+    reached the threshold and appended @paused=auto-failures on the third
+    attempt; this must never happen.
+    """
+    todo = tmp_path / "todo.md"
+    original = "- [ ] My task\n"
+    todo.write_text(original)
+
+    item = _make_item(raw_line=original)
+    journal = _make_journal(tmp_path)
+    config = _make_config(max_consecutive_failures=3)
+
+    for attempt in range(config.max_consecutive_failures + 2):
+        journal.append(ITEM_SELECTED, item_id=item.item_id, payload={})
+        journal.append(
+            HARNESS_ERROR,
+            item_id=item.item_id,
+            payload={"stage": "decompose", "reason": "usage_limit", "attempt": attempt},
+        )
+        advance_failure_count(todo, item, config, journal)
+
+    # The file was never touched: no @failed=, and — the point of this test —
+    # no @paused=auto-failures.
+    content = todo.read_text()
+    assert content == original
+    assert "@failed=" not in content
+    assert "@paused=" not in content
+
+    # No failure_count_advanced event was ever journalled, so nothing counted
+    # toward the budget.
+    events = [e["event"] for e in journal.replay().entries]
+    assert FAILURE_COUNT_ADVANCED not in events
+
+    # And select_next() confirms the item is still eligible, not parked —
+    # it re-parses the (unchanged) file's meta, mirroring a real run.
+    reselected = _make_item(raw_line=content, meta={})
+    result = select_next([reselected], NOW)
+    assert result.selected is not None
+    assert result.selected.item_id == item.item_id
+    assert not result.parked
 
 
 # ---------------------------------------------------------------------------
