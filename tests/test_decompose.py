@@ -22,9 +22,10 @@ from typing import Any
 
 import pytest
 
+from jumar.backoff import advance_failure_count
 from jumar.config import Config
 from jumar.decompose import DecomposeError, decompose
-from jumar.journal import PLAN_CREATED, PLAN_REJECTED, Journal
+from jumar.journal import HARNESS_ERROR, ITEM_SELECTED, PLAN_CREATED, PLAN_REJECTED, Journal
 from jumar.models import (
     Capability,
     FailureCode,
@@ -296,6 +297,93 @@ def test_harness_error_retried_once(journal: Journal, cfg: Config, tmp_path: Pat
 
     assert exc_info.value.failure_code == FailureCode.unverifiable_plan
     assert runner.call_count[0] == 2
+
+
+def test_harness_outage_journalled_as_harness_error(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A usage-limit signature in agent stdout is journalled as `harness_error`.
+
+    Evidence: run 20260812-0525-c9f7's agent_stdout_head was "You've hit your
+    session limit ..." — journalled only as an ordinary plan_rejected, which
+    nothing inspects. This does not (yet) change the retry/failure-code path;
+    it adds the missing observability.
+    """
+    call_count = [0]
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        call_count[0] += 1
+        return _FakeResult(
+            exit_status=1,
+            stdout="You've hit your session limit for this session.",
+        )
+
+    with pytest.raises(DecomposeError):
+        _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    state = journal.replay()
+    harness_errors = [e for e in state.entries if e["event"] == HARNESS_ERROR]
+    assert len(harness_errors) == 2  # journalled on both the attempt and its retry
+    assert harness_errors[0]["payload"]["reason"] == "usage_limit"
+    assert harness_errors[0]["payload"]["stage"] == "decompose"
+    assert "session limit" in harness_errors[0]["payload"]["agent_stdout_head"].lower()
+
+
+def test_regression_run_20260812_0525_c9f7_session_limit_not_a_plain_failure(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """Regression test for run 20260812-0525-c9f7.
+
+    What actually happened: the harness CLI printed "You've hit your session
+    limit ..." to stdout instead of running the prompt. decompose() parsed
+    that text as a rejected JSON plan, failed the item as unverifiable_plan,
+    and cli.py's DecomposeError handler called advance_failure_count() —
+    burning the item's @failed= budget on infrastructure, not on anything
+    wrong with the item. Nothing inspected agent_stdout_head to catch it.
+
+    This reproduces the scenario end-to-end — decompose() raising, then the
+    same journal handed to advance_failure_count() exactly as cli.run_item()
+    does in its DecomposeError handler — and asserts the session-limit text
+    is classified as harness_error (not a plain failure) and the budget is
+    left untouched.
+    """
+    item = _make_item(item_id="regression-item")
+    todo_path = tmp_path / "todo.md"
+    todo_path.write_text(f"{item.raw_line}\n")
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        return _FakeResult(
+            exit_status=1,
+            # The exact text from run 20260812-0525-c9f7's agent_stdout_head.
+            stdout="You've hit your session limit for this session.",
+        )
+
+    # run_item() journals item_selected before calling decompose() (cli.py).
+    journal.append(ITEM_SELECTED, item_id=item.item_id, payload={})
+
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(item, config=cfg, journal=journal, cwd=tmp_path, _run_agent=runner)
+
+    # Today decompose() still fails the item as unverifiable_plan — that part
+    # of the behaviour is unchanged...
+    assert exc_info.value.failure_code == FailureCode.unverifiable_plan
+
+    # ...but the session-limit text was classified as a harness_error, not
+    # silently swallowed as an ordinary plan_rejected.
+    state = journal.replay()
+    harness_errors = [e for e in state.entries if e["event"] == HARNESS_ERROR]
+    assert harness_errors, "session-limit output must be classified as harness_error"
+    assert harness_errors[0]["payload"]["reason"] == "usage_limit"
+    assert "session limit" in harness_errors[0]["payload"]["agent_stdout_head"].lower()
+
+    # cli.run_item()'s DecomposeError handler: journal item_failed, then call
+    # advance_failure_count() with the very same journal.
+    advance_failure_count(todo_path, item, cfg, journal)
+
+    # The regression: a harness_error on this attempt means the budget call
+    # is a no-op — @failed= is never written, so the item cannot be parked by
+    # infrastructure it had no way to fix.
+    assert todo_path.read_text() == f"{item.raw_line}\n"
 
 
 def test_placeholder_statement_rejected_as_missing_check(
