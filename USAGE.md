@@ -481,8 +481,9 @@ evidence_head_bytes = 4000
 allow_unrestricted_harness = false
 
 [jumar.harness]
-agent = "claude"       # claude | codex | cursor | gemini | opencode | kiro
+agent = "claude"       # claude | codex | cursor | gemini | opencode | kiro | openai
 model = "sonnet"       # the default for every stage
+# base_url and api_key_env only matter when agent = "openai" — see §Local models below.
 
 # Per-stage overrides. Valid stage tables: decompose, execute, judge.
 # Omitted keys inherit [jumar.harness]; an unknown stage name or key is a
@@ -521,6 +522,53 @@ Notes that matter:
   never pushes and never opens a PR.
 - **`timezone`** resolves bare dates like `@due=2026-09-05`. Set it explicitly if
   you don't want the system zone.
+
+### Local models
+
+`agent = "openai"` is not a CLI wrapper like the other six — jumar drives the
+tool-calling loop itself, in process, against any OpenAI-compatible
+`/chat/completions` endpoint (LM Studio, llama.cpp's server, vLLM, …). No
+extra dependency: it's `urllib.request` from the standard library.
+
+```toml
+[jumar.harness]
+agent        = "openai"
+model        = "qwen2.5-coder-32b"                 # the exact id from /v1/models — see below
+base_url     = "http://192.168.1.8:1234/v1"        # your LM Studio / server address
+api_key_env  = "LMSTUDIO_API_KEY"                  # omit if the endpoint needs no key
+
+# Keep judge on a frontier model even when execute runs locally — see the
+# caveat below.
+[jumar.harness.judge]
+agent = "claude"
+model = "sonnet"
+```
+
+- **Getting the exact model id.** LM Studio (and most local servers) name the
+  model differently than the file you loaded. Ask the server:
+  `curl http://192.168.1.8:1234/v1/models` and copy the `id` field verbatim
+  into `model = "…"` — a mismatch is not a startup error, it's a request the
+  server rejects or silently answers with whatever it has loaded.
+- **What `jumar doctor` checks.** For every other harness, `doctor` looks for a
+  binary on `PATH`. For `agent = "openai"` there is no binary — instead it GETs
+  `{base_url}/models` and reports `fail` if the endpoint is unreachable, `warn`
+  if it's reachable but the configured `model` isn't in the served list, `ok`
+  otherwise.
+- **`api_key_env` names an environment variable**, not the key itself — the key
+  never goes in `jumar.toml`. Leave it unset for a local server that takes no
+  auth; the request is then sent with no `Authorization` header at all.
+- **The tool loop is jumar's own**, not the model's CLI: `read_file`,
+  `write_file` and `run_command` are offered as tools and each call is checked
+  against the subtask's `Capability` set and the `[jumar.commands]` allow/deny
+  policy before anything runs — the same checks the execute stage and every
+  verifier already apply, in-process, so `allow_unrestricted_harness` is never
+  needed for `openai`.
+- **The caveat that matters:** a local model grading its own (or a same-tier
+  local model's) execute output is a weaker check than the design assumes — the
+  judge verifier's whole premise is an *independent* verdict. Keep
+  `[jumar.harness.judge]` on a frontier model (as above) even when `execute`
+  runs against a local server; only fall back to a fully local judge if you've
+  separately validated that model's adversarial-verifier behaviour.
 
 ---
 

@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import json
+import threading
+from collections.abc import Callable, Iterator
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -119,6 +123,92 @@ def test_harness_fail_contributes_to_exit_status() -> None:
     config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
     report = run_doctor(config)
     assert report.exit_status == 1
+
+
+# ---------------------------------------------------------------------------
+# Harness checks — in-process "openai" harness: /models probe
+# ---------------------------------------------------------------------------
+
+
+class _ModelsHandler(BaseHTTPRequestHandler):
+    """Serves a canned /v1/models response for exactly one test's lifetime."""
+
+    served_ids: tuple[str, ...] = ()
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib method name
+        body = json.dumps({"data": [{"id": model_id} for model_id in self.served_ids]}).encode(
+            "utf-8"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:  # silence stdlib's default access log
+        pass
+
+
+@pytest.fixture
+def models_server() -> Iterator[Callable[[tuple[str, ...]], str]]:
+    """Start a stub /models server; the fixture value builds it, returning base_url (…/v1)."""
+    servers: list[HTTPServer] = []
+
+    def _make(served_ids: tuple[str, ...]) -> str:
+        handler = type("_Handler", (_ModelsHandler,), {"served_ids": served_ids})
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address[:2]
+        servers.append(server)
+        return f"http://{host}:{port}/v1"
+
+    yield _make
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def test_openai_harness_missing_base_url_is_fail() -> None:
+    config = _cfg(harness=HarnessConfig(agent="openai", model="qwen"))
+    report = run_doctor(config)
+    check = _find(report, "harness")
+    assert check.status == CheckStatus.fail
+    assert "base_url" in check.message
+
+
+def test_openai_harness_server_absent_is_fail() -> None:
+    """No server listening at all — GET /models must fail closed, not hang."""
+    config = _cfg(
+        harness=HarnessConfig(agent="openai", model="qwen", base_url="http://127.0.0.1:1/v1")
+    )
+    report = run_doctor(config)
+    check = _find(report, "harness")
+    assert check.status == CheckStatus.fail
+    assert "Could not reach" in check.message
+
+
+def test_openai_harness_reachable_and_model_served_is_ok(
+    models_server: Callable[[tuple[str, ...]], str],
+) -> None:
+    base_url = models_server(("qwen2.5-coder-32b",))
+    harness = HarnessConfig(agent="openai", model="qwen2.5-coder-32b", base_url=base_url)
+    report = run_doctor(_cfg(harness=harness))
+    check = _find(report, "harness")
+    assert check.status == CheckStatus.ok
+    assert "qwen2.5-coder-32b" in check.message
+
+
+def test_openai_harness_reachable_but_model_not_served_is_warn(
+    models_server: Callable[[tuple[str, ...]], str],
+) -> None:
+    base_url = models_server(("some-other-model",))
+    harness = HarnessConfig(agent="openai", model="qwen2.5-coder-32b", base_url=base_url)
+    report = run_doctor(_cfg(harness=harness))
+    check = _find(report, "harness")
+    assert check.status == CheckStatus.warn
+    assert "qwen2.5-coder-32b" in check.message
+    assert "some-other-model" in check.message
 
 
 # ---------------------------------------------------------------------------

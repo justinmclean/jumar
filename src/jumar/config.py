@@ -172,18 +172,33 @@ class HarnessConfig:
     of execution uses a cheaper one.  Call ``for_stage("decompose")`` to get
     the resolved pair for that stage.
 
+    ``base_url`` and ``api_key_env`` only matter when ``agent`` names an
+    in-process harness (``"openai"`` — see ``harness.IN_PROCESS_HARNESSES``):
+    the OpenAI-compatible chat-completions endpoint to call, and the
+    environment variable holding its API key (``None`` if the endpoint needs
+    none, e.g. a local LM Studio server). Every subprocess harness ignores
+    both.
+
     ``None`` for a per-stage field means "inherit the top-level value".
     """
 
     agent: str = "claude"
     model: str = "sonnet"
+    base_url: str | None = None
+    api_key_env: str | None = None
     # Per-stage overrides — None inherits the top-level value.
     decompose_agent: str | None = None
     decompose_model: str | None = None
+    decompose_base_url: str | None = None
+    decompose_api_key_env: str | None = None
     execute_agent: str | None = None
     execute_model: str | None = None
+    execute_base_url: str | None = None
+    execute_api_key_env: str | None = None
     judge_agent: str | None = None
     judge_model: str | None = None
+    judge_base_url: str | None = None
+    judge_api_key_env: str | None = None
 
     def for_stage(self, stage: str) -> HarnessConfig:
         """Return the resolved ``HarnessConfig`` for *stage*.
@@ -198,9 +213,13 @@ class HarnessConfig:
             )
         a: str | None = getattr(self, f"{stage}_agent")
         m: str | None = getattr(self, f"{stage}_model")
+        b: str | None = getattr(self, f"{stage}_base_url")
+        k: str | None = getattr(self, f"{stage}_api_key_env")
         return HarnessConfig(
             agent=a if a is not None else self.agent,
             model=m if m is not None else self.model,
+            base_url=b if b is not None else self.base_url,
+            api_key_env=k if k is not None else self.api_key_env,
         )
 
 
@@ -292,9 +311,15 @@ def load_config(
     harness_raw: dict[str, Any] = raw.get("harness", {})
     harness_agent = str(harness_raw.get("agent", "claude"))
     harness_model = str(harness_raw.get("model", "sonnet"))
+    harness_base_url = (
+        str(harness_raw["base_url"]) if harness_raw.get("base_url") is not None else None
+    )
+    harness_api_key_env = (
+        str(harness_raw["api_key_env"]) if harness_raw.get("api_key_env") is not None else None
+    )
 
     # Validate: every key under [harness] must be a scalar key or a stage name.
-    _harness_scalar_keys: frozenset[str] = frozenset({"agent", "model"})
+    _harness_scalar_keys: frozenset[str] = frozenset({"agent", "model", "base_url", "api_key_env"})
     unknown_harness_keys = {
         k for k in harness_raw if k not in _harness_scalar_keys | _VALID_HARNESS_STAGES
     }
@@ -305,27 +330,42 @@ def load_config(
         )
 
     # Parse per-stage overrides.
+    _stage_keys: frozenset[str] = frozenset({"agent", "model", "base_url", "api_key_env"})
     stage_kwargs: dict[str, str | None] = {}
     for _stage in sorted(_VALID_HARNESS_STAGES):
         stage_raw: Any = harness_raw.get(_stage)
         if stage_raw is None:
             stage_kwargs[f"{_stage}_agent"] = None
             stage_kwargs[f"{_stage}_model"] = None
+            stage_kwargs[f"{_stage}_base_url"] = None
+            stage_kwargs[f"{_stage}_api_key_env"] = None
             continue
         if not isinstance(stage_raw, dict):
             raise ValueError(
                 f"[harness.{_stage}] must be a TOML table, got {type(stage_raw).__name__!r}"
             )
-        unknown_stage_keys = {k for k in stage_raw if k not in {"agent", "model"}}
+        unknown_stage_keys = {k for k in stage_raw if k not in _stage_keys}
         if unknown_stage_keys:
             raise ValueError(
                 f"Unknown key(s) under [harness.{_stage}]: {sorted(unknown_stage_keys)}; "
-                "only 'agent' and 'model' are valid inside a stage table."
+                f"only {sorted(_stage_keys)} are valid inside a stage table."
             )
         stage_kwargs[f"{_stage}_agent"] = str(stage_raw["agent"]) if "agent" in stage_raw else None
         stage_kwargs[f"{_stage}_model"] = str(stage_raw["model"]) if "model" in stage_raw else None
+        stage_kwargs[f"{_stage}_base_url"] = (
+            str(stage_raw["base_url"]) if stage_raw.get("base_url") is not None else None
+        )
+        stage_kwargs[f"{_stage}_api_key_env"] = (
+            str(stage_raw["api_key_env"]) if stage_raw.get("api_key_env") is not None else None
+        )
 
-    harness = HarnessConfig(agent=harness_agent, model=harness_model, **stage_kwargs)
+    harness = HarnessConfig(
+        agent=harness_agent,
+        model=harness_model,
+        base_url=harness_base_url,
+        api_key_env=harness_api_key_env,
+        **stage_kwargs,
+    )
 
     commands_raw: dict[str, Any] = raw.get("commands", {})
     commands = CommandPolicy(

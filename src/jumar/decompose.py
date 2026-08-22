@@ -431,6 +431,10 @@ def decompose(
         model=resolved.model,
         harness=resolved.agent,
         invoked_as=resolved.agent,
+        base_url=resolved.base_url,
+        api_key_env=resolved.api_key_env,
+        commands_allow=config.commands.allow,
+        commands_deny=config.commands.deny,
     )
 
     authored = bool(item.authored_subtasks)
