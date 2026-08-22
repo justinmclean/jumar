@@ -38,6 +38,15 @@ from jumar.models import (
 # GFM task list item: optional indent, dash, checkbox, optional space, text
 _TASK_RE = re.compile(r"^(\s*)-\s+\[([ xX])\]\s*(.*?)\s*$")
 
+# A line that *attempts* GFM task-list syntax (a list marker followed by a
+# checkbox-shaped bracket) but fails _TASK_RE — e.g. a non-"-" marker, a
+# multi-char or empty checkbox. Distinguishes a botched task line from ordinary
+# prose/heading context (AC1.6). The bracket must be checkbox-sized and must not
+# be followed by "(": an ordinary markdown link bullet — `- [the spec](url)` —
+# also fails _TASK_RE, and todo files routinely carry reference links, so
+# flagging those as malformed would be noise on legitimate content.
+_TASK_ATTEMPT_RE = re.compile(r"^\s*[-*+]\s+\[[^\]]{0,3}\](?!\()")
+
 # @key=value metadata token (key may contain hyphens)
 _META_RE = re.compile(r"@([\w-]+)=(\S+)")
 
@@ -153,6 +162,17 @@ def _parse_lines(
             # If we were inside an item's block, this line also ends subtask mode.
             if current is not None:
                 current.subtask_mode = False
+            if _TASK_ATTEMPT_RE.match(line):
+                # Looks like a botched task line (wrong marker, bad checkbox), not
+                # ordinary prose/heading context — record it as a parse warning
+                # (AC1.6) rather than silently absorbing it.
+                content = line.rstrip("\n")
+                warnings.append(
+                    ParseWarning(
+                        lineno,
+                        f"Line {lineno}: malformed task line, ignored: {content!r}",
+                    )
+                )
             context.append(line.rstrip("\n"))
             continue
 
