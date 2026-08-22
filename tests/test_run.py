@@ -68,6 +68,19 @@ def lying_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
     return _result("All done!", claim="All done!")
 
 
+def timeout_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Plans one subtask, then times out on every execution attempt.
+
+    Keys off the plan request's exact opening, not ``_is_decompose_prompt``'s
+    "subtasks" substring match — the execution prompt itself contains the word
+    "subtasks" ("Do not proceed to subsequent subtasks"), which would
+    misroute every execution attempt back to the plan response.
+    """
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    return AgentResult(exit_status=-1, stdout="", stderr="", timed_out=True, agent_claim=None)
+
+
 class _Args:
     """Minimal stand-in for the parsed argparse namespace."""
 
@@ -146,6 +159,23 @@ def test_run_exhausts_repairs_before_failing(
     assert "repairs_exhausted" in out
 
 
+def test_run_a_timed_out_attempt_does_not_advance_the_item(workspace: Path) -> None:
+    """A timed-out attempt is recorded, and the item never advances past it (AC5.2)."""
+    rc = cli._cmd_run(_Args(), _run_agent=timeout_agent)
+
+    assert rc == 1
+    assert not (workspace / "marker.txt").exists()
+    assert "- [ ] Create the marker file" in (workspace / "todo.md").read_text()
+
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    finished = [ln for ln in lines if ln["event"] == "attempt_finished"]
+    assert finished and all(ln["payload"].get("timed_out") for ln in finished)
+    assert not any(ln["event"] == "item_completed" for ln in lines)
+
+
 def test_run_dry_run_executes_nothing(workspace: Path) -> None:
     """``--dry-run`` prints the plan and stops before execution (AC4.1)."""
     rc = cli._cmd_run(_Args(dry_run=True), _run_agent=honest_agent)
@@ -174,6 +204,40 @@ def test_run_exits_zero_when_another_run_holds_the_lock(workspace: Path) -> None
 
     assert rc == 0
     assert not (workspace / "marker.txt").exists()
+
+
+def _dead_pid() -> int:
+    """Return a PID that is guaranteed not to be running."""
+    import os
+
+    for candidate in range(99_999, 1, -1):
+        try:
+            os.kill(candidate, 0)
+        except ProcessLookupError:
+            return candidate
+        except PermissionError:
+            continue  # process alive — try the next one
+    pytest.skip("could not find a dead PID for stale-lock test")
+
+
+def test_run_proceeds_after_reclaiming_a_stale_lock(workspace: Path) -> None:
+    """A stale lock (dead PID) is reclaimed and a real run proceeds (AC10.6)."""
+    lock_path = workspace / ".jumar.lock"
+    lock_path.write_text(
+        json.dumps({"pid": _dead_pid(), "run_id": "dead-run", "todo": str(workspace / "todo.md")})
+    )
+
+    rc = cli._cmd_run(_Args(), _run_agent=honest_agent)
+
+    assert rc == 0
+    assert (workspace / "marker.txt").read_text().strip() == "OK"
+    assert workspace.joinpath("todo.md").read_text().startswith("- [x]")
+
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    assert any(ln["event"] == "lock_reclaimed" for ln in lines)
 
 
 def test_run_exits_zero_when_nothing_is_eligible(
@@ -374,6 +438,29 @@ def test_retry_failed_reruns_only_the_unverified_subtask(workspace: Path) -> Non
     assert len(calls) == 1, "the passed subtask was re-executed"
     assert all("a.txt" not in c for c in calls)
     assert workspace.joinpath("todo.md").read_text().startswith("- [x]")
+
+
+def test_retry_failed_does_not_double_count_the_failure(workspace: Path) -> None:
+    """@failed= reflects the original failure, then is cleared by the retry's
+    success — never bumped a second time for the same failure (AC-S5)."""
+    assert cli._cmd_run(_Args(), _run_agent=_first_passes_second_fails) == 1
+    run_id = next(d for d in (workspace / "runs").iterdir() if d.is_dir()).name
+
+    todo_after_failure = workspace.joinpath("todo.md").read_text()
+    assert "@failed=1" in todo_after_failure
+
+    def fixes_the_second(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            raise AssertionError("retry re-decomposed instead of replaying the plan")
+        (Path(cwd) / "b.txt").write_text("B\n")
+        return _result("wrote b.txt")
+
+    rc = cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=fixes_the_second)
+
+    assert rc == 0
+    todo_after_retry = workspace.joinpath("todo.md").read_text()
+    assert "@failed=" not in todo_after_retry
+    assert "@failed=2" not in todo_after_retry
 
 
 def test_retry_failed_clears_the_stale_failure_from_the_report(workspace: Path) -> None:
