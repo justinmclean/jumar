@@ -24,6 +24,7 @@ from jumar.harness import (
     HARNESS_ERROR_AUTH_FAILURE,
     HARNESS_ERROR_BINARY_MISSING,
     HARNESS_ERROR_USAGE_LIMIT,
+    IN_PROCESS_HARNESSES,
     SESSION_RESUMABLE_HARNESSES,
     SUPPORTED_HARNESSES,
     AgentResult,
@@ -411,7 +412,34 @@ def test_kiro_prompt_is_last_argv() -> None:
 
 
 def test_supported_harnesses_set() -> None:
-    assert {"claude", "codex", "cursor", "gemini", "opencode", "kiro"} == SUPPORTED_HARNESSES
+    assert {
+        "claude",
+        "codex",
+        "cursor",
+        "gemini",
+        "opencode",
+        "kiro",
+        "openai",
+    } == SUPPORTED_HARNESSES
+
+
+def test_in_process_harnesses_is_a_subset_of_supported() -> None:
+    assert {"openai"} == IN_PROCESS_HARNESSES
+    assert IN_PROCESS_HARNESSES <= SUPPORTED_HARNESSES
+
+
+def test_build_argv_raises_for_in_process_harness() -> None:
+    """build_argv() has no argv to build for an in-process harness — it raises
+    rather than inventing one; run_agent() dispatches it directly instead."""
+    for harness_name in IN_PROCESS_HARNESSES:
+        with pytest.raises(ValueError, match="in-process harness"):
+            build_argv(
+                agent_bin=harness_name,
+                harness_name=harness_name,
+                model=None,
+                capabilities=_BASE_CAPS,
+                prompt="x",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -683,12 +711,23 @@ def test_unrestricted_harnesses_does_not_include_claude() -> None:
     assert "claude" not in UNRESTRICTED_HARNESSES
 
 
-def test_unrestricted_harnesses_includes_all_non_claude() -> None:
-    """Every harness other than claude is unrestricted."""
+def test_unrestricted_harnesses_includes_all_non_claude_subprocess_harnesses() -> None:
+    """Every subprocess harness other than claude is unrestricted.
+
+    The in-process harness ("openai") is the one exception: it enforces the
+    same Capability/command-policy checks itself, in Python, rather than
+    trusting a CLI flag — so it needs no allow_unrestricted_harness opt-in.
+    """
     from jumar.harness import UNRESTRICTED_HARNESSES
 
-    non_claude = SUPPORTED_HARNESSES - {"claude"}
-    assert non_claude == UNRESTRICTED_HARNESSES
+    non_claude_subprocess = SUPPORTED_HARNESSES - {"claude"} - IN_PROCESS_HARNESSES
+    assert non_claude_subprocess == UNRESTRICTED_HARNESSES
+
+
+def test_in_process_harness_is_not_unrestricted() -> None:
+    from jumar.harness import UNRESTRICTED_HARNESSES
+
+    assert IN_PROCESS_HARNESSES.isdisjoint(UNRESTRICTED_HARNESSES)
 
 
 # ---------------------------------------------------------------------------
@@ -924,7 +963,7 @@ def test_make_session_id_is_a_canonical_uuid() -> None:
 
 def test_non_resumable_harness_ignores_session_id() -> None:
     """Harnesses without session support fall back to today's behaviour (no --resume)."""
-    for harness in SUPPORTED_HARNESSES - SESSION_RESUMABLE_HARNESSES:
+    for harness in SUPPORTED_HARNESSES - SESSION_RESUMABLE_HARNESSES - IN_PROCESS_HARNESSES:
         argv = build_argv(
             agent_bin=harness,
             harness_name=harness,

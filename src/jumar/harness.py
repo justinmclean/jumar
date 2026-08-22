@@ -4,6 +4,7 @@
 Public API
 ----------
 SUPPORTED_HARNESSES  : frozenset[str]
+IN_PROCESS_HARNESSES : frozenset[str] – harnesses jumar drives itself (see openai_agent.py)
 AgentResult          – outcome of one agent invocation
 build_argv()         – pure argv construction, testable without launching anything
 prompt_via_stdin()   – True iff this harness reads the prompt from stdin
@@ -29,8 +30,15 @@ from .models import Capability, HarnessInfo
 # ---------------------------------------------------------------------------
 
 SUPPORTED_HARNESSES: frozenset[str] = frozenset(
-    {"claude", "codex", "cursor", "gemini", "opencode", "kiro"}
+    {"claude", "codex", "cursor", "gemini", "opencode", "kiro", "openai"}
 )
+
+# Harnesses jumar drives itself, in-process, instead of spawning an agent-CLI
+# subprocess. build_argv() has nothing to build for one of these — there is no
+# argv, only an HTTP call — so it raises rather than inventing one; run_agent()
+# branches to openai_agent.run_openai_agent() before it ever reaches the
+# subprocess path below. See openai_agent.py.
+IN_PROCESS_HARNESSES: frozenset[str] = frozenset({"openai"})
 
 # Harnesses that support session resumption via a --resume flag.
 # Only claude accepts --resume <session-id>; all others run a fresh context
@@ -221,6 +229,12 @@ def build_argv(
     """
     if harness_name not in SUPPORTED_HARNESSES:
         raise ValueError(f"Unsupported harness: {harness_name!r}")
+    if harness_name in IN_PROCESS_HARNESSES:
+        raise ValueError(
+            f"{harness_name!r} is an in-process harness — it has no argv. "
+            "run_agent() dispatches it via openai_agent.run_openai_agent() "
+            "instead of building a subprocess command line."
+        )
 
     model_args: list[str] = ["--model", model] if model else []
     has_network = Capability.network in capabilities
@@ -345,8 +359,21 @@ def run_agent(
     Returns an AgentResult whose ``timed_out`` flag is set on timeout.
     Never raises — all subprocess errors are captured in the result.
     """
-    agent_bin = harness.invoked_as or harness.harness
     harness_name = harness.harness
+
+    if harness_name in IN_PROCESS_HARNESSES:
+        from .openai_agent import run_openai_agent
+
+        return run_openai_agent(
+            prompt,
+            cwd=cwd,
+            capabilities=capabilities,
+            timeout_s=timeout_s,
+            harness=harness,
+            allow_tools=allow_tools,
+        )
+
+    agent_bin = harness.invoked_as or harness.harness
     model: str | None = harness.model if harness.model else None
 
     argv = build_argv(
