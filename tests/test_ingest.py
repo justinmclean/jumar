@@ -274,6 +274,23 @@ def test_unparseable_checkbox_char_generates_warning(tmp_path: Path) -> None:
     assert "malformed" in warning.message.lower()
 
 
+def test_markdown_link_bullet_is_not_flagged(tmp_path: Path) -> None:
+    """An ordinary markdown link bullet — `- [text](url)` — fails _TASK_RE just
+    like a malformed task line does, but it is legitimate prose: todo files
+    routinely carry reference links. The malformed-line check must stay quiet on
+    it and leave it as context (negative case for AC1.6)."""
+    result = _todo(
+        tmp_path,
+        "Reference links:\n"
+        "- [the spec](https://example.com/spec)\n"
+        "- [design doc](./design.md)\n"
+        "  - [nested link](x.md)\n"
+        "- [ ] Real task\n",
+    )
+    assert [i.text for i in result.items] == ["Real task"]
+    assert result.warnings == []
+
+
 # ---------------------------------------------------------------------------
 # AC1.7 — missing file is a clean actionable error, not a traceback
 # ---------------------------------------------------------------------------
