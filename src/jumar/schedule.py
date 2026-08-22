@@ -508,6 +508,9 @@ class LaunchdBackend:
 
 _DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
+# Ceiling for the systemctl calls that activate/deactivate an installed timer.
+_SYSTEMCTL_TIMEOUT_S = 10
+
 
 def _format_calendar_field(values: list[int | None]) -> str:
     """Render an expanded cron field as a systemd calendar field (zero-padded)."""
@@ -539,6 +542,29 @@ def _cron_to_oncalendar(cron_expr: str, timezone: str) -> str:
     weekday_names = sorted({_DOW_NAMES[d % 7] for d in dows if d is not None}, key=_DOW_NAMES.index)
     weekday_part = ",".join(weekday_names)
     return f"{weekday_part} {date_part} {time_part} {timezone}"
+
+
+def _oncalendar_lines(cron_expr: str, timezone: str) -> list[str]:
+    """Return every ``OnCalendar=`` value needed to express ``cron_expr``.
+
+    Usually one. Cron ORs day-of-month against day-of-week when *both* are
+    restricted ("0 9 1 * 1" = the 1st of the month **or** any Monday), while a
+    systemd calendar spec ANDs its weekday prefix with its date part (only
+    Mondays that fall on the 1st). systemd ORs repeated ``OnCalendar=`` lines,
+    so that case becomes two lines — one per field, with the other widened —
+    which reproduces cron's meaning exactly.
+    """
+    parts = cron_expr.split()
+    if len(parts) == 5:
+        minute_s, hour_s, dom_s, month_s, dow_s = parts
+        if dom_s != "*" and dow_s != "*":
+            dom_only = " ".join([minute_s, hour_s, dom_s, month_s, "*"])
+            dow_only = " ".join([minute_s, hour_s, "*", month_s, dow_s])
+            return [
+                _cron_to_oncalendar(dom_only, timezone),
+                _cron_to_oncalendar(dow_only, timezone),
+            ]
+    return [_cron_to_oncalendar(cron_expr, timezone)]
 
 
 _EXEC_START_RE = re.compile(r"^ExecStart=(.*)$")
@@ -588,7 +614,9 @@ def _format_systemd_service(entry: ScheduleEntry) -> str:
 def _format_systemd_timer(entry: ScheduleEntry) -> str:
     """Return the ``.timer`` unit text for one entry."""
     meta_line = _META_PREFIX + json.dumps({"schedule_id": entry.schedule_id}, separators=(",", ":"))
-    oncalendar = _cron_to_oncalendar(entry.cron_expr, entry.timezone)
+    oncalendar_lines = [
+        f"OnCalendar={value}" for value in _oncalendar_lines(entry.cron_expr, entry.timezone)
+    ]
     return "\n".join(
         [
             meta_line,
@@ -596,7 +624,7 @@ def _format_systemd_timer(entry: ScheduleEntry) -> str:
             f"Description=jumar schedule timer ({entry.schedule_id})",
             "",
             "[Timer]",
-            f"OnCalendar={oncalendar}",
+            *oncalendar_lines,
             "Persistent=true",
             "",
             "[Install]",
@@ -615,8 +643,30 @@ class SystemdBackend:
     only ever touch jumar's own two files and leave unrelated units untouched.
     """
 
-    def __init__(self, units_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        units_dir: Path | None = None,
+        *,
+        activate: bool | None = None,
+        runner: Any = None,
+    ) -> None:
         self._dir = units_dir or (Path.home() / ".config" / "systemd" / "user")
+        # Writing the unit files is not enough: a .timer only fires once it is
+        # enabled, which is what creates the timers.target.wants symlink. Tests
+        # inject units_dir and get the file half only; a real install activates.
+        self._activate = (units_dir is None) if activate is None else activate
+        self._run = runner if runner is not None else subprocess.run
+
+    def _systemctl(self, *args: str, check: bool) -> None:
+        """Run ``systemctl --user <args>``; ``check`` mirrors CronBackend._write."""
+        self._run(
+            ["systemctl", "--user", *args],
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=check,
+            timeout=_SYSTEMCTL_TIMEOUT_S,
+        )
 
     def name(self) -> str:
         return "systemd"
@@ -634,6 +684,12 @@ class SystemdBackend:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._service_path(entry.schedule_id).write_text(_format_systemd_service(entry))
         self._timer_path(entry.schedule_id).write_text(_format_systemd_timer(entry))
+        if self._activate:
+            # check=True: a failure here must surface, not leave an inert timer
+            # that `jumar doctor` would then report as an installed schedule.
+            self._systemctl("daemon-reload", check=True)
+            self._systemctl("enable", "--now", f"{self._unit_stem(entry.schedule_id)}.timer",
+                            check=True)
 
     def list_entries(self) -> list[ScheduleEntry]:
         if not self._dir.is_dir():
@@ -648,7 +704,13 @@ class SystemdBackend:
             if meta is None:
                 continue
             exec_start = _service_exec_start(text)
-            jumar_path = shlex.split(exec_start)[0] if exec_start else ""
+            try:
+                argv = shlex.split(exec_start) if exec_start else []
+            except ValueError:
+                # Unbalanced quoting in a hand-edited unit: skip the file rather
+                # than crash the whole listing.
+                continue
+            jumar_path = argv[0] if argv else ""
             entries.append(
                 ScheduleEntry(
                     schedule_id=str(meta.get("schedule_id", "")),
@@ -665,10 +727,21 @@ class SystemdBackend:
         service_path = self._service_path(schedule_id)
         timer_path = self._timer_path(schedule_id)
         found = service_path.exists() or timer_path.exists()
-        if found:
-            service_path.unlink(missing_ok=True)
-            timer_path.unlink(missing_ok=True)
-        return found
+        if not found:
+            return False
+        if self._activate:
+            # Disable first, while the unit still exists, so the wants-symlink
+            # goes with it; check=False because an already-disabled unit is a
+            # non-zero exit we do not care about.
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                self._systemctl("disable", "--now", f"{self._unit_stem(schedule_id)}.timer",
+                                check=False)
+        service_path.unlink(missing_ok=True)
+        timer_path.unlink(missing_ok=True)
+        if self._activate:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                self._systemctl("daemon-reload", check=False)
+        return True
 
 
 # ---------------------------------------------------------------------------
