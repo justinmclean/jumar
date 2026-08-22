@@ -20,6 +20,7 @@ Round-trip  A fixture crontab containing unrelated entries survives add+remove
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from jumar.schedule import (
     _expand_cron_field,
     _insert_block,
     _jumar_executable,
+    _oncalendar_lines,
     _parse_blocks,
     _remove_block,
     _systemd_user_available,
@@ -925,6 +927,112 @@ class TestSystemdBackend:
 # ---------------------------------------------------------------------------
 # _systemd_user_available / _autodetect_backend_name / default_backend
 # ---------------------------------------------------------------------------
+
+
+class TestOnCalendarLines:
+    def test_single_line_for_ordinary_expression(self) -> None:
+        assert _oncalendar_lines("0 9 * * *", "UTC") == ["*-*-* 09:00:00 UTC"]
+
+    def test_single_line_when_only_weekday_is_restricted(self) -> None:
+        assert _oncalendar_lines("0 9 * * 1-5", "UTC") == [
+            "Mon,Tue,Wed,Thu,Fri *-*-* 09:00:00 UTC"
+        ]
+
+    def test_dom_and_dow_both_restricted_becomes_two_lines(self) -> None:
+        """Cron ORs day-of-month with day-of-week; a systemd calendar spec ANDs
+        its weekday prefix with its date part. '0 9 1 * 1' means the 1st of the
+        month OR any Monday, so it needs two OnCalendar= values — one per field
+        with the other widened — which systemd then ORs back together."""
+        lines = _oncalendar_lines("0 9 1 * 1", "UTC")
+        assert lines == ["*-*-01 09:00:00 UTC", "Mon *-*-* 09:00:00 UTC"]
+
+    def test_timer_unit_carries_every_oncalendar_line(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(cron_expr="0 9 1 * 1", timezone="UTC")
+        backend.add_entry(entry)
+        timer_text = (tmp_path / f"jumar-{entry.schedule_id}.timer").read_text()
+        oncal = [ln for ln in timer_text.splitlines() if ln.startswith("OnCalendar=")]
+        assert oncal == ["OnCalendar=*-*-01 09:00:00 UTC", "OnCalendar=Mon *-*-* 09:00:00 UTC"]
+
+
+class _FakeSystemctl:
+    """Records the systemctl argv the backend runs, in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv: list[str], **_kw: object) -> None:
+        self.calls.append(list(argv))
+
+
+class TestSystemdActivation:
+    """Writing the unit files does not schedule anything: a .timer only fires
+    once `systemctl --user enable` has created its timers.target.wants symlink.
+    Install must activate, and remove must deactivate while the unit still
+    exists."""
+
+    def test_add_enables_the_timer(self, tmp_path: Path) -> None:
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=fake)
+        entry = _make_entry(schedule_id="act11111")
+        backend.add_entry(entry)
+        assert fake.calls == [
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "enable", "--now", "jumar-act11111.timer"],
+        ]
+
+    def test_remove_disables_before_deleting_the_units(self, tmp_path: Path) -> None:
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=fake)
+        entry = _make_entry(schedule_id="act22222")
+        backend.add_entry(entry)
+        fake.calls.clear()
+
+        seen_while_disabling: list[bool] = []
+
+        def _record(argv: list[str], **_kw: object) -> None:
+            if "disable" in argv:
+                seen_while_disabling.append(
+                    (tmp_path / "jumar-act22222.timer").exists()
+                )
+            fake.calls.append(list(argv))
+
+        backend._run = _record
+        assert backend.remove_entry("act22222")
+        assert fake.calls == [
+            ["systemctl", "--user", "disable", "--now", "jumar-act22222.timer"],
+            ["systemctl", "--user", "daemon-reload"],
+        ]
+        assert seen_while_disabling == [True]
+        assert not (tmp_path / "jumar-act22222.timer").exists()
+
+    def test_remove_of_unknown_id_touches_nothing(self, tmp_path: Path) -> None:
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=fake)
+        assert not backend.remove_entry("nope1234")
+        assert fake.calls == []
+
+    def test_injected_units_dir_defaults_to_no_activation(self, tmp_path: Path) -> None:
+        """The existing fake-filesystem suite must stay hermetic: passing a
+        units_dir with no explicit activate= runs no subprocess at all."""
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, runner=fake)
+        entry = _make_entry(schedule_id="act33333")
+        backend.add_entry(entry)
+        backend.remove_entry("act33333")
+        assert fake.calls == []
+
+    def test_a_failed_enable_surfaces(self, tmp_path: Path) -> None:
+        """An install that cannot arm the timer must raise, not leave an inert
+        unit that `jumar doctor` would report as an installed schedule."""
+
+        def _boom(argv: list[str], **kw: object) -> None:
+            if "enable" in argv:
+                raise subprocess.CalledProcessError(1, argv)
+
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=_boom)
+        with pytest.raises(subprocess.CalledProcessError):
+            backend.add_entry(_make_entry(schedule_id="act44444"))
 
 
 class TestSystemdUserAvailable:
