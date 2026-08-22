@@ -253,6 +253,44 @@ def test_warnings_do_not_abort_parsing(tmp_path: Path) -> None:
     assert {"A", "B", "C"} <= texts
 
 
+def test_unparseable_task_marker_generates_warning(tmp_path: Path) -> None:
+    """A line that attempts task-list syntax with a marker jumar doesn't accept
+    (`*` instead of `-`) fails _TASK_RE entirely — it must not be silently
+    absorbed as context; it's a parse warning naming the line (AC1.6)."""
+    result = _todo(tmp_path, "- [ ] Valid one\n* [ ] Bad marker\n- [ ] Valid two\n")
+    valid = [i for i in result.items if i.text in ("Valid one", "Valid two")]
+    assert len(valid) == 2
+    warning = next(w for w in result.warnings if w.line_no == 2)
+    assert "malformed" in warning.message.lower()
+    assert "Bad marker" in warning.message
+
+
+def test_unparseable_checkbox_char_generates_warning(tmp_path: Path) -> None:
+    """A line with an invalid checkbox character also fails _TASK_RE entirely
+    and must be flagged rather than silently swallowed as context."""
+    result = _todo(tmp_path, "- [z] Bad checkbox\n- [ ] Still parses\n")
+    assert [i.text for i in result.items] == ["Still parses"]
+    warning = next(w for w in result.warnings if w.line_no == 1)
+    assert "malformed" in warning.message.lower()
+
+
+def test_markdown_link_bullet_is_not_flagged(tmp_path: Path) -> None:
+    """An ordinary markdown link bullet — `- [text](url)` — fails _TASK_RE just
+    like a malformed task line does, but it is legitimate prose: todo files
+    routinely carry reference links. The malformed-line check must stay quiet on
+    it and leave it as context (negative case for AC1.6)."""
+    result = _todo(
+        tmp_path,
+        "Reference links:\n"
+        "- [the spec](https://example.com/spec)\n"
+        "- [design doc](./design.md)\n"
+        "  - [nested link](x.md)\n"
+        "- [ ] Real task\n",
+    )
+    assert [i.text for i in result.items] == ["Real task"]
+    assert result.warnings == []
+
+
 # ---------------------------------------------------------------------------
 # AC1.7 — missing file is a clean actionable error, not a traceback
 # ---------------------------------------------------------------------------
