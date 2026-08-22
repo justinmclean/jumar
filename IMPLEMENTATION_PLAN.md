@@ -114,66 +114,6 @@ open work item is Phase 14 P2 — blocked on its design decision.
 
 ## Work items (priority order)
 
-### Phase 14 — the wall-clock ceiling
-
-P2. **parallel-independent-subtasks** — **Measured 2026-08-11**, not assumed.
-   Across five runs, decompose takes 256–581s and the median subtask execution
-   is 258–505s. Agent process startup was measured directly at **4.1s**, and
-   `--strict-mcp-config` changed it by 46ms — so essentially none of it is
-   overhead that can be tuned away. A subtask is a full agentic session: read
-   prompt, tool call, read result, tool call, write, summarise — eight to ten
-   model round trips. Subtask 0 of the tou-osd item ("fetch two documents into
-   `sources/`") took **132s**, of which ~4s was startup.
-
-   Execution is strictly serial, so wall clock is the *sum* of every subtask
-   plus every repair. Fifteen subtasks at ~4 minutes is an hour before repairs.
-   Trimming the plan or picking cheaper models reduces the total; only
-   concurrency changes the ceiling.
-
-   **The design question, which must be answered before any code.** "One
-   subtask at a time, verified before the next starts" is the product's central
-   claim. Does it mean *verification order* or *wall-clock exclusivity*? The
-   argument that it means order: two subtasks with no `depends_on` edge between
-   them, by construction, neither consumes the other's output nor can invalidate
-   the other's check — that is exactly what the DAG asserts, and `decompose`
-   already rejects a cyclic one. Running them concurrently and verifying each
-   against its own check changes nothing about what is proven.
-
-   The argument for caution, and it is not weak: subtasks that share no declared
-   dependency can still collide in the filesystem, and `depends_on` is authored
-   by the same model that authors the checks — the graph is a *claim* about
-   independence, not a proof of it. Two subtasks that both append to
-   `drafts/inventory.md` are independent in the DAG and racing in reality.
-
-   If it goes ahead, the shape that keeps the guarantee:
-   - Concurrency only within a dependency level; never across an edge.
-   - A bounded worker count (`max_parallel`, default **1** — opt in, never a
-     silent behaviour change for existing users).
-   - **Verification stays serial and stays ordered**, so the journal remains a
-     single linear record and `already_passed` replay is unchanged on resume.
-   - A subtask declaring `write_fs` on a path another concurrent subtask
-     declares is a planning-time rejection, not a runtime race.
-   - `--approve` forces `max_parallel=1`: a human cannot meaningfully approve
-     two things at once.
-
-   *Validation:* `make check` + `pytest tests/test_run.py -q` — with
-   `max_parallel=1` the observable behaviour is byte-identical to today
-   (same journal event order); with `max_parallel=2` two independent subtasks
-   overlap in wall clock and their verifications still appear in index order;
-   a dependent pair never overlaps; `--approve` pins it to 1; a resume of a
-   partially-complete parallel run replays passed subtasks and re-executes only
-   the unverified ones.
-   *Closes:* nothing yet — this reverses a stated v1 non-goal and needs a
-   decision first. `specs/04-technical-plan.md` §Deferred lists parallel
-   subtasks; that line and the guardrail below must move together, and specs
-   are a human/`update`-beat edit.
-   *Branch slug:* `parallel-independent-subtasks`
-
-   **Do not start this before the decision is recorded.** If the answer is that
-   serial execution is part of what the tool promises, close the item and say so
-   here — an hour for fifteen verified subtasks is then the honest price, and
-   the README should quote it rather than leave users to discover it.
-
 ### Phase 15 — local models
 
 L1. **local-model-harness** — jumar can only reach a model by spawning an agent
@@ -228,6 +168,58 @@ L1. **local-model-harness** — jumar can only reach a model by spawning an agen
 
 ---
 
+## Closed (decided, not building)
+
+P2. **parallel-independent-subtasks** — **CLOSED 2026-08-22 by the human.**
+   Serial execution stands. The reason is not that wall-clock exclusivity is
+   part of what jumar promises — it is that independence is *asserted by a
+   model*, and the assertion cannot be checked mechanically.
+
+   The measurement stands and should not be re-derived. Across five runs
+   (2026-08-11): decompose 256–581s; median subtask execution 258–505s; agent
+   process startup measured at **4.1s**, moved 46ms by `--strict-mcp-config`.
+   Essentially none of the total is tunable overhead — a subtask is a full
+   agentic session, eight to ten model round trips. Execution is serial, so
+   wall clock is the sum of every subtask plus every repair: fifteen subtasks
+   at ~4 minutes is an hour before repairs. Only concurrency changes that
+   ceiling; trimming the plan or picking cheaper per-stage models reduces the
+   total underneath it.
+
+   **Why closed.** The case *for* concurrency is sound on its own terms: two
+   subtasks with no `depends_on` edge neither consume each other's output nor
+   can invalidate each other's check, so running them together and verifying
+   each against its own check proves exactly what serial execution proves. It
+   fails on its premise. `depends_on` and `write_fs` are authored by the same
+   model that authors the checks — the DAG is a claim about independence, not
+   a proof of it. The proposed guardrail (a `write_fs` collision between
+   concurrent subtasks is a planning-time rejection) only catches collisions
+   the model *declared*; the failure that matters is the undeclared write —
+   two subtasks that both append to `drafts/inventory.md` because neither said
+   so. No planning-time check over model-authored metadata can see it, and the
+   failure mode is silent corruption rather than a loud error. Parallel safety
+   would therefore rest on model judgement, which is the one thing this
+   project does not rest on.
+
+   The payoff on the other side of that trade is also smaller than the
+   measurement suggests. Scheduling is first-class (launchd/cron, recurrence,
+   resume), and for an unattended overnight run wall clock costs nothing; the
+   ceiling only bites in foreground use. `max_parallel=2` does not halve a
+   fifteen-subtask plan either — DAG width varies by level and verification
+   stays serial regardless.
+
+   **Reopen condition.** Revisit if and only if each subtask executes in a
+   filesystem sandbox that *enforces* its declared write paths rather than
+   trusting them. At that point `depends_on` stops being a claim, the argument
+   above becomes sound, and the shape already worked out applies: concurrency
+   only within a dependency level, bounded `max_parallel` defaulting to 1,
+   verification serial and ordered so the journal stays a single linear record,
+   `--approve` pinned to 1. Do not reopen it on wall-clock pain alone.
+
+   *Specs:* no change needed. `specs/04-technical-plan.md` §Deferred already
+   lists parallel subtasks; closing P2 leaves that line correct.
+
+---
+
 ## Guardrails (do not re-plan these)
 
 - **Verification is not optional and not deferrable.** No work item may ship a
@@ -266,6 +258,13 @@ L1. **local-model-harness** — jumar can only reach a model by spawning an agen
 - Run the loop inside a sandbox with no push credentials in the environment.
 - Regenerate the `USAGE.md` transcripts against the current build — §2 and §4
   still show uuid-era run ids, and the doc promises real output.
+- **README: quote the wall-clock price** (from P2's closure). Users currently
+  discover it by running a wide plan. State it plainly: a subtask is a full
+  agentic session of eight to ten model round trips, execution is serial
+  because each one is verified before the next starts, and fifteen subtasks is
+  about an hour before repairs. Say what reduces it — a narrower plan, cheaper
+  per-stage models on execute — and that scheduling it unattended makes the
+  number moot.
 
 Done 2026-08-11 (second doc pass): README `--json` coverage corrected to
 plan/run/report/status; USAGE command reference gained `gsd status --json` and
