@@ -13,14 +13,18 @@ format_report() — render a DoctorReport as a human-readable string
 from __future__ import annotations
 
 import contextlib
+import json
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 import zoneinfo
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from .config import Config
+from .harness import IN_PROCESS_HARNESSES
 
 
 class CheckStatus(StrEnum):
@@ -136,8 +140,12 @@ def _check_config(config: Config) -> list[DoctorCheck]:
 
 
 def _check_harness(config: Config) -> DoctorCheck:
-    """Harness binary on PATH."""
+    """Harness binary on PATH, or — for the in-process ``openai`` harness — the
+    configured OpenAI-compatible endpoint reachable and serving the model."""
     agent_bin = config.harness.agent
+    if agent_bin in IN_PROCESS_HARNESSES:
+        return _check_openai_harness(config)
+
     if shutil.which(agent_bin) is not None:
         return DoctorCheck(
             "harness",
@@ -149,6 +157,59 @@ def _check_harness(config: Config) -> DoctorCheck:
         CheckStatus.fail,
         f"Harness binary '{agent_bin}' not found on PATH. "
         'Install it or set [harness] agent = "<name>" in jumar.toml.',
+    )
+
+
+def _check_openai_harness(config: Config) -> DoctorCheck:
+    """GET ``{base_url}/models`` and report whether the endpoint is reachable
+    and, when it is, whether the configured model id is among those served.
+
+    ``shutil.which()`` is meaningless here — there is no binary, only an HTTP
+    endpoint, so this is the in-process harness's equivalent check.
+    """
+    base_url = config.harness.base_url
+    if not base_url:
+        return DoctorCheck(
+            "harness",
+            CheckStatus.fail,
+            '[harness] agent = "openai" but no base_url is configured. '
+            'Set [harness] base_url = "http://<host>:<port>/v1" in jumar.toml.',
+        )
+
+    models_url = base_url.rstrip("/") + "/models"
+    try:
+        request = urllib.request.Request(models_url, method="GET")
+        with urllib.request.urlopen(request, timeout=5) as resp:  # noqa: S310
+            raw = resp.read()
+        parsed = json.loads(raw)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        return DoctorCheck(
+            "harness",
+            CheckStatus.fail,
+            f"Could not reach OpenAI-compatible endpoint at '{models_url}': {exc}. "
+            "Is the local model server running?",
+        )
+
+    served = parsed.get("data") if isinstance(parsed, dict) else None
+    served_ids = (
+        {str(entry["id"]) for entry in served if isinstance(entry, dict) and "id" in entry}
+        if isinstance(served, list)
+        else set()
+    )
+
+    model = config.harness.model
+    if model and model not in served_ids:
+        listed = ", ".join(sorted(served_ids)) if served_ids else "(none)"
+        return DoctorCheck(
+            "harness",
+            CheckStatus.warn,
+            f"Endpoint '{base_url}' is reachable but model '{model}' is not in its "
+            f"served list: {listed}. Check the exact id with `curl {models_url}`.",
+        )
+    return DoctorCheck(
+        "harness",
+        CheckStatus.ok,
+        f"OpenAI-compatible endpoint '{base_url}' reachable; model '{model}' is served.",
     )
 
 

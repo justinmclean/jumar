@@ -579,12 +579,20 @@ def run_item(
         # The judge verifier needs a harness or it returns
         # `no_harness_configured` — inconclusive — for every judge check, which
         # then burns the repair budget and fails the item. Build it from config
-        # and pass it, here and in repair.py.
+        # and pass it, here and in repair.py. Resolved per-stage: an operator
+        # who sets [harness.judge] (e.g. to keep judge on a frontier model
+        # while execute uses a cheaper or local one) must actually get it here,
+        # the one live call site that dispatches a judge.
+        judge_resolved = config.harness.for_stage("judge")
         judge_harness = HarnessInfo(
-            agent=config.harness.agent,
-            model=config.harness.model,
-            harness=config.harness.agent,
-            invoked_as=config.harness.agent,
+            agent=judge_resolved.agent,
+            model=judge_resolved.model,
+            harness=judge_resolved.agent,
+            invoked_as=judge_resolved.agent,
+            base_url=judge_resolved.base_url,
+            api_key_env=judge_resolved.api_key_env,
+            commands_allow=config.commands.allow,
+            commands_deny=config.commands.deny,
         )
         ctx = VerifyContext(
             cwd=cwd,

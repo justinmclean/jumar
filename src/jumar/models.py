@@ -185,12 +185,26 @@ class Schedule:
 
 @dataclass(frozen=True)
 class HarnessInfo:
-    """Identifies the agent/model that produced a plan, attempt, or judge verdict."""
+    """Identifies the agent/model that produced a plan, attempt, or judge verdict.
+
+    ``base_url``, ``api_key_env`` and the ``commands_*`` tuples are only
+    meaningful for an in-process harness (currently ``"openai"``, see
+    ``harness.IN_PROCESS_HARNESSES``); every subprocess harness ignores them.
+    They stay off the four-field shape ``specs/03-data-model.md`` documents as
+    "recorded on every plan, attempt, and judge verdict" — callers that
+    journal a HarnessInfo already hand-pick ``agent``/``model`` rather than
+    serialising the dataclass wholesale, so adding fields here does not change
+    what lands in the journal.
+    """
 
     agent: str
     model: str
     harness: str
     invoked_as: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+    commands_allow: tuple[str, ...] = ()
+    commands_deny: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

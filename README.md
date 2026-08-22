@@ -138,6 +138,20 @@ jumar status                      # where everything stands
 Full worked examples, the flag reference, and the config reference are in
 **[USAGE.md](USAGE.md)**.
 
+## Local models
+
+`[jumar.harness] agent = "openai"` points jumar at any OpenAI-compatible
+`/chat/completions` endpoint — LM Studio, llama.cpp's server, vLLM — with no
+extra dependency (stdlib `urllib.request` only). Unlike the other six
+harnesses this one is not a CLI wrapper: jumar drives the tool-calling loop
+itself, so `read_file` / `write_file` / `run_command` are checked against the
+same `Capability` set and command allow/deny policy as everything else in the
+system, in-process — no `allow_unrestricted_harness` opt-in needed. `jumar
+doctor` swaps its usual PATH check for a GET on `{base_url}/models`. Keep
+`[jumar.harness.judge]` on a frontier model even when `execute` runs locally —
+a local model grading its own output is a weaker check than the design
+assumes. Full config keys and the caveats in **[USAGE.md §8](USAGE.md#8-configuration)**.
+
 ## Todo file syntax
 
 ```markdown
