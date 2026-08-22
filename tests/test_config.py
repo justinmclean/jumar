@@ -274,6 +274,8 @@ def test_harness_config_defaults() -> None:
     h = HarnessConfig()
     assert h.agent == "claude"
     assert h.model == "sonnet"
+    assert h.base_url is None
+    assert h.api_key_env is None
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +329,29 @@ def test_for_stage_result_has_no_per_stage_fields() -> None:
     assert resolved.judge_model is None
 
 
+def test_for_stage_returns_top_level_base_url_when_no_override() -> None:
+    h = HarnessConfig(agent="openai", base_url="http://192.168.1.8:1234/v1")
+    assert h.for_stage("execute").base_url == "http://192.168.1.8:1234/v1"
+
+
+def test_for_stage_uses_stage_base_url_and_api_key_env_override() -> None:
+    h = HarnessConfig(
+        agent="openai",
+        base_url="http://local:1234/v1",
+        judge_agent="claude",
+        judge_base_url=None,
+        judge_api_key_env=None,
+        execute_base_url="http://other:1234/v1",
+        execute_api_key_env="LMSTUDIO_KEY",
+    )
+    resolved = h.for_stage("execute")
+    assert resolved.base_url == "http://other:1234/v1"
+    assert resolved.api_key_env == "LMSTUDIO_KEY"
+    # judge has no override for base_url/api_key_env → inherits the top level.
+    assert h.for_stage("judge").base_url == "http://local:1234/v1"
+    assert h.for_stage("judge").api_key_env is None
+
+
 # ---------------------------------------------------------------------------
 # load_config — per-stage harness override from jumar.toml
 # ---------------------------------------------------------------------------
@@ -365,6 +390,50 @@ def test_load_harness_stage_override_only_agent(tmp_path: Path) -> None:
     assert h.judge_model is None
     assert h.for_stage("judge").agent == "gemini"
     assert h.for_stage("judge").model == "sonnet"  # falls back to top-level default
+
+
+def test_load_harness_base_url_and_api_key_env_from_jumar_toml(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.harness]
+        agent = "openai"
+        model = "qwen2.5-coder-32b"
+        base_url = "http://192.168.1.8:1234/v1"
+        api_key_env = "LMSTUDIO_API_KEY"
+    """,
+    )
+    h = load_config(tmp_path).harness
+    assert h.agent == "openai"
+    assert h.base_url == "http://192.168.1.8:1234/v1"
+    assert h.api_key_env == "LMSTUDIO_API_KEY"
+
+
+def test_load_harness_stage_base_url_override_from_jumar_toml(tmp_path: Path) -> None:
+    """A per-stage base_url lets e.g. execute run against a local server while
+    judge stays on a frontier model (top-level agent/base_url unset)."""
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.harness]
+        agent = "claude"
+        model = "sonnet"
+
+        [jumar.harness.execute]
+        agent = "openai"
+        model = "qwen2.5-coder-32b"
+        base_url = "http://192.168.1.8:1234/v1"
+    """,
+    )
+    h = load_config(tmp_path).harness
+    assert h.execute_base_url == "http://192.168.1.8:1234/v1"
+    assert h.execute_api_key_env is None
+    resolved = h.for_stage("execute")
+    assert resolved.agent == "openai"
+    assert resolved.base_url == "http://192.168.1.8:1234/v1"
+    # judge inherits the top-level default, untouched by the execute override.
+    assert h.for_stage("judge").agent == "claude"
+    assert h.for_stage("judge").base_url is None
 
 
 def test_unknown_harness_stage_key_is_startup_error(tmp_path: Path) -> None:
