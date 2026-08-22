@@ -17,6 +17,7 @@ Acceptance criteria exercised here:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,8 +29,10 @@ from jumar.journal import (
     ATTEMPT_FINISHED,
     ATTEMPT_STARTED,
     ITEM_COMPLETED,
+    ITEM_FAILED,
     ITEM_SELECTED,
     PLAN_CREATED,
+    RETRY_STARTED,
     RUN_FINISHED,
     RUN_STARTED,
     VERIFICATION,
@@ -399,6 +402,83 @@ def test_resume_failed_subtask_exits_one(tmp_path: Path, monkeypatch: pytest.Mon
     assert (run_dir / "report.md").exists()
     content = (run_dir / "report.md").read_text(encoding="utf-8")
     assert "Failed" in content or "failed" in content
+
+
+# ---------------------------------------------------------------------------
+# AC-S5 — --retry-failed journals retry_started via the RETRY_STARTED constant
+# ---------------------------------------------------------------------------
+
+
+def test_resume_retry_failed_journals_retry_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--retry-failed re-enters a terminally failed item and journals retry_started."""
+    monkeypatch.chdir(tmp_path)
+    run_id = "resume-retry"
+    run_dir = _make_run_dir(tmp_path, run_id)
+    item_id = "retry-item-a1b2c3d4"
+    todo_path = _write_todo(tmp_path, run_id, f"Retry item @id={item_id}")
+
+    j = _make_journal(run_dir)
+    j.append(
+        RUN_STARTED,
+        payload={**_RUN_STARTED_PAYLOAD, "todo_path": str(todo_path)},
+    )
+    j.append(ITEM_SELECTED, item_id=item_id, payload={"text": "Retry item"})
+    j.append(PLAN_CREATED, item_id=item_id, payload=_plan_payload(item_id, n_subtasks=1))
+    j.append(
+        ITEM_FAILED,
+        item_id=item_id,
+        payload={"reason": "repairs_exhausted"},
+    )
+
+    fake_runner = _fake_runner_factory([_FakeResult(exit_status=0, stdout="done")])
+
+    from jumar.clock import stamp
+    from jumar.models import CheckKind, Verdict, VerificationResult
+
+    def _fake_command_verify(check: Any, ctx: Any) -> VerificationResult:
+        return VerificationResult(
+            subtask_id=ctx.subtask_id,
+            attempt_no=ctx.attempt_no,
+            verdict=Verdict.passed,
+            kind=CheckKind.command,
+            evidence={"exit_code": 0},
+            summary="ok",
+            evidence_path=None,
+            checked_at=stamp(),
+        )
+
+    import jumar.verify as _verify_mod
+
+    original_registry = dict(_verify_mod._registry)
+    _verify_mod._registry[CheckKind.command] = _fake_command_verify
+
+    try:
+        import argparse
+
+        from jumar.cli import _cmd_resume
+
+        ns = argparse.Namespace(
+            run_id=run_id,
+            runs_dir=str(tmp_path / "runs"),
+            retry_failed=True,
+        )
+        rc = _cmd_resume(ns, _run_agent=fake_runner)
+    finally:
+        _verify_mod._registry.clear()
+        _verify_mod._registry.update(original_registry)
+
+    assert rc == 0
+
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    retry_entries = [ln for ln in lines if ln["event"] == RETRY_STARTED]
+    assert RETRY_STARTED == "retry_started"
+    assert len(retry_entries) == 1
+    assert retry_entries[0]["item_id"] == item_id
+    assert retry_entries[0]["payload"]["reason"] == "operator retried a failed item"
 
 
 # ---------------------------------------------------------------------------
