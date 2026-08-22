@@ -253,6 +253,27 @@ def test_warnings_do_not_abort_parsing(tmp_path: Path) -> None:
     assert {"A", "B", "C"} <= texts
 
 
+def test_unparseable_task_marker_generates_warning(tmp_path: Path) -> None:
+    """A line that attempts task-list syntax with a marker jumar doesn't accept
+    (`*` instead of `-`) fails _TASK_RE entirely — it must not be silently
+    absorbed as context; it's a parse warning naming the line (AC1.6)."""
+    result = _todo(tmp_path, "- [ ] Valid one\n* [ ] Bad marker\n- [ ] Valid two\n")
+    valid = [i for i in result.items if i.text in ("Valid one", "Valid two")]
+    assert len(valid) == 2
+    warning = next(w for w in result.warnings if w.line_no == 2)
+    assert "malformed" in warning.message.lower()
+    assert "Bad marker" in warning.message
+
+
+def test_unparseable_checkbox_char_generates_warning(tmp_path: Path) -> None:
+    """A line with an invalid checkbox character also fails _TASK_RE entirely
+    and must be flagged rather than silently swallowed as context."""
+    result = _todo(tmp_path, "- [z] Bad checkbox\n- [ ] Still parses\n")
+    assert [i.text for i in result.items] == ["Still parses"]
+    warning = next(w for w in result.warnings if w.line_no == 1)
+    assert "malformed" in warning.message.lower()
+
+
 # ---------------------------------------------------------------------------
 # AC1.7 — missing file is a clean actionable error, not a traceback
 # ---------------------------------------------------------------------------
