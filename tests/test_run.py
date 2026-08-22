@@ -190,6 +190,33 @@ def test_run_exits_zero_when_nothing_is_eligible(
     assert "Nothing eligible" in out
 
 
+def test_run_journals_item_deferred_for_a_not_before_gated_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A @not-before= gated item is journalled as item_deferred, not silently dropped."""
+    from jumar.journal import ITEM_DEFERRED
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text("- [ ] Later @not-before=2099-01-01\n")
+
+    rc = cli._cmd_run(_Args(), _run_agent=honest_agent)
+    out = capsys.readouterr().out
+    assert rc == 0
+    next_eligible = out.split("Next eligible: ")[1].splitlines()[0]
+
+    run_dir = next(d for d in (tmp_path / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    deferred_entries = [ln for ln in lines if ln["event"] == ITEM_DEFERRED]
+
+    assert len(deferred_entries) == 1
+    entry = deferred_entries[0]
+    assert entry["item_id"]
+    assert entry["payload"]["eligible_at"] == next_eligible
+    assert entry["payload"]["eligible_at"] in entry["payload"]["reason"]
+
+
 # ---------------------------------------------------------------------------
 # run / resume share one orchestration
 # ---------------------------------------------------------------------------

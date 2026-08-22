@@ -765,7 +765,14 @@ def _cmd_run(
 
     try:
         from .ingest import IngestError, ingest
-        from .journal import ITEM_PARKED, LOCK_RECLAIMED, RUN_FINISHED, RUN_STARTED, Journal
+        from .journal import (
+            ITEM_DEFERRED,
+            ITEM_PARKED,
+            LOCK_RECLAIMED,
+            RUN_FINISHED,
+            RUN_STARTED,
+            Journal,
+        )
         from .report import build_report, format_summary, write_report
         from .select import CycleError, select_next
 
@@ -815,6 +822,19 @@ def _cmd_run(
                 ITEM_PARKED,
                 item_id=p_item.item_id,
                 payload={"text": p_item.text, "reason": p_reason},
+            )
+
+        # Journal deferred items (gated by @not-before=) so the report can list
+        # them and the run's audit trail records why they were skipped.
+        for d_item, d_eligible_at in sel.deferred:
+            journal.append(
+                ITEM_DEFERRED,
+                item_id=d_item.item_id,
+                payload={
+                    "text": d_item.text,
+                    "reason": f"deferred until {d_eligible_at}",
+                    "eligible_at": d_eligible_at,
+                },
             )
 
         if sel.selected is None:
@@ -1039,7 +1059,7 @@ def _cmd_resume(
 
     from .config import load_config
     from .ingest import IngestError, ingest
-    from .journal import RUN_FINISHED, Journal
+    from .journal import RETRY_STARTED, RUN_FINISHED, Journal
     from .models import Plan, Verdict
     from .report import build_report, format_summary, report_exit_status, write_report
     from .select import CycleError, select_next
@@ -1152,7 +1172,7 @@ def _cmd_resume(
 
     if retry_failed and resumed_item_id in state.items_failed:
         journal.append(
-            "retry_started",
+            RETRY_STARTED,
             item_id=item.item_id,
             payload={
                 "reason": "operator retried a failed item",
