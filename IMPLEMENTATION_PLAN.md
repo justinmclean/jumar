@@ -174,6 +174,58 @@ P2. **parallel-independent-subtasks** — **Measured 2026-08-11**, not assumed.
    here — an hour for fifteen verified subtasks is then the honest price, and
    the README should quote it rather than leave users to discover it.
 
+### Phase 15 — local models
+
+L1. **local-model-harness** — jumar can only reach a model by spawning an agent
+   CLI: `harness.py` `build_argv()` covers six of them and `config.py` has no
+   `base_url` anywhere. Decision 2026-08-22: support an OpenAI-compatible
+   endpoint natively (LM Studio on the LAN, e.g. `http://192.168.1.8:1234/v1`,
+   serving a qwen model) for **all three stages**, and document it in the README.
+
+   Shape:
+   - New in-process harness `"openai"` in `SUPPORTED_HARNESSES` plus a new
+     `IN_PROCESS_HARNESSES` set. `run_agent()` branches to a new
+     `src/jumar/openai_agent.py` instead of `subprocess.run`, returning the same
+     `AgentResult` (stdout = final assistant message, `agent_claim` = last
+     non-empty line) so journal, judge and repair are untouched. `build_argv()`
+     raises for it rather than inventing an argv.
+   - `[harness]` gains `base_url` and `api_key_env`, valid at top level and in a
+     per-stage table; the unknown-key validator must accept them or a config
+     that names them is a startup error.
+   - Tool loop: POST `{base_url}/chat/completions` with a `tools` array, loop on
+     `tool_calls` to a step cap. Tools are `read_file`, `write_file` and
+     `run_command` (argv list, no `bash -c`), each gated by the existing
+     `Capability` set and `is_allowed()`. This is the argument for the in-process
+     route over pointing codex/opencode at the endpoint: the send boundary and
+     the `git push` / `gh` hard-deny become jumar's own enforcement instead of a
+     CLI flag those harnesses cannot express, so no `allow_unrestricted_harness`
+     opt-in is needed. `allow_tools=False` (decompose) omits the `tools` key
+     entirely.
+   - stdlib `urllib.request` only — `dependencies = []` stays empty.
+     `subtask_timeout_s` becomes a deadline across the whole loop, not one
+     request.
+   - `doctor.py`: `_check_harness()`'s `shutil.which()` is meaningless for an
+     in-process harness — GET `{base_url}/models` and report whether the
+     configured model id is actually served.
+   - README (and USAGE §config): a "Local models" section — the `[harness]` keys,
+     getting the exact model id from `/v1/models`, what `jumar doctor` checks,
+     and the caveat that a local judge grading local execute output is a weaker
+     check than the design assumes; recommend keeping `[harness.judge]` on a
+     frontier model.
+
+   *Validation:* `make check` + a new `tests/test_openai_agent.py` against a stub
+   HTTP server — the `tool_calls` loop terminates, the step cap trips, a denied
+   argv yields a refusal and spawns no process, `allow_tools=False` sends no
+   `tools` key, the deadline covers the whole loop; `test_harness_argv.py`
+   asserts `build_argv()` raises for an in-process harness; `test_config.py`
+   covers `base_url` parsing and the per-stage override; `test_doctor.py` covers
+   the `/models` probe with the server absent.
+   *Closes:* nothing in specs yet — `specs/04-technical-plan.md` §Harness names
+   the agent-CLI set as the only path to a model; that line and this item must
+   move together, and specs are a human/`update`-beat edit.
+   *Branch slug:* `local-model-harness`
+
+
 ---
 
 ## Guardrails (do not re-plan these)
