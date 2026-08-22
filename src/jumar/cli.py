@@ -217,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Print the entry without installing."
     )
     _schedule_add_p.add_argument(
-        "--backend", default=None, metavar="NAME", help="Force 'cron' or 'launchd'."
+        "--backend", default=None, metavar="NAME", help="Force 'cron', 'launchd', or 'systemd'."
     )
 
     schedule_subs.add_parser("list", help="List jumar-owned schedule entries.")
@@ -225,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     _schedule_remove_p = schedule_subs.add_parser("remove", help="Remove a schedule entry.")
     _schedule_remove_p.add_argument("schedule_id", help="The schedule ID to remove.")
     _schedule_remove_p.add_argument(
-        "--backend", default=None, metavar="NAME", help="Force 'cron' or 'launchd'."
+        "--backend", default=None, metavar="NAME", help="Force 'cron', 'launchd', or 'systemd'."
     )
 
     _schedule_show_p = schedule_subs.add_parser(
