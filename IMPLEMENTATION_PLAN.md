@@ -8,6 +8,82 @@ item = one branch = one PR.
 REMINDER (AGENTS.md): build iterations never modify files under `specs/`, and
 never weaken a check to get green.
 
+## Status — 2026-08-22
+
+**Full spec-vs-code reconciliation pass.** Every spec in `specs/` was read in
+full and compared against `src/jumar/` and `tests/` (parallel subagents plus
+direct greps/reads to confirm each finding — not inferred from routing
+snapshots). `git log`/`git branch -a` confirm every remote branch
+(`local-model-harness`, `plan-phase-15-local-models`, `fix/harness-outage-budget`,
+`contributor-onramp`, `repo-polish`, both `copilot/*` branches) is fully merged
+into `main` (`git log main..origin/<branch>` is empty for all of them) and
+there are no open PRs and no local work-item branches — nothing in flight.
+`make check` is green on `main` (94.64% coverage) as of this pass.
+
+**Newly landed since the 2026-08-11 status note (all merged to `main`,
+previously undocumented here):**
+
+- **local-model-harness** — Phase 15, L1. `src/jumar/openai_agent.py`: an
+  in-process harness (`agent = "openai"`) driving any OpenAI-compatible
+  `/chat/completions` endpoint (LM Studio, llama.cpp, vLLM) with its own
+  `read_file`/`write_file`/`run_command` tool loop, gated by the same
+  `Capability`/`is_allowed()` checks as every other stage — no
+  `allow_unrestricted_harness` needed. `harness.py` gained
+  `IN_PROCESS_HARNESSES`; `config.py` gained `base_url`/`api_key_env`;
+  `doctor.py` probes `/models`. **This item is done — do not re-plan it.**
+  `specs/04-technical-plan.md` §Harness still describes only the six
+  agent-CLI harnesses and doesn't mention the in-process route; that's a
+  human/`update`-beat doc sync, not a build gap.
+- **harness-outage-budget-exclusion** — `harness.detect_harness_error()`
+  classifies a usage-limit hit / auth failure / missing binary as
+  harness-level, distinct from an ordinary failed check; `backoff.py`'s
+  `advance_failure_count()` no-ops on it so a healthy item is never parked by
+  an outage. Journalled as `harness_error` (already in `specs/03`'s event
+  list).
+- **session-uuid-pinning** — `clock.make_session_id()` now mints a real UUID4;
+  the first subtask creates the session with `--session-id`, later subtasks
+  and repairs `--resume` it. Fixes a real bug (every multi-subtask item's
+  second subtask previously failed outright).
+- **contributor-onramp-docs** — CONTRIBUTING.md, CODE_OF_CONDUCT.md,
+  CHANGELOG.md, issue/PR templates, SECURITY.md, and a `make check` + tag
+  guard in the publish workflow. Not a `src/jumar/` change; no work item was
+  needed and none is added retroactively.
+
+**New gaps confirmed this pass** (each verified by direct file read/grep, not
+assumed — see the work items below for the exact evidence): Stage 10's
+promised `systemd` scheduler backend does not exist (only cron/launchd);
+`select.py` computes deferred items but never journals the documented
+`item_deferred` event; a totally malformed todo line (fails the task-list
+regex) produces no parse warning, narrower than AC1.6; and AC7.4's
+`--halt-on-fail` behaviour is unwired end to end — see the decision-gated item
+below before anyone touches it.
+
+**Spec text that has drifted from a *deliberate* decision, not a code gap —
+flagged for a human/`update`-beat pass, not a build work item** (no code
+change would close these; the spec prose is what's stale):
+- `specs/01-product-spec.md` still says "Least authority… default to a
+  sandboxed, no-network… execution context." `network` has been a default
+  capability since the 2026-08-08 send-not-fetch decision (`config.py`
+  `_DEFAULT_CAPABILITIES`), and `gate.py`'s own docstring says the capability
+  check "does not sandbox the agent's process or restrict OS calls at
+  runtime." Both are already correct in `specs/04` and `USAGE.md` — only `01`'s
+  wording is stale.
+- `specs/03-data-model.md`'s `Run`, `ItemResult`, `RunLock`, and
+  `ScheduleEntry` shapes list fields (`interactive`, `trigger`, `now`, `tz`,
+  `eligible_at`, `was_overdue`, `next_occurrence`, `hostname`, `acquired_at`,
+  `backend`, `command`, `log_path`, `installed_at`) and names
+  (`runs/.lock-<hash>`, `cron`, `tz`) that the real `models.py`/`lock.py`
+  (`Lock` → `.jumar.lock`)/`schedule.py` (`cron_expr`, `timezone`) don't match.
+  Code also carries undocumented fields (`Plan.session_id`; `HarnessInfo.
+  base_url/api_key_env/commands_allow/commands_deny`). None of this is a
+  functional bug — it's a doc sync for `update`.
+- AC1.3's wording ("flagged `decomposition=authored`") overstates what's
+  stored — `TodoItem` has no `decomposition` field; `decompose.py` infers it
+  from `bool(item.authored_subtasks)`. Behaviour is correct; the AC's prose
+  names a field that was never built that way.
+
+---
+
 ## Status — 2026-08-11
 
 **N2 (rename-everything) completed 2026-08-11.** The project is now **jumar**
@@ -109,122 +185,224 @@ open work item is Phase 14 P2 — blocked on its design decision.
 - **implementation-guide-run-context** — §4 "What happens during a run" in `USAGE.md`: progress output, report, status view, agent claims, verifier evidence, repair attempts and next action, read together. Merged 2026-08-11.
 - **reuse-the-execution-session** — P3. One execution session per item (`--session-id`/`--resume`), minted at `plan_created` and journalled; repair continues the same session; verifiers and judge always get a fresh context; harnesses without resume fall back to today's argv. Merged 2026-08-11.
 - **rename-everything** — N2. Full rename GetStuffDone/`gsd` → **jumar**: package dir, entry point, CLI verb, `jumar.toml` + `[jumar]` config (clean break), `.jumar.lock`, `# jumar-meta: ` / `com.jumar.<id>` schedule markers, docs, specs, spec-loop prompts. `doctor` detects pre-rename schedule entries; CI grep gate blocks the old name. Landed 2026-08-11.
+- **local-model-harness** — L1 (Phase 15). `src/jumar/openai_agent.py`: in-process `agent = "openai"` harness against an OpenAI-compatible `/chat/completions` endpoint, its own gated `read_file`/`write_file`/`run_command` tool loop, no `allow_unrestricted_harness` needed; `harness.py`'s `IN_PROCESS_HARNESSES`; `config.py`'s `base_url`/`api_key_env`; `doctor.py`'s `/models` probe. Merged 2026-08-22 (PR #10). See the 2026-08-22 status note for the doc-sync this leaves open.
+- **harness-outage-budget-exclusion** — `harness.detect_harness_error()` + `backoff.advance_failure_count()`: a harness-level outage (usage-limit hit, auth failure, missing binary) no longer counts against an item's `@failed=` budget or triggers auto-park. Merged 2026-08-18 (PR #8).
+- **session-uuid-pinning** — `clock.make_session_id()` mints a real UUID4 and the first subtask creates the session before later subtasks/repairs `--resume` it, fixing a real second-subtask failure. Merged 2026-08-12 (PR #7).
 
 ---
 
 ## Work items (priority order)
 
-### Phase 14 — the wall-clock ceiling
+Phase 15 (L1, local-model-harness) is **done** — see the 2026-08-22 status note
+and the Completed list. Phase 16 below is this pass's new material, ordered
+newest-and-clearest-first; the decision-gated item is last on purpose, same
+convention as the closed P2 above.
 
-P2. **parallel-independent-subtasks** — **Measured 2026-08-11**, not assumed.
-   Across five runs, decompose takes 256–581s and the median subtask execution
-   is 258–505s. Agent process startup was measured directly at **4.1s**, and
-   `--strict-mcp-config` changed it by 46ms — so essentially none of it is
-   overhead that can be tuned away. A subtask is a full agentic session: read
-   prompt, tool call, read result, tool call, write, summarise — eight to ten
-   model round trips. Subtask 0 of the tou-osd item ("fetch two documents into
-   `sources/`") took **132s**, of which ~4s was startup.
+### Phase 16 — spec-vs-code reconciliation (2026-08-22 pass)
 
-   Execution is strictly serial, so wall clock is the *sum* of every subtask
-   plus every repair. Fifteen subtasks at ~4 minutes is an hour before repairs.
-   Trimming the plan or picking cheaper models reduces the total; only
-   concurrency changes the ceiling.
+W1. **ingest-warns-on-unparseable-lines** — AC1.6 says "a malformed line does
+   not abort ingest; it is recorded as a parse warning" but `ingest.py`'s
+   `_finalize` only warns for a line that **matches** `_TASK_RE` with bad
+   *content* (bad `@` token, etc.). A line that fails `_TASK_RE` entirely
+   (matches none of the task-list/context/heading patterns) is silently
+   absorbed as `context` — no warning, contrary to the AC's plain wording.
+   Confirmed by reading `ingest.py`'s line dispatch and `tests/test_ingest.py`
+   (no test feeds a line that fails every pattern).
 
-   **The design question, which must be answered before any code.** "One
-   subtask at a time, verified before the next starts" is the product's central
-   claim. Does it mean *verification order* or *wall-clock exclusivity*? The
-   argument that it means order: two subtasks with no `depends_on` edge between
-   them, by construction, neither consumes the other's output nor can invalidate
-   the other's check — that is exactly what the DAG asserts, and `decompose`
-   already rejects a cyclic one. Running them concurrently and verifying each
-   against its own check changes nothing about what is proven.
+   Shape: classify a line that isn't a task item, isn't blank, and isn't
+   recognised context/heading syntax as `malformed`, emit a parse warning
+   naming the line number and its content, and keep parsing the rest of the
+   file (AC1.6's "does not abort ingest" is already true — only the warning is
+   missing).
 
-   The argument for caution, and it is not weak: subtasks that share no declared
-   dependency can still collide in the filesystem, and `depends_on` is authored
-   by the same model that authors the checks — the graph is a *claim* about
-   independence, not a proof of it. Two subtasks that both append to
-   `drafts/inventory.md` are independent in the DAG and racing in reality.
+   *Validation:* `make check` + `pytest tests/test_ingest.py -q`, adding a case
+   that feeds a line matching none of the recognised patterns and asserts a
+   warning is recorded naming the line number, while the items around it still
+   parse.
+   *Closes:* AC1.6 (the unmatched-line half of it).
+   *Branch slug:* `ingest-warns-on-unparseable-lines`
 
-   If it goes ahead, the shape that keeps the guarantee:
-   - Concurrency only within a dependency level; never across an edge.
-   - A bounded worker count (`max_parallel`, default **1** — opt in, never a
-     silent behaviour change for existing users).
-   - **Verification stays serial and stays ordered**, so the journal remains a
-     single linear record and `already_passed` replay is unchanged on resume.
-   - A subtask declaring `write_fs` on a path another concurrent subtask
-     declares is a planning-time rejection, not a runtime race.
-   - `--approve` forces `max_parallel=1`: a human cannot meaningfully approve
-     two things at once.
+W2. **journal-item-deferred-event** — `specs/03-data-model.md`'s event list
+   includes `item_deferred`, and `journal.py` already defines the
+   `ITEM_DEFERRED` constant, but grep across `src/jumar/` confirms it is never
+   passed to `journal.append()` anywhere. `select.py`'s `select_next()` already
+   computes exactly the information the event needs (`SelectionResult.deferred`
+   / `.parked`, each an `(item, reason)` pair) — it's just never journalled,
+   only printed to stdout in `cli.py`'s "Nothing eligible" branch. Separately,
+   `cli.py`'s resume path journals a bare string literal `"retry_started"`
+   (line ~1155) that has no constant in `journal.py` and isn't in `specs/03`'s
+   event list either — same class of gap, same fix location, worth doing in
+   one pass.
 
-   *Validation:* `make check` + `pytest tests/test_run.py -q` — with
-   `max_parallel=1` the observable behaviour is byte-identical to today
-   (same journal event order); with `max_parallel=2` two independent subtasks
-   overlap in wall clock and their verifications still appear in index order;
-   a dependent pair never overlaps; `--approve` pins it to 1; a resume of a
-   partially-complete parallel run replays passed subtasks and re-executes only
-   the unverified ones.
-   *Closes:* nothing yet — this reverses a stated v1 non-goal and needs a
-   decision first. `specs/04-technical-plan.md` §Deferred lists parallel
-   subtasks; that line and the guardrail below must move together, and specs
-   are a human/`update`-beat edit.
-   *Branch slug:* `parallel-independent-subtasks`
+   Shape: `cli.py` journals `ITEM_DEFERRED` once per deferred/parked item
+   whenever `select_next()` returns no selection (mirroring the existing
+   "Nothing eligible" print loop), with the item id and reason in the payload.
+   Add a `RETRY_STARTED` constant to `journal.py` and use it in place of the
+   bare string at the resume call site.
 
-   **Do not start this before the decision is recorded.** If the answer is that
-   serial execution is part of what the tool promises, close the item and say so
-   here — an hour for fifteen verified subtasks is then the honest price, and
-   the README should quote it rather than leave users to discover it.
+   *Validation:* `make check` + `pytest tests/test_select.py tests/test_journal.py tests/test_run.py -q` —
+   a run with nothing eligible journals one `item_deferred` (or a parked
+   equivalent) entry per blocked item; `journal.RETRY_STARTED` exists and
+   `tests/test_resume.py`'s retry-started assertions use the constant instead
+   of the literal.
+   *Closes:* the documented-but-unemitted `item_deferred` event in
+   `specs/03-data-model.md`.
+   *Branch slug:* `journal-item-deferred-event`
 
-### Phase 15 — local models
+W3. **systemd-schedule-backend** — `specs/02-functional-spec.md` Stage 10 says
+   "Backend by platform: `crontab` on Linux/BSD, `launchd` user agent on macOS,
+   `systemd --user` timer where available and preferred," and
+   `models.ScheduleBackend` already has a `systemd` member — but
+   `schedule.py` only defines `CronBackend` and `LaunchdBackend`;
+   `default_backend()` branches only on `darwin` vs. everything else, so a
+   Linux host with `systemd --user` available silently gets cron instead of
+   the "preferred" backend. Confirmed by reading `schedule.py` in full (no
+   `SystemdBackend` class, no `systemctl`/`systemd` string anywhere) — this
+   gap isn't even named in Stage 10's own "Known gaps" list (which only names
+   the Windows omission), so `plan` is recording it fresh rather than closing
+   a listed gap.
 
-L1. **local-model-harness** — jumar can only reach a model by spawning an agent
-   CLI: `harness.py` `build_argv()` covers six of them and `config.py` has no
-   `base_url` anywhere. Decision 2026-08-22: support an OpenAI-compatible
-   endpoint natively (LM Studio on the LAN, e.g. `http://192.168.1.8:1234/v1`,
-   serving a qwen model) for **all three stages**, and document it in the README.
+   Shape: a `SystemdBackend` alongside `CronBackend`/`LaunchdBackend`,
+   implementing the same `Backend` protocol — install/list/remove a
+   `~/.config/systemd/user/jumar-<schedule-id>.{service,timer}` pair, delimited
+   the same way the other backends delimit their entries (AC10.2's contract
+   applies identically). `default_backend()` prefers it on Linux when
+   `systemctl --user` is reachable (mirroring how it already prefers launchd on
+   darwin), falling back to cron otherwise. `doctor.py`'s schedule-readability
+   check gains the systemd case alongside its existing cron/launchd branches.
 
-   Shape:
-   - New in-process harness `"openai"` in `SUPPORTED_HARNESSES` plus a new
-     `IN_PROCESS_HARNESSES` set. `run_agent()` branches to a new
-     `src/jumar/openai_agent.py` instead of `subprocess.run`, returning the same
-     `AgentResult` (stdout = final assistant message, `agent_claim` = last
-     non-empty line) so journal, judge and repair are untouched. `build_argv()`
-     raises for it rather than inventing an argv.
-   - `[harness]` gains `base_url` and `api_key_env`, valid at top level and in a
-     per-stage table; the unknown-key validator must accept them or a config
-     that names them is a startup error.
-   - Tool loop: POST `{base_url}/chat/completions` with a `tools` array, loop on
-     `tool_calls` to a step cap. Tools are `read_file`, `write_file` and
-     `run_command` (argv list, no `bash -c`), each gated by the existing
-     `Capability` set and `is_allowed()`. This is the argument for the in-process
-     route over pointing codex/opencode at the endpoint: the send boundary and
-     the `git push` / `gh` hard-deny become jumar's own enforcement instead of a
-     CLI flag those harnesses cannot express, so no `allow_unrestricted_harness`
-     opt-in is needed. `allow_tools=False` (decompose) omits the `tools` key
-     entirely.
-   - stdlib `urllib.request` only — `dependencies = []` stays empty.
-     `subtask_timeout_s` becomes a deadline across the whole loop, not one
-     request.
-   - `doctor.py`: `_check_harness()`'s `shutil.which()` is meaningless for an
-     in-process harness — GET `{base_url}/models` and report whether the
-     configured model id is actually served.
-   - README (and USAGE §config): a "Local models" section — the `[harness]` keys,
-     getting the exact model id from `/v1/models`, what `jumar doctor` checks,
-     and the caveat that a local judge grading local execute output is a weaker
-     check than the design assumes; recommend keeping `[harness.judge]` on a
-     frontier model.
+   *Validation:* `make check` + `pytest tests/test_schedule.py -q` extended
+   with a `SystemdBackend` suite mirroring the existing `CronBackend`/
+   `LaunchdBackend` ones: AC10.1 (dry-run installs nothing), AC10.2
+   (marker-delimited install/remove, round-tripped against a fixture unit file
+   with unrelated content preserved byte-identical), AC10.3 (absolute paths +
+   `--non-interactive`), AC10.7 (list reports only jumar-owned entries), AC10.9
+   (resolved timezone recorded) — against a fake filesystem/backend, the same
+   pattern the existing suite already uses, not a live `systemctl`.
+   *Closes:* Stage 10's "backend by platform" contract line (no single AC
+   number is systemd-specific; AC10.1–10.4/10.7/10.9 all generalise to the new
+   backend).
+   *Branch slug:* `systemd-schedule-backend`
 
-   *Validation:* `make check` + a new `tests/test_openai_agent.py` against a stub
-   HTTP server — the `tool_calls` loop terminates, the step cap trips, a denied
-   argv yields a refusal and spawns no process, `allow_tools=False` sends no
-   `tools` key, the deadline covers the whole loop; `test_harness_argv.py`
-   asserts `build_argv()` raises for an in-process harness; `test_config.py`
-   covers `base_url` parsing and the per-stage override; `test_doctor.py` covers
-   the `/models` probe with the server absent.
-   *Closes:* nothing in specs yet — `specs/04-technical-plan.md` §Harness names
-   the agent-CLI set as the only path to a model; that line and this item must
-   move together, and specs are a human/`update`-beat edit.
-   *Branch slug:* `local-model-harness`
+W4. **close-thin-ac-test-coverage** — six acceptance criteria are implemented
+   and already have *a* test, but not the literal assertion the AC text
+   demands, confirmed by reading each named test alongside its AC:
+   - AC5.2: a timed-out attempt is recorded (`error="timed_out"`), but no test
+     runs a timed-out subtask through the full item loop to assert the item
+     does not advance past it.
+   - AC5.6: `tests/test_run_progress.py` checks stderr-only output and
+     suppression under `--json`/non-TTY, but never byte-diffs stdout with
+     progress on vs. off as the AC specifically demands.
+   - AC6.8: `tests/test_hollow_checks.py` checks the zero-byte-file behaviour
+     but doesn't assert the literal `evidence["error"] == "file_is_empty"` key.
+   - AC10.6 / AC10.8: stale-lock reclaim and remove-nonexistent-id are both
+     tested at the `lock.py`/`schedule.py` unit level but have no `_cmd_run`/
+     CLI-level test proving the reclaimed lock lets a real run proceed, or
+     that the CLI exit code for removing an unknown id is non-zero.
+   - AC-S5: `advance_failure_count`'s "not double-counted on retry" clause has
+     no test reading the actual `@failed=N` value in the todo file before and
+     after a `--retry-failed` resume.
 
+   None of these are behaviour bugs as far as this pass could confirm — each
+   is a test that doesn't yet say what its AC claims. Add the missing
+   assertion to the existing test module in each case; if writing any of them
+   surfaces an actual behavioural gap (rather than just a missing assertion),
+   stop and record that as its own item instead of silently fixing it here.
+
+   *Validation:* `make check` + `pytest tests/test_execute.py tests/test_run_progress.py tests/test_hollow_checks.py tests/test_run.py tests/test_backoff.py -q`.
+   *Closes:* AC5.2, AC5.6, AC6.8, AC10.6, AC10.8, AC-S5 (test-coverage
+   completion only).
+   *Branch slug:* `close-thin-ac-test-coverage`
+
+W5. **NEEDS A HUMAN DECISION before any code — halt-on-fail / run-level item
+   loop.** Stage 7's prose says budget exhaustion means "the run moves to the
+   next eligible item (or halts entirely under `--halt-on-fail`)" and AC7.4
+   requires the same choice. But confirmed by reading `cli.py`'s `_cmd_run`
+   and `_cmd_resume` in full: **a single `jumar run`/`jumar resume` invocation
+   only ever selects and processes one item, then returns** — there is no
+   loop over multiple eligible items within one process for `--halt-on-fail`
+   to interrupt. `USAGE.md` itself documents this as intentional ("one item
+   per invocation, under the single-flight lock"), matching the scheduler
+   design (cron/launchd re-invoke `jumar run` per tick) and the single-flight
+   lock. `config.halt_on_fail` and `RepairExhausted.halt` are wired correctly
+   as far as they go (`repair.py` sets `.halt` from config, tested in
+   `tests/test_repair.py`) but `.halt` is never read anywhere in `cli.py` —
+   confirmed by grep — so it has no effect regardless of value, and there is
+   also no `--halt-on-fail` CLI flag in `cli.py`'s argparse despite the spec
+   writing it as one.
+
+   This is not a small bug fix: closing it "as written" means adding a
+   multi-item loop to a single `jumar run` invocation, which is a real
+   architecture change to something `USAGE.md` currently documents as
+   one-item-per-invocation by design. The alternative is that AC7.4/Stage 7's
+   prose is the stale artefact (written before or independent of the
+   one-item-per-invocation decision) and should be corrected to match the
+   shipped design, with `config.halt_on_fail` and `RepairExhausted.halt` either
+   removed as vestigial or repurposed for a future multi-item mode. Do not
+   guess which; that's exactly the kind of premise P2 was closed over.
+
+   *Validation (once decided):* if a run-level loop is chosen — `make check` +
+   `pytest tests/test_run.py -q` with a fixture todo file with two eligible
+   items: default behaviour exhausts item A's repair budget and still attempts
+   item B; `--halt-on-fail` stops after A fails and B is never selected. If the
+   spec is corrected instead — no `src/jumar/` change; a human/`update`-beat
+   edit to `specs/02-functional-spec.md` Stage 7, and this item closes without
+   a branch.
+   *Closes:* AC7.4, once the premise is resolved.
+   *Branch slug:* `resolve-halt-on-fail-semantics` (only if the multi-item
+   route is chosen).
+
+---
+
+## Closed (decided, not building)
+
+P2. **parallel-independent-subtasks** — **CLOSED 2026-08-22 by the human.**
+   Serial execution stands. The reason is not that wall-clock exclusivity is
+   part of what jumar promises — it is that independence is *asserted by a
+   model*, and the assertion cannot be checked mechanically.
+
+   The measurement stands and should not be re-derived. Across five runs
+   (2026-08-11): decompose 256–581s; median subtask execution 258–505s; agent
+   process startup measured at **4.1s**, moved 46ms by `--strict-mcp-config`.
+   Essentially none of the total is tunable overhead — a subtask is a full
+   agentic session, eight to ten model round trips. Execution is serial, so
+   wall clock is the sum of every subtask plus every repair: fifteen subtasks
+   at ~4 minutes is an hour before repairs. Only concurrency changes that
+   ceiling; trimming the plan or picking cheaper per-stage models reduces the
+   total underneath it.
+
+   **Why closed.** The case *for* concurrency is sound on its own terms: two
+   subtasks with no `depends_on` edge neither consume each other's output nor
+   can invalidate each other's check, so running them together and verifying
+   each against its own check proves exactly what serial execution proves. It
+   fails on its premise. `depends_on` and `write_fs` are authored by the same
+   model that authors the checks — the DAG is a claim about independence, not
+   a proof of it. The proposed guardrail (a `write_fs` collision between
+   concurrent subtasks is a planning-time rejection) only catches collisions
+   the model *declared*; the failure that matters is the undeclared write —
+   two subtasks that both append to `drafts/inventory.md` because neither said
+   so. No planning-time check over model-authored metadata can see it, and the
+   failure mode is silent corruption rather than a loud error. Parallel safety
+   would therefore rest on model judgement, which is the one thing this
+   project does not rest on.
+
+   The payoff on the other side of that trade is also smaller than the
+   measurement suggests. Scheduling is first-class (launchd/cron, recurrence,
+   resume), and for an unattended overnight run wall clock costs nothing; the
+   ceiling only bites in foreground use. `max_parallel=2` does not halve a
+   fifteen-subtask plan either — DAG width varies by level and verification
+   stays serial regardless.
+
+   **Reopen condition.** Revisit if and only if each subtask executes in a
+   filesystem sandbox that *enforces* its declared write paths rather than
+   trusting them. At that point `depends_on` stops being a claim, the argument
+   above becomes sound, and the shape already worked out applies: concurrency
+   only within a dependency level, bounded `max_parallel` defaulting to 1,
+   verification serial and ordered so the journal stays a single linear record,
+   `--approve` pinned to 1. Do not reopen it on wall-clock pain alone.
+
+   *Specs:* no change needed. `specs/04-technical-plan.md` §Deferred already
+   lists parallel subtasks; closing P2 leaves that line correct.
 
 ---
 
@@ -249,10 +427,12 @@ L1. **local-model-harness** — jumar can only reach a model by spawning an agen
   **cross-file `@depends=`** (decided with D1: one file's eligibility must not
   depend on another file's run history — two related lists state their run
   order in prose).
-- **Parallel subtask execution is no longer an automatic "do not plan"** — it is
-  now an open question with a written-up item (P2, Phase 14) and an undecided
-  premise. It remains **not to be built** until the design question in that item
-  is answered. Do not treat its removal from the list above as approval.
+- **Parallel subtask execution is CLOSED, not open** (see P2 above,
+  2026-08-22) — serial execution stands because `depends_on`/`write_fs` are
+  model-authored claims, not enforced facts, and an undeclared write collision
+  is invisible to any planning-time check. Do not re-plan it; the reopen
+  condition is written up in P2 and requires an enforced per-subtask
+  filesystem sandbox, not just wall-clock pain.
 - **The product pointing at its own plan** is a milestone, not a dependency.
   Nothing in `src/getstuffdone/` may assume it is being run against this repo.
 
@@ -266,6 +446,13 @@ L1. **local-model-harness** — jumar can only reach a model by spawning an agen
 - Run the loop inside a sandbox with no push credentials in the environment.
 - Regenerate the `USAGE.md` transcripts against the current build — §2 and §4
   still show uuid-era run ids, and the doc promises real output.
+- **README: quote the wall-clock price** (from P2's closure). Users currently
+  discover it by running a wide plan. State it plainly: a subtask is a full
+  agentic session of eight to ten model round trips, execution is serial
+  because each one is verified before the next starts, and fifteen subtasks is
+  about an hour before repairs. Say what reduces it — a narrower plan, cheaper
+  per-stage models on execute — and that scheduling it unattended makes the
+  number moot.
 
 Done 2026-08-11 (second doc pass): README `--json` coverage corrected to
 plan/run/report/status; USAGE command reference gained `gsd status --json` and
