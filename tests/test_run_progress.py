@@ -17,6 +17,7 @@ assertion here would pass vacuously.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +162,28 @@ def test_progress_lines_go_to_stderr_and_never_stdout(
     assert "[2/2]" in captured.err
     assert "[1/2]" not in captured.out
     assert "[2/2]" not in captured.out
+
+
+def test_stdout_is_byte_identical_with_progress_on_or_off(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Progress is a stderr-only concern (AC5.6): stdout must not vary with it."""
+    cli._cmd_run(_Args(), _run_agent=honest_agent, _progress_force=True)
+    stdout_with_progress = capsys.readouterr().out
+
+    (workspace / "marker.txt").unlink()
+    (workspace / "second.txt").unlink()
+    (workspace / "todo.md").write_text("- [ ] Do the thing @capability=write_fs\n")
+    for entry in (workspace / "runs").iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()  # e.g. runs/index.tsv
+
+    cli._cmd_run(_Args(), _run_agent=honest_agent, _progress_force=False)
+    stdout_without_progress = capsys.readouterr().out
+
+    assert stdout_with_progress == stdout_without_progress
 
 
 def test_progress_names_each_subtask_and_its_verdict(
