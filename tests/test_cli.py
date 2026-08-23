@@ -270,6 +270,148 @@ def test_doctor_reports_a_missing_todo_file(
 
 
 # ---------------------------------------------------------------------------
+# --config PATH (W8): explicit config resolution, independent of cwd
+# ---------------------------------------------------------------------------
+
+
+def test_run_accepts_config_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``--config`` must parse on ``run``: this is the argv `_build_command()`
+    installs for a scheduled entry, and W8 found `run_p` rejecting it with
+    exit 2 ("unrecognized arguments"). An empty todo file keeps the run at
+    "nothing eligible", clear of decompose/the real harness binary.
+    """
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    todo.write_text("")
+    cfg = tmp_path / "jumar.toml"
+    cfg.write_text("[jumar]\nmax_subtasks = 3\n")
+
+    rc = main(["run", "--todo", str(todo), "--config", str(cfg)])
+
+    assert rc == 0
+    assert "Nothing eligible" in capsys.readouterr().out
+
+
+def test_run_missing_config_path_is_a_startup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    todo.write_text("")
+
+    rc = main(["run", "--todo", str(todo), "--config", str(tmp_path / "nope.toml")])
+
+    assert rc == 2
+    assert "config" in capsys.readouterr().err.lower()
+
+
+def test_plan_accepts_config_flag(
+    todo_one_item: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = tmp_path / "jumar.toml"
+    cfg.write_text("[jumar]\nmax_subtasks = 3\n")
+
+    rc = main(["plan", "--dry-run", "--todo", str(todo_one_item), "--config", str(cfg)])
+
+    assert rc == 0
+
+
+def test_plan_config_used_regardless_of_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of --config: resolution must not depend on the
+    invoking cwd, the way scheduled entries' cwd is unrelated to the project.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    todo = project / "todo.md"
+    todo.write_text("- [ ] Something to do\n")
+    cfg = project / "jumar.toml"
+    cfg.write_text("[jumar]\nmax_subtasks = 3\n")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    rc = main(["plan", "--dry-run", "--todo", str(todo), "--config", str(cfg)])
+
+    assert rc == 0
+
+
+def test_doctor_accepts_config_flag(tmp_path: Path) -> None:
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Something to do\n")
+    cfg = tmp_path / "jumar.toml"
+    cfg.write_text("[jumar]\nmax_subtasks = 3\n")
+
+    rc = main(["doctor", "--todo", str(todo), "--config", str(cfg)])
+
+    assert rc in (0, 1)
+
+
+def test_doctor_missing_config_path_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Something to do\n")
+
+    rc = main(["doctor", "--todo", str(todo), "--config", str(tmp_path / "nope.toml")])
+
+    assert rc == 2
+    assert "config" in capsys.readouterr().err.lower()
+
+
+def test_status_accepts_config_flag(tmp_path: Path) -> None:
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Something to do\n")
+    cfg = tmp_path / "jumar.toml"
+    cfg.write_text("[jumar]\nmax_subtasks = 3\n")
+
+    rc = main(["status", "--todo", str(todo), "--config", str(cfg)])
+
+    assert rc == 0
+
+
+def test_status_missing_config_path_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Something to do\n")
+
+    rc = main(["status", "--todo", str(todo), "--config", str(tmp_path / "nope.toml")])
+
+    assert rc == 2
+    assert "config" in capsys.readouterr().err.lower()
+
+
+def test_plan_missing_config_path_is_an_error(
+    todo_one_item: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = main(
+        [
+            "plan",
+            "--dry-run",
+            "--todo",
+            str(todo_one_item),
+            "--config",
+            str(todo_one_item.parent / "nope.toml"),
+        ]
+    )
+
+    assert rc == 2
+    assert "config" in capsys.readouterr().err.lower()
+
+
+# ---------------------------------------------------------------------------
 # Clock discipline: static analysis
 # ---------------------------------------------------------------------------
 
