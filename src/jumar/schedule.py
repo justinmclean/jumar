@@ -2,7 +2,7 @@
 """Stage 10 — Run scheduling.
 
 Installs, lists, and removes a recurring ``jumar run`` invocation in the
-operating system's own scheduler (cron or launchd).
+operating system's own scheduler (cron, launchd, or systemd --user).
 
 Public API
 ----------
@@ -11,6 +11,7 @@ CronExprError       – raised for invalid cron expressions (names the field).
 FakeBackend         – in-memory backend for tests.
 CronBackend         – reads/writes via ``crontab -l`` / ``crontab -``.
 LaunchdBackend      – reads/writes ``~/Library/LaunchAgents/`` plist files.
+SystemdBackend      – reads/writes ``~/.config/systemd/user/`` unit pairs.
 default_backend()   – platform-appropriate backend.
 add_schedule()      – validate, print, and (unless dry-run) install.
 list_schedules()    – return all jumar-owned entries from the backend.
@@ -24,6 +25,7 @@ import contextlib
 import json
 import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -501,15 +503,290 @@ class LaunchdBackend:
 
 
 # ---------------------------------------------------------------------------
+# Systemd backend (real; Linux --user timers)
+# ---------------------------------------------------------------------------
+
+_DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+# Ceiling for the systemctl calls that activate/deactivate an installed timer.
+_SYSTEMCTL_TIMEOUT_S = 10
+
+
+def _format_calendar_field(values: list[int | None]) -> str:
+    """Render an expanded cron field as a systemd calendar field (zero-padded)."""
+    if values == [None]:
+        return "*"
+    nums = sorted({v for v in values if v is not None})
+    return ",".join(f"{v:02d}" for v in nums)
+
+
+def _cron_to_oncalendar(cron_expr: str, timezone: str) -> str:
+    """Convert a 5-field cron expression (+ resolved tz) to an OnCalendar= value."""
+    parts = cron_expr.split()
+    if len(parts) != 5:
+        return f"*-*-* *:*:00 {timezone}"
+    minute_s, hour_s, dom_s, month_s, dow_s = parts
+
+    minutes = _expand_cron_field(minute_s, 0, 59, "minute")
+    hours = _expand_cron_field(hour_s, 0, 23, "hour")
+    doms = _expand_cron_field(dom_s, 1, 31, "day-of-month")
+    months = _expand_cron_field(month_s, 1, 12, "month")
+    dows = _expand_cron_field(dow_s, 0, 7, "day-of-week")
+
+    date_part = f"*-{_format_calendar_field(months)}-{_format_calendar_field(doms)}"
+    time_part = f"{_format_calendar_field(hours)}:{_format_calendar_field(minutes)}:00"
+
+    if dow_s == "*":
+        return f"{date_part} {time_part} {timezone}"
+
+    weekday_names = sorted({_DOW_NAMES[d % 7] for d in dows if d is not None}, key=_DOW_NAMES.index)
+    weekday_part = ",".join(weekday_names)
+    return f"{weekday_part} {date_part} {time_part} {timezone}"
+
+
+def _oncalendar_lines(cron_expr: str, timezone: str) -> list[str]:
+    """Return every ``OnCalendar=`` value needed to express ``cron_expr``.
+
+    Usually one. Cron ORs day-of-month against day-of-week when *both* are
+    restricted ("0 9 1 * 1" = the 1st of the month **or** any Monday), while a
+    systemd calendar spec ANDs its weekday prefix with its date part (only
+    Mondays that fall on the 1st). systemd ORs repeated ``OnCalendar=`` lines,
+    so that case becomes two lines — one per field, with the other widened —
+    which reproduces cron's meaning exactly.
+    """
+    parts = cron_expr.split()
+    if len(parts) == 5:
+        minute_s, hour_s, dom_s, month_s, dow_s = parts
+        if dom_s != "*" and dow_s != "*":
+            dom_only = " ".join([minute_s, hour_s, dom_s, month_s, "*"])
+            dow_only = " ".join([minute_s, hour_s, "*", month_s, dow_s])
+            return [
+                _cron_to_oncalendar(dom_only, timezone),
+                _cron_to_oncalendar(dow_only, timezone),
+            ]
+    return [_cron_to_oncalendar(cron_expr, timezone)]
+
+
+_EXEC_START_RE = re.compile(r"^ExecStart=(.*)$")
+
+
+def _parse_meta_line(text: str) -> dict[str, Any] | None:
+    for line in text.splitlines():
+        if line.startswith(_META_PREFIX):
+            with contextlib.suppress(json.JSONDecodeError):
+                data: dict[str, Any] = json.loads(line[len(_META_PREFIX) :])
+                return data
+    return None
+
+
+def _service_exec_start(text: str) -> str | None:
+    for line in text.splitlines():
+        m = _EXEC_START_RE.match(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _format_systemd_service(entry: ScheduleEntry) -> str:
+    """Return the ``.service`` unit text for one entry (meta line + argv)."""
+    meta = {
+        "schedule_id": entry.schedule_id,
+        "cron_expr": entry.cron_expr,
+        "tz": entry.timezone,
+        "todo_path": entry.todo_path,
+    }
+    meta_line = _META_PREFIX + json.dumps(meta, separators=(",", ":"))
+    exec_start = " ".join(shlex.quote(a) for a in _build_command(entry))
+    return "\n".join(
+        [
+            meta_line,
+            "[Unit]",
+            f"Description=jumar scheduled run ({entry.schedule_id})",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            f"ExecStart={exec_start}",
+            "",
+        ]
+    )
+
+
+def _format_systemd_timer(entry: ScheduleEntry) -> str:
+    """Return the ``.timer`` unit text for one entry."""
+    meta_line = _META_PREFIX + json.dumps({"schedule_id": entry.schedule_id}, separators=(",", ":"))
+    oncalendar_lines = [
+        f"OnCalendar={value}" for value in _oncalendar_lines(entry.cron_expr, entry.timezone)
+    ]
+    return "\n".join(
+        [
+            meta_line,
+            "[Unit]",
+            f"Description=jumar schedule timer ({entry.schedule_id})",
+            "",
+            "[Timer]",
+            *oncalendar_lines,
+            "Persistent=true",
+            "",
+            "[Install]",
+            "WantedBy=timers.target",
+            "",
+        ]
+    )
+
+
+class SystemdBackend:
+    """Reads/writes ``systemd --user`` service+timer unit pairs.
+
+    Installed under ``~/.config/systemd/user/jumar-<schedule-id>.{service,timer}``.
+    Ownership is scoped by filename (the ``jumar-`` prefix), the same way
+    ``LaunchdBackend`` scopes by its ``com.jumar.`` label — ``list``/``remove``
+    only ever touch jumar's own two files and leave unrelated units untouched.
+    """
+
+    def __init__(
+        self,
+        units_dir: Path | None = None,
+        *,
+        activate: bool | None = None,
+        runner: Any = None,
+    ) -> None:
+        self._dir = units_dir or (Path.home() / ".config" / "systemd" / "user")
+        # Writing the unit files is not enough: a .timer only fires once it is
+        # enabled, which is what creates the timers.target.wants symlink. Tests
+        # inject units_dir and get the file half only; a real install activates.
+        self._activate = (units_dir is None) if activate is None else activate
+        self._run = runner if runner is not None else subprocess.run
+
+    def _systemctl(self, *args: str, check: bool) -> None:
+        """Run ``systemctl --user <args>``; ``check`` mirrors CronBackend._write."""
+        self._run(
+            ["systemctl", "--user", *args],
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=check,
+            timeout=_SYSTEMCTL_TIMEOUT_S,
+        )
+
+    def name(self) -> str:
+        return "systemd"
+
+    def _unit_stem(self, schedule_id: str) -> str:
+        return f"jumar-{schedule_id}"
+
+    def _service_path(self, schedule_id: str) -> Path:
+        return self._dir / f"{self._unit_stem(schedule_id)}.service"
+
+    def _timer_path(self, schedule_id: str) -> Path:
+        return self._dir / f"{self._unit_stem(schedule_id)}.timer"
+
+    def add_entry(self, entry: ScheduleEntry) -> None:
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._service_path(entry.schedule_id).write_text(_format_systemd_service(entry))
+        self._timer_path(entry.schedule_id).write_text(_format_systemd_timer(entry))
+        if self._activate:
+            # check=True: a failure here must surface, not leave an inert timer
+            # that `jumar doctor` would then report as an installed schedule.
+            self._systemctl("daemon-reload", check=True)
+            self._systemctl(
+                "enable", "--now", f"{self._unit_stem(entry.schedule_id)}.timer", check=True
+            )
+
+    def list_entries(self) -> list[ScheduleEntry]:
+        if not self._dir.is_dir():
+            return []
+        entries: list[ScheduleEntry] = []
+        for service_path in sorted(self._dir.glob("jumar-*.service")):
+            try:
+                text = service_path.read_text()
+            except OSError:
+                continue
+            meta = _parse_meta_line(text)
+            if meta is None:
+                continue
+            exec_start = _service_exec_start(text)
+            try:
+                argv = shlex.split(exec_start) if exec_start else []
+            except ValueError:
+                # Unbalanced quoting in a hand-edited unit: skip the file rather
+                # than crash the whole listing.
+                continue
+            jumar_path = argv[0] if argv else ""
+            entries.append(
+                ScheduleEntry(
+                    schedule_id=str(meta.get("schedule_id", "")),
+                    cron_expr=str(meta.get("cron_expr", "")),
+                    todo_path=str(meta.get("todo_path", "")),
+                    jumar_path=jumar_path,
+                    config_path=None,
+                    timezone=str(meta.get("tz", "UTC")),
+                )
+            )
+        return entries
+
+    def remove_entry(self, schedule_id: str) -> bool:
+        service_path = self._service_path(schedule_id)
+        timer_path = self._timer_path(schedule_id)
+        found = service_path.exists() or timer_path.exists()
+        if not found:
+            return False
+        if self._activate:
+            # Disable first, while the unit still exists, so the wants-symlink
+            # goes with it; check=False because an already-disabled unit is a
+            # non-zero exit we do not care about.
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                self._systemctl(
+                    "disable", "--now", f"{self._unit_stem(schedule_id)}.timer", check=False
+                )
+        service_path.unlink(missing_ok=True)
+        timer_path.unlink(missing_ok=True)
+        if self._activate:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                self._systemctl("daemon-reload", check=False)
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Platform selection
 # ---------------------------------------------------------------------------
 
 
-def default_backend(override: str | None = None) -> CronBackend | LaunchdBackend:
+def _systemd_user_available() -> bool:
+    """True if a reachable ``systemctl --user`` session exists on this host."""
+    if not shutil.which("systemctl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-system-running"],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    # "running" and "degraded" both mean a reachable --user manager (degraded
+    # just means some unrelated unit failed); anything else (e.g. no session
+    # bus) means unavailable.
+    return result.stdout.strip() in {"running", "degraded"}
+
+
+def _autodetect_backend_name() -> str:
+    """Platform-preferred backend when no override is configured."""
+    if sys.platform == "darwin":
+        return "launchd"
+    if _systemd_user_available():
+        return "systemd"
+    return "cron"
+
+
+def default_backend(override: str | None = None) -> CronBackend | LaunchdBackend | SystemdBackend:
     """Return the platform-appropriate backend (or honour ``override``)."""
-    name = override or ("launchd" if sys.platform == "darwin" else "cron")
+    name = override or _autodetect_backend_name()
     if name == "launchd":
         return LaunchdBackend()
+    if name == "systemd":
+        return SystemdBackend()
     return CronBackend()
 
 

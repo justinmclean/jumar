@@ -254,7 +254,7 @@ class Config:
     evidence_head_bytes: int = 4000
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     commands: CommandPolicy = field(default_factory=CommandPolicy)
-    schedule_backend: str | None = None  # None = platform default (cron/launchd)
+    schedule_backend: str | None = None  # None = platform default (cron/launchd/systemd)
     # Opt-in required to use a harness that cannot express tool-level denials
     # (codex, cursor, gemini, kiro, opencode). Default False because those
     # harnesses cannot enforce the git push / gh boundary at the tool-call layer.

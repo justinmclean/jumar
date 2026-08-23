@@ -20,22 +20,29 @@ Round-trip  A fixture crontab containing unrelated entries survives add+remove
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from jumar import schedule as schedule_module
 from jumar.schedule import (
     CronBackend,
     CronExprError,
     FakeBackend,
     LaunchdBackend,
     ScheduleEntry,
+    SystemdBackend,
+    _autodetect_backend_name,
     _cron_to_launchd_sci,
+    _cron_to_oncalendar,
     _expand_cron_field,
     _insert_block,
     _jumar_executable,
+    _oncalendar_lines,
     _parse_blocks,
     _remove_block,
+    _systemd_user_available,
     add_schedule,
     default_backend,
     list_schedules,
@@ -781,3 +788,323 @@ class TestGsdExecutable:
         result = _jumar_executable()
         assert isinstance(result, str)
         assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# _cron_to_oncalendar
+# ---------------------------------------------------------------------------
+
+
+class TestCronToOnCalendar:
+    def test_specific_time_daily(self) -> None:
+        oncal = _cron_to_oncalendar("30 8 * * *", "UTC")
+        assert oncal == "*-*-* 08:30:00 UTC"
+
+    def test_weekdays(self) -> None:
+        oncal = _cron_to_oncalendar("0 9 * * 1-5", "America/Los_Angeles")
+        assert oncal.startswith("Mon,Tue,Wed,Thu,Fri ")
+        assert oncal.endswith("America/Los_Angeles")
+        assert "09:00:00" in oncal
+
+    def test_first_of_month(self) -> None:
+        oncal = _cron_to_oncalendar("0 0 1 * *", "UTC")
+        assert oncal == "*-*-01 00:00:00 UTC"
+
+    def test_timezone_always_appended(self) -> None:
+        assert _cron_to_oncalendar("0 9 * * *", "Europe/Berlin").endswith("Europe/Berlin")
+
+    def test_invalid_expression_falls_back(self) -> None:
+        oncal = _cron_to_oncalendar("not valid", "UTC")
+        assert oncal == "*-*-* *:*:00 UTC"
+
+
+# ---------------------------------------------------------------------------
+# SystemdBackend
+# ---------------------------------------------------------------------------
+
+
+class TestSystemdBackend:
+    def test_add_creates_service_and_timer(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry()
+        backend.add_entry(entry)
+        service = tmp_path / f"jumar-{entry.schedule_id}.service"
+        timer = tmp_path / f"jumar-{entry.schedule_id}.timer"
+        assert service.exists()
+        assert timer.exists()
+
+    def test_list_returns_installed_entry(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(schedule_id="test1234", timezone="UTC")
+        backend.add_entry(entry)
+        entries = backend.list_entries()
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.schedule_id == "test1234"
+        assert e.cron_expr == entry.cron_expr
+        assert e.todo_path == entry.todo_path
+        assert e.timezone == "UTC"
+
+    def test_list_nonexistent_dir_returns_empty(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path / "nonexistent")
+        assert backend.list_entries() == []
+
+    def test_remove_deletes_both_files(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry()
+        backend.add_entry(entry)
+        found = backend.remove_entry(entry.schedule_id)
+        assert found
+        assert not (tmp_path / f"jumar-{entry.schedule_id}.service").exists()
+        assert not (tmp_path / f"jumar-{entry.schedule_id}.timer").exists()
+
+    def test_remove_not_found_returns_false(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        assert not backend.remove_entry("nonexistent-id")
+
+    def test_name(self, tmp_path: Path) -> None:
+        assert SystemdBackend(units_dir=tmp_path).name() == "systemd"
+
+    def test_list_multiple_entries(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        e1 = _make_entry(schedule_id="aa111111", cron_expr="0 8 * * *")
+        e2 = _make_entry(schedule_id="bb222222", cron_expr="0 9 * * *")
+        backend.add_entry(e1)
+        backend.add_entry(e2)
+        entries = backend.list_entries()
+        ids = {e.schedule_id for e in entries}
+        assert ids == {"aa111111", "bb222222"}
+
+    def test_exec_start_absolute_and_non_interactive(self, tmp_path: Path) -> None:
+        """AC10.3: installed command carries absolute jumar path and --non-interactive."""
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry()
+        backend.add_entry(entry)
+        service_text = (tmp_path / f"jumar-{entry.schedule_id}.service").read_text()
+        assert "ExecStart=" in service_text
+        assert entry.jumar_path in service_text
+        assert entry.todo_path in service_text
+        assert "--non-interactive" in service_text
+
+    def test_timezone_recorded_in_timer(self, tmp_path: Path) -> None:
+        """AC10.9: resolved timezone recorded on the installed timer unit."""
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(timezone="Asia/Tokyo")
+        backend.add_entry(entry)
+        timer_text = (tmp_path / f"jumar-{entry.schedule_id}.timer").read_text()
+        assert "Asia/Tokyo" in timer_text
+        entries = backend.list_entries()
+        assert entries[0].timezone == "Asia/Tokyo"
+
+    def test_unrelated_units_survive_add_and_remove(self, tmp_path: Path) -> None:
+        """AC10.2 analogue: remove touches only jumar's own two files."""
+        unrelated_service = tmp_path / "some-other-app.service"
+        unrelated_service.write_text("[Unit]\nDescription=not jumar\n")
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry()
+        backend.add_entry(entry)
+        backend.remove_entry(entry.schedule_id)
+        assert unrelated_service.read_text() == "[Unit]\nDescription=not jumar\n"
+        assert list_schedules(backend) == []
+
+    def test_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+        """AC10.1: dry-run never touches the systemd unit directory."""
+        backend = SystemdBackend(units_dir=tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+            dry_run=True,
+        )
+        assert backend.list_entries() == []
+        assert list(tmp_path.glob("jumar-*")) == []
+
+
+# ---------------------------------------------------------------------------
+# _systemd_user_available / _autodetect_backend_name / default_backend
+# ---------------------------------------------------------------------------
+
+
+class TestOnCalendarLines:
+    def test_single_line_for_ordinary_expression(self) -> None:
+        assert _oncalendar_lines("0 9 * * *", "UTC") == ["*-*-* 09:00:00 UTC"]
+
+    def test_single_line_when_only_weekday_is_restricted(self) -> None:
+        assert _oncalendar_lines("0 9 * * 1-5", "UTC") == ["Mon,Tue,Wed,Thu,Fri *-*-* 09:00:00 UTC"]
+
+    def test_dom_and_dow_both_restricted_becomes_two_lines(self) -> None:
+        """Cron ORs day-of-month with day-of-week; a systemd calendar spec ANDs
+        its weekday prefix with its date part. '0 9 1 * 1' means the 1st of the
+        month OR any Monday, so it needs two OnCalendar= values — one per field
+        with the other widened — which systemd then ORs back together."""
+        lines = _oncalendar_lines("0 9 1 * 1", "UTC")
+        assert lines == ["*-*-01 09:00:00 UTC", "Mon *-*-* 09:00:00 UTC"]
+
+    def test_timer_unit_carries_every_oncalendar_line(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(cron_expr="0 9 1 * 1", timezone="UTC")
+        backend.add_entry(entry)
+        timer_text = (tmp_path / f"jumar-{entry.schedule_id}.timer").read_text()
+        oncal = [ln for ln in timer_text.splitlines() if ln.startswith("OnCalendar=")]
+        assert oncal == ["OnCalendar=*-*-01 09:00:00 UTC", "OnCalendar=Mon *-*-* 09:00:00 UTC"]
+
+
+class _FakeSystemctl:
+    """Records the systemctl argv the backend runs, in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv: list[str], **_kw: object) -> None:
+        self.calls.append(list(argv))
+
+
+class TestSystemdActivation:
+    """Writing the unit files does not schedule anything: a .timer only fires
+    once `systemctl --user enable` has created its timers.target.wants symlink.
+    Install must activate, and remove must deactivate while the unit still
+    exists."""
+
+    def test_add_enables_the_timer(self, tmp_path: Path) -> None:
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=fake)
+        entry = _make_entry(schedule_id="act11111")
+        backend.add_entry(entry)
+        assert fake.calls == [
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "enable", "--now", "jumar-act11111.timer"],
+        ]
+
+    def test_remove_disables_before_deleting_the_units(self, tmp_path: Path) -> None:
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=fake)
+        entry = _make_entry(schedule_id="act22222")
+        backend.add_entry(entry)
+        fake.calls.clear()
+
+        seen_while_disabling: list[bool] = []
+
+        def _record(argv: list[str], **_kw: object) -> None:
+            if "disable" in argv:
+                seen_while_disabling.append((tmp_path / "jumar-act22222.timer").exists())
+            fake.calls.append(list(argv))
+
+        backend._run = _record
+        assert backend.remove_entry("act22222")
+        assert fake.calls == [
+            ["systemctl", "--user", "disable", "--now", "jumar-act22222.timer"],
+            ["systemctl", "--user", "daemon-reload"],
+        ]
+        assert seen_while_disabling == [True]
+        assert not (tmp_path / "jumar-act22222.timer").exists()
+
+    def test_remove_of_unknown_id_touches_nothing(self, tmp_path: Path) -> None:
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=fake)
+        assert not backend.remove_entry("nope1234")
+        assert fake.calls == []
+
+    def test_injected_units_dir_defaults_to_no_activation(self, tmp_path: Path) -> None:
+        """The existing fake-filesystem suite must stay hermetic: passing a
+        units_dir with no explicit activate= runs no subprocess at all."""
+        fake = _FakeSystemctl()
+        backend = SystemdBackend(units_dir=tmp_path, runner=fake)
+        entry = _make_entry(schedule_id="act33333")
+        backend.add_entry(entry)
+        backend.remove_entry("act33333")
+        assert fake.calls == []
+
+    def test_a_failed_enable_surfaces(self, tmp_path: Path) -> None:
+        """An install that cannot arm the timer must raise, not leave an inert
+        unit that `jumar doctor` would report as an installed schedule."""
+
+        def _boom(argv: list[str], **kw: object) -> None:
+            if "enable" in argv:
+                raise subprocess.CalledProcessError(1, argv)
+
+        backend = SystemdBackend(units_dir=tmp_path, activate=True, runner=_boom)
+        with pytest.raises(subprocess.CalledProcessError):
+            backend.add_entry(_make_entry(schedule_id="act44444"))
+
+
+class TestSystemdUserAvailable:
+    def test_no_systemctl_on_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.shutil, "which", lambda _name: None)
+        assert not _systemd_user_available()
+
+    def test_systemctl_running(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.shutil, "which", lambda _name: "/usr/bin/systemctl")
+
+        class _Result:
+            stdout = "running\n"
+
+        monkeypatch.setattr(
+            schedule_module.subprocess,
+            "run",
+            lambda *a, **kw: _Result(),  # noqa: ARG005
+        )
+        assert _systemd_user_available()
+
+    def test_systemctl_degraded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.shutil, "which", lambda _name: "/usr/bin/systemctl")
+
+        class _Result:
+            stdout = "degraded\n"
+
+        monkeypatch.setattr(
+            schedule_module.subprocess,
+            "run",
+            lambda *a, **kw: _Result(),  # noqa: ARG005
+        )
+        assert _systemd_user_available()
+
+    def test_systemctl_unreachable_output(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.shutil, "which", lambda _name: "/usr/bin/systemctl")
+
+        class _Result:
+            stdout = "offline\n"
+
+        monkeypatch.setattr(
+            schedule_module.subprocess,
+            "run",
+            lambda *a, **kw: _Result(),  # noqa: ARG005
+        )
+        assert not _systemd_user_available()
+
+    def test_systemctl_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.shutil, "which", lambda _name: "/usr/bin/systemctl")
+
+        def _raise(*_a: object, **_kw: object) -> None:
+            raise OSError("no session bus")
+
+        monkeypatch.setattr(schedule_module.subprocess, "run", _raise)
+        assert not _systemd_user_available()
+
+
+class TestAutodetectBackendName:
+    def test_darwin_prefers_launchd(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.sys, "platform", "darwin")
+        assert _autodetect_backend_name() == "launchd"
+
+    def test_linux_prefers_systemd_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.sys, "platform", "linux")
+        monkeypatch.setattr(schedule_module, "_systemd_user_available", lambda: True)
+        assert _autodetect_backend_name() == "systemd"
+
+    def test_linux_falls_back_to_cron(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module.sys, "platform", "linux")
+        monkeypatch.setattr(schedule_module, "_systemd_user_available", lambda: False)
+        assert _autodetect_backend_name() == "cron"
+
+
+class TestDefaultBackendSystemd:
+    def test_override_systemd(self) -> None:
+        assert isinstance(default_backend("systemd"), SystemdBackend)
+
+    def test_no_override_uses_autodetect(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(schedule_module, "_autodetect_backend_name", lambda: "systemd")
+        assert isinstance(default_backend(), SystemdBackend)
