@@ -138,6 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan_p.add_argument("--todo", default=None, metavar="PATH", help="Override the todo file path.")
     plan_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
+    )
+    plan_p.add_argument(
         "--json",
         action="store_true",
         help="Emit the plan result as a JSON document on stdout (warnings still go to stderr).",
@@ -146,6 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     # run — gate flags introduced in Phase 2 (gate-modes work item)
     run_p = subs.add_parser("run", help="Run the next eligible todo item.")
     run_p.add_argument("--todo", default=None, metavar="PATH", help="Override the todo file path.")
+    run_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
+    )
     _mode_group = run_p.add_mutually_exclusive_group()
     _mode_group.add_argument(
         "--dry-run",
@@ -244,11 +250,17 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p.add_argument(
         "--todo", default=None, metavar="PATH", help="Override the todo file path."
     )
+    doctor_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
+    )
 
     # status
     status_p = subs.add_parser("status", help="Show item-centric status across all runs.")
     status_p.add_argument(
         "--todo", default=None, metavar="PATH", help="Override the todo file path."
+    )
+    status_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
     status_p.add_argument(
         "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
@@ -298,7 +310,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         return 2
 
     from .clock import capture_now, make_run_id
-    from .config import load_config
+    from .config import ConfigError, load_config
     from .ingest import IngestError, ingest
     from .journal import RUN_STARTED, Journal
     from .report import (
@@ -314,7 +326,12 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     cli_overrides: dict[str, object] = {}
     if args.todo:
         cli_overrides["todo_path"] = args.todo
-    config = load_config(cli_overrides=cli_overrides or None)
+    config_path = Path(args.config) if getattr(args, "config", None) else None
+    try:
+        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     now = capture_now(config)
     run_id = make_run_id(now)
@@ -730,13 +747,18 @@ def _cmd_run(
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    from .config import load_config
+    from .config import ConfigError, load_config
     from .lock import AlreadyRunning, Lock
 
     cli_overrides: dict[str, object] = {}
     if getattr(args, "todo", None):
         cli_overrides["todo_path"] = args.todo
-    config = load_config(cli_overrides=cli_overrides or None)
+    config_path = Path(args.config) if getattr(args, "config", None) else None
+    try:
+        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     try:
         check_harness_policy(
@@ -1271,7 +1293,8 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
             return 0
         for e in entries:
             print(
-                f"  id={e.schedule_id}  cron={e.cron_expr!r}  tz={e.timezone}  todo={e.todo_path}"
+                f"  id={e.schedule_id}  cron={e.cron_expr!r}  tz={e.timezone}  "
+                f"todo={e.todo_path}  work_dir={e.work_dir or '(none)'}"
             )
         return 0
 
@@ -1294,13 +1317,18 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Implement ``jumar doctor``."""
-    from .config import load_config
+    from .config import ConfigError, load_config
     from .doctor import format_report, run_doctor
 
     cli_overrides: dict[str, object] = {}
     if getattr(args, "todo", None):
         cli_overrides["todo_path"] = args.todo
-    config = load_config(cli_overrides=cli_overrides or None)
+    config_path = Path(args.config) if getattr(args, "config", None) else None
+    try:
+        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     report = run_doctor(config)
     print(format_report(report))
@@ -1318,13 +1346,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
     Read-only: never creates a run directory.  Exit 0 always.
     """
     from .clock import capture_now
-    from .config import load_config
+    from .config import ConfigError, load_config
     from .status import build_status, format_status, format_status_json
 
     cli_overrides: dict[str, object] = {}
     if getattr(args, "todo", None):
         cli_overrides["todo_path"] = args.todo
-    config = load_config(cli_overrides=cli_overrides or None)
+    config_path = Path(args.config) if getattr(args, "config", None) else None
+    try:
+        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     now = capture_now(config)
     todo_path = Path(config.todo_path)

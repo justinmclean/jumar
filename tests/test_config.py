@@ -13,6 +13,7 @@ from jumar.config import (
     Capability,
     CommandPolicy,
     Config,
+    ConfigError,
     HarnessConfig,
     is_allowed,
     load_config,
@@ -253,6 +254,68 @@ def test_cli_overrides_win_over_defaults(tmp_path: Path) -> None:
 def test_cli_override_todo_path(tmp_path: Path) -> None:
     cfg = load_config(tmp_path, cli_overrides={"todo_path": "custom.md"})
     assert cfg.todo_path == "custom.md"
+
+
+# ---------------------------------------------------------------------------
+# load_config — explicit config_path (W8: --config, cwd-independent)
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_config_path_ignores_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit config_path is read regardless of root/cwd — the seam a
+    scheduled run needs, since its invocation cwd is not the project dir."""
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg_file = project / "jumar.toml"
+    _write(cfg_file, "[jumar]\nmax_subtasks = 7\n")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    cfg = load_config(config_path=cfg_file)
+    assert cfg.max_subtasks == 7
+
+
+def test_explicit_config_path_overrides_root_search(tmp_path: Path) -> None:
+    """config_path wins even when root also has its own jumar.toml."""
+    _write(tmp_path / "jumar.toml", "[jumar]\nmax_subtasks = 1\n")
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other_cfg = other_dir / "jumar.toml"
+    _write(other_cfg, "[jumar]\nmax_subtasks = 2\n")
+
+    cfg = load_config(tmp_path, config_path=other_cfg)
+    assert cfg.max_subtasks == 2
+
+
+def test_explicit_config_path_missing_raises_config_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError):
+        load_config(config_path=tmp_path / "does-not-exist.toml")
+
+
+def test_explicit_pyproject_config_path(tmp_path: Path) -> None:
+    """A pyproject.toml named explicitly is read as [tool.jumar], not [jumar]."""
+    cfg_file = tmp_path / "pyproject.toml"
+    _write(
+        cfg_file,
+        """\
+        [project]
+        name = "myproject"
+
+        [tool.jumar]
+        max_repairs = 9
+    """,
+    )
+    cfg = load_config(config_path=cfg_file)
+    assert cfg.max_repairs == 9
+
+
+def test_explicit_config_path_cli_overrides_still_win(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "jumar.toml"
+    _write(cfg_file, "[jumar]\nmax_subtasks = 7\n")
+    cfg = load_config(config_path=cfg_file, cli_overrides={"max_subtasks": 20})
+    assert cfg.max_subtasks == 20
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,12 @@ class ScheduleEntry:
     jumar_path: str
     config_path: str | None
     timezone: str
+    # The directory the installed entry runs from — the config file's
+    # directory when one was given, else the todo file's directory. Pinning
+    # this is what makes cwd-relative resolution (jumar.toml lookup, `runs/`
+    # creation) behave the same under a scheduler as it does interactively
+    # (W8). "" only for hand-built entries that predate this field.
+    work_dir: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +188,19 @@ def _format_cron_block(entry: ScheduleEntry) -> str:
         "cron_expr": entry.cron_expr,
         "tz": entry.timezone,
         "todo_path": entry.todo_path,
+        "work_dir": entry.work_dir,
     }
     meta_line = _META_PREFIX + json.dumps(meta, separators=(",", ":"))
     cmd = " ".join(_build_command(entry))
+    # crontab has no separate "working directory" clause; cron always hands
+    # the remainder of the line to /bin/sh -c itself, so a leading `cd &&` is
+    # consistent with cron's own execution model rather than a new shell
+    # escape hatch of jumar's own (AGENTS.md's argv/shell=False rule is about
+    # jumar's own subprocess dispatches, not the text of an installed cron
+    # line). Without it, a scheduled run's cwd is whatever cron's own default
+    # is — unrelated to the project — and jumar.toml/`runs/` resolve wrongly.
+    if entry.work_dir:
+        cmd = f"cd {shlex.quote(entry.work_dir)} && {cmd}"
     cron_line = f"{entry.cron_expr} {cmd}"
     return "\n".join(
         [
@@ -264,6 +280,7 @@ def _parse_blocks(text: str) -> list[ScheduleEntry]:
                     jumar_path=jumar_path,
                     config_path=None,
                     timezone=str(meta_data.get("tz", "UTC")),
+                    work_dir=str(meta_data.get("work_dir", "")),
                 )
             )
             i = j + 1  # skip the close marker line
@@ -465,8 +482,14 @@ class LaunchdBackend:
                 "GSD_CRON_EXPR": entry.cron_expr,
                 "GSD_TODO_PATH": entry.todo_path,
                 "GSD_TIMEZONE": entry.timezone,
+                "GSD_WORK_DIR": entry.work_dir,
             },
         }
+        # launchd's native chdir equivalent — without it, a launchd-invoked
+        # agent's cwd is "/" (W8): jumar.toml lookup and `runs/` creation both
+        # land in the wrong place.
+        if entry.work_dir:
+            plist_data["WorkingDirectory"] = entry.work_dir
         with self._plist_path(entry.schedule_id).open("wb") as fh:
             plistlib.dump(plist_data, fh)
 
@@ -488,6 +511,7 @@ class LaunchdBackend:
                         jumar_path=argv[0] if argv else "",
                         config_path=None,
                         timezone=env.get("GSD_TIMEZONE", "UTC"),
+                        work_dir=env.get("GSD_WORK_DIR", ""),
                     )
                 )
             except Exception:
@@ -594,21 +618,25 @@ def _format_systemd_service(entry: ScheduleEntry) -> str:
         "cron_expr": entry.cron_expr,
         "tz": entry.timezone,
         "todo_path": entry.todo_path,
+        "work_dir": entry.work_dir,
     }
     meta_line = _META_PREFIX + json.dumps(meta, separators=(",", ":"))
     exec_start = " ".join(shlex.quote(a) for a in _build_command(entry))
-    return "\n".join(
-        [
-            meta_line,
-            "[Unit]",
-            f"Description=jumar scheduled run ({entry.schedule_id})",
-            "",
-            "[Service]",
-            "Type=oneshot",
-            f"ExecStart={exec_start}",
-            "",
-        ]
-    )
+    lines = [
+        meta_line,
+        "[Unit]",
+        f"Description=jumar scheduled run ({entry.schedule_id})",
+        "",
+        "[Service]",
+        "Type=oneshot",
+    ]
+    # WorkingDirectory= is systemd's native chdir; without it a --user unit's
+    # cwd defaults to the user's home directory (W8), unrelated to the project.
+    if entry.work_dir:
+        lines.append(f"WorkingDirectory={entry.work_dir}")
+    lines.append(f"ExecStart={exec_start}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _format_systemd_timer(entry: ScheduleEntry) -> str:
@@ -720,6 +748,7 @@ class SystemdBackend:
                     jumar_path=jumar_path,
                     config_path=None,
                     timezone=str(meta.get("tz", "UTC")),
+                    work_dir=str(meta.get("work_dir", "")),
                 )
             )
         return entries
@@ -806,19 +835,22 @@ def _jumar_executable() -> str:
 def show_entry(entry: ScheduleEntry) -> str:
     """Return a human-readable preview of an entry (printed before install)."""
     cmd = " ".join(_build_command(entry))
-    return "\n".join(
-        [
-            f"Schedule ID : {entry.schedule_id}",
-            f"Timezone    : {entry.timezone}",
-            f"Cron expr   : {entry.cron_expr}",
-            f"Todo file   : {entry.todo_path}",
-            f"Command     : {cmd}",
-            "",
-            "--- crontab entry (or equivalent) ---",
-            _format_cron_block(entry),
-            "--------------------------------------",
-        ]
-    )
+    lines = [
+        f"Schedule ID : {entry.schedule_id}",
+        f"Timezone    : {entry.timezone}",
+        f"Cron expr   : {entry.cron_expr}",
+        f"Todo file   : {entry.todo_path}",
+    ]
+    if entry.work_dir:
+        lines.append(f"Work dir    : {entry.work_dir}")
+    lines += [
+        f"Command     : {cmd}",
+        "",
+        "--- crontab entry (or equivalent) ---",
+        _format_cron_block(entry),
+        "--------------------------------------",
+    ]
+    return "\n".join(lines)
 
 
 def add_schedule(
@@ -841,13 +873,22 @@ def add_schedule(
     validate_cron(cron_expr)
 
     sid = schedule_id or uuid.uuid4().hex[:8]
+    resolved_todo = Path(todo_path).resolve()
+    resolved_config = Path(config_path).resolve() if config_path else None
+    # Pin cwd to the config file's directory when one is given, else the todo
+    # file's directory — the same directory a human would `cd` into before
+    # running jumar interactively. This is what makes cwd-relative resolution
+    # (jumar.toml lookup when --config is absent, `runs/` creation) behave the
+    # same whether the entry fires from a scheduler or a terminal (W8).
+    work_dir = str(resolved_config.parent if resolved_config else resolved_todo.parent)
     entry = ScheduleEntry(
         schedule_id=sid,
         cron_expr=cron_expr,
-        todo_path=str(Path(todo_path).resolve()),
+        todo_path=str(resolved_todo),
         jumar_path=jumar_path or _jumar_executable(),
-        config_path=str(Path(config_path).resolve()) if config_path else None,
+        config_path=str(resolved_config) if resolved_config else None,
         timezone=timezone,
+        work_dir=work_dir,
     )
 
     print(show_entry(entry))
