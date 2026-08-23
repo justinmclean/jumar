@@ -8,6 +8,7 @@ Public API
 ----------
 ScheduleEntry       – data shape for one installed schedule.
 CronExprError       – raised for invalid cron expressions (names the field).
+ScheduleIdError     – raised for a schedule_id that breaks [a-z0-9-]{1,32}.
 FakeBackend         – in-memory backend for tests.
 CronBackend         – reads/writes via ``crontab -l`` / ``crontab -``.
 LaunchdBackend      – reads/writes ``~/Library/LaunchAgents/`` plist files.
@@ -49,6 +50,7 @@ class ScheduleEntry:
     jumar_path: str
     config_path: str | None
     timezone: str
+    log_path: str
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,29 @@ class CronExprError(ValueError):
     def __init__(self, message: str, *, field: str) -> None:
         super().__init__(message)
         self.field = field
+
+
+# ---------------------------------------------------------------------------
+# schedule_id validation
+# ---------------------------------------------------------------------------
+
+# The id is embedded verbatim in a crontab comment marker, a launchd label,
+# and a systemd unit filename. Restricting it to this charset is what keeps
+# it from being able to break out of any of those three contexts.
+_SCHEDULE_ID_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+class ScheduleIdError(ValueError):
+    """A ``schedule_id`` does not match ``[a-z0-9-]{1,32}``."""
+
+
+def _validate_schedule_id(schedule_id: str) -> None:
+    if not _SCHEDULE_ID_RE.match(schedule_id):
+        raise ScheduleIdError(
+            f"schedule_id {schedule_id!r} must match [a-z0-9-]{{1,32}} — it is "
+            "embedded in the crontab/plist/unit marker used to find and remove "
+            "this entry"
+        )
 
 
 def _cron_parse_int(val: str, fname: str, lo: int, hi: int) -> int:
@@ -175,6 +200,18 @@ def _build_command(entry: ScheduleEntry) -> list[str]:
     return cmd
 
 
+def _log_path_for(todo_path: str | Path, schedule_id: str) -> str:
+    """Return the log file every firing of one schedule appends to.
+
+    One installed entry fires many times and no run id exists until the
+    process starts, so the log lives at the schedule level rather than under
+    a specific ``runs/<run-id>/`` directory. It sits next to the todo file's
+    own ``runs/`` directory, mirroring that layout — "Output goes to the
+    journal, not to mail" (specs/02-functional-spec.md, Stage 10).
+    """
+    return str(Path(todo_path).resolve().parent / "runs" / f"schedule-{schedule_id}.log")
+
+
 def _format_cron_block(entry: ScheduleEntry) -> str:
     """Return the full crontab block for one entry, including markers."""
     meta = {
@@ -182,10 +219,18 @@ def _format_cron_block(entry: ScheduleEntry) -> str:
         "cron_expr": entry.cron_expr,
         "tz": entry.timezone,
         "todo_path": entry.todo_path,
+        "log_path": entry.log_path,
     }
     meta_line = _META_PREFIX + json.dumps(meta, separators=(",", ":"))
     cmd = " ".join(_build_command(entry))
-    cron_line = f"{entry.cron_expr} {cmd}"
+    # cron interprets its own line through /bin/sh regardless of what jumar
+    # writes into it (unlike jumar's own subprocess dispatch, which is always
+    # argv/shell=False) — this redirect is the same kind of text a hand-written
+    # crontab entry already carries, e.g. the fixture in tests. schedule_id is
+    # restricted to [a-z0-9-]{1,32} so it cannot break out of the line, and the
+    # log path itself is still quoted defensively.
+    redirect = f">> {shlex.quote(entry.log_path)} 2>&1"
+    cron_line = f"{entry.cron_expr} {cmd} {redirect}"
     return "\n".join(
         [
             _open_marker(entry.schedule_id),
@@ -264,6 +309,7 @@ def _parse_blocks(text: str) -> list[ScheduleEntry]:
                     jumar_path=jumar_path,
                     config_path=None,
                     timezone=str(meta_data.get("tz", "UTC")),
+                    log_path=str(meta_data.get("log_path", "")),
                 )
             )
             i = j + 1  # skip the close marker line
@@ -459,6 +505,10 @@ class LaunchdBackend:
             "Label": f"com.jumar.{entry.schedule_id}",
             "ProgramArguments": _build_command(entry),
             "StartCalendarInterval": sci,
+            # launchd redirects the agent's own stdout/stderr for us — no
+            # shell needed, unlike cron's line-level redirect.
+            "StandardOutPath": entry.log_path,
+            "StandardErrorPath": entry.log_path,
             # Metadata stored for list/remove/show.
             "EnvironmentVariables": {
                 "GSD_SCHEDULE_ID": entry.schedule_id,
@@ -488,6 +538,7 @@ class LaunchdBackend:
                         jumar_path=argv[0] if argv else "",
                         config_path=None,
                         timezone=env.get("GSD_TIMEZONE", "UTC"),
+                        log_path=str(data.get("StandardOutPath", "")),
                     )
                 )
             except Exception:
@@ -568,6 +619,7 @@ def _oncalendar_lines(cron_expr: str, timezone: str) -> list[str]:
 
 
 _EXEC_START_RE = re.compile(r"^ExecStart=(.*)$")
+_STDOUT_RE = re.compile(r"^StandardOutput=append:(.*)$")
 
 
 def _parse_meta_line(text: str) -> dict[str, Any] | None:
@@ -587,6 +639,14 @@ def _service_exec_start(text: str) -> str | None:
     return None
 
 
+def _service_log_path(text: str) -> str:
+    for line in text.splitlines():
+        m = _STDOUT_RE.match(line)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _format_systemd_service(entry: ScheduleEntry) -> str:
     """Return the ``.service`` unit text for one entry (meta line + argv)."""
     meta = {
@@ -597,6 +657,7 @@ def _format_systemd_service(entry: ScheduleEntry) -> str:
     }
     meta_line = _META_PREFIX + json.dumps(meta, separators=(",", ":"))
     exec_start = " ".join(shlex.quote(a) for a in _build_command(entry))
+    log_target = f"append:{entry.log_path}"
     return "\n".join(
         [
             meta_line,
@@ -606,6 +667,8 @@ def _format_systemd_service(entry: ScheduleEntry) -> str:
             "[Service]",
             "Type=oneshot",
             f"ExecStart={exec_start}",
+            f"StandardOutput={log_target}",
+            f"StandardError={log_target}",
             "",
         ]
     )
@@ -720,6 +783,7 @@ class SystemdBackend:
                     jumar_path=jumar_path,
                     config_path=None,
                     timezone=str(meta.get("tz", "UTC")),
+                    log_path=_service_log_path(text),
                 )
             )
         return entries
@@ -813,6 +877,7 @@ def show_entry(entry: ScheduleEntry) -> str:
             f"Cron expr   : {entry.cron_expr}",
             f"Todo file   : {entry.todo_path}",
             f"Command     : {cmd}",
+            f"Log path    : {entry.log_path}",
             "",
             "--- crontab entry (or equivalent) ---",
             _format_cron_block(entry),
@@ -841,18 +906,26 @@ def add_schedule(
     validate_cron(cron_expr)
 
     sid = schedule_id or uuid.uuid4().hex[:8]
+    _validate_schedule_id(sid)
+
+    resolved_todo = str(Path(todo_path).resolve())
     entry = ScheduleEntry(
         schedule_id=sid,
         cron_expr=cron_expr,
-        todo_path=str(Path(todo_path).resolve()),
+        todo_path=resolved_todo,
         jumar_path=jumar_path or _jumar_executable(),
         config_path=str(Path(config_path).resolve()) if config_path else None,
         timezone=timezone,
+        log_path=_log_path_for(resolved_todo, sid),
     )
 
     print(show_entry(entry))
 
     if not dry_run:
+        # The log directory must exist before the entry ever fires — cron's
+        # own ``>>`` redirect (and launchd/systemd's log paths) will not
+        # create missing parent directories.
+        Path(entry.log_path).parent.mkdir(parents=True, exist_ok=True)
         b: Backend = backend or default_backend()
         b.add_entry(entry)
 

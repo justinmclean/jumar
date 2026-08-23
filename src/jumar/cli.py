@@ -1220,6 +1220,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
     from .config import load_config
     from .schedule import (
         CronExprError,
+        ScheduleIdError,
         add_schedule,
         default_backend,
         list_schedules,
@@ -1247,6 +1248,9 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
         except CronExprError as exc:
             print(f"error: invalid cron expression ({exc.field}): {exc}", file=sys.stderr)
             return 1
+        except ScheduleIdError as exc:
+            print(f"error: invalid schedule id: {exc}", file=sys.stderr)
+            return 1
         return 0
 
     if sub == "show":
@@ -1262,6 +1266,9 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
         except CronExprError as exc:
             print(f"error: invalid cron expression ({exc.field}): {exc}", file=sys.stderr)
             return 1
+        except ScheduleIdError as exc:
+            print(f"error: invalid schedule id: {exc}", file=sys.stderr)
+            return 1
         return 0
 
     if sub == "list":
@@ -1271,7 +1278,8 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
             return 0
         for e in entries:
             print(
-                f"  id={e.schedule_id}  cron={e.cron_expr!r}  tz={e.timezone}  todo={e.todo_path}"
+                f"  id={e.schedule_id}  cron={e.cron_expr!r}  tz={e.timezone}  "
+                f"todo={e.todo_path}  log={e.log_path}"
             )
         return 0
 
