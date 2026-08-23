@@ -96,8 +96,10 @@ human/`update`-beat fix, no `src/jumar/` change implied):
 ## Work items (priority order)
 
 Phases 15 and 16 (L1, W1–W4) are **done** — see What's been built. Phase 17
-below is this pass's new material. W5 (halt-on-fail) remains decision-gated
-and stays last, same convention as before.
+below is this pass's new material: W6–W7 from the spec-vs-code read, and
+W8–W12 found in first real use of the `openai` harness on a scheduled-sweep
+todo file (2026-08-23). W5 (halt-on-fail) remains decision-gated and stays
+last, same convention as before.
 
 ### Phase 17 — spec-vs-code reconciliation (2026-08-23 pass)
 
@@ -163,6 +165,150 @@ W7. **test-due-field-inertness** — `specs/03-data-model.md` and
    verify/repair" requirement in `specs/03-data-model.md` and
    `specs/04-technical-plan.md`.
    *Branch slug:* `test-due-field-inertness`
+
+W8. **scheduled-run-config-resolution** — `jumar schedule` cannot currently
+   install a working entry for any config that is not in the invoking cwd.
+   Two defects compound, both confirmed by direct read:
+   - `_build_command()` (`schedule.py:170`) appends `--config <path>` to
+     `jumar run --todo <path> --non-interactive`, but `run_p` in `cli.py:147`
+     defines no `--config` argument (only `schedule add`/`schedule show` do,
+     `cli.py:214`/`cli.py:239`). Every firing of an entry installed with
+     `--config` exits 2 with `unrecognized arguments`, into the scheduler's
+     log where nothing looks. `schedule add` accepts the flag without warning.
+   - Dropping the flag does not help: no backend sets a working directory
+     (launchd `add_entry` writes `ProgramArguments`/`EnvironmentVariables`
+     with no `WorkingDirectory`; the cron line and systemd `ExecStart` are
+     bare invocations). `load_config()` (`config.py:287`) takes no path and
+     `_load_raw()` reads `Path.cwd()/jumar.toml` with no upward search, so a
+     scheduled run finds no config and silently uses built-in defaults —
+     `agent = "claude"`, `todo_path = "todo.md"`. Not an error: the wrong
+     harness against a file that is not there.
+
+   Shape: `--config PATH` on `run`, `plan`, `doctor` and `status`, threaded
+   into `load_config()` as an explicit root (or file path) rather than cwd;
+   and every backend's installed entry pinned to a working directory. Same
+   seam as W6 — both are `_build_command()` plus each backend's `add_entry`.
+
+   *Validation:* `make check` + `pytest tests/test_schedule.py tests/test_cli.py -q`,
+   extended with: the argv built by `_build_command()` asserted to parse
+   clean through `cli.py`'s argparse (the assertion that would have caught
+   this); each backend asserted to pin a working directory; `load_config`
+   honouring an explicit path with no dependence on cwd.
+   *Closes:* nothing in the specs — this is code-vs-code, a flag one module
+   emits and another rejects.
+   *Branch slug:* `scheduled-run-config-resolution`
+
+W9. **decompose-failure-mode-distinction** — `decompose.py:486` parses only
+   when `result.exit_status == 0 and not result.timed_out`, and every other
+   path falls to the same branch: `subtasks, rejection, detail = (), "parse_error",
+   "response is not valid JSON"`. So a harness that timed out, one that
+   returned an empty body, and one that returned genuine malformed JSON are
+   indistinguishable — in the progress line, in `PLAN_REJECTED`, and in
+   `agent_stdout_head` (empty for the first two). `detect_harness_error()`
+   returns `None` for timeouts by design (`harness.py:171`, documented as
+   such), so nothing else picks them up either. On the `openai` harness this
+   is the common case, not an edge: `openai_agent.py:364` reads only
+   `message["content"]`, and a model that answers into `reasoning_content`
+   with empty `content` returns `exit_status=0` and an empty stdout — a
+   successful call that said nothing, reported as bad JSON.
+
+   Shape: distinct rejection reasons for timed-out, empty-response and
+   unparseable-response, carried into the journal payload and the progress
+   line; `openai_agent` to report an empty assistant message as its own
+   condition rather than a silent success. Whether to fall back to
+   `reasoning_content` is a separate question and not part of this item.
+
+   *Validation:* `make check` + `pytest tests/test_decompose.py -q`, extended
+   with: a runner stub returning `timed_out=True`, one returning
+   `exit_status=0` with empty stdout, and one returning prose, each asserted
+   to journal a distinct reason.
+   *Closes:* nothing in the specs; a diagnosability defect found in use.
+   *Branch slug:* `decompose-failure-mode-distinction`
+
+W10. **authored-check-pinning (`@check=`)** — `specs/02-functional-spec.md:45`
+   lists `@check=` among the tokens parsed into an item's `meta` map, and
+   `USAGE.md:589` says "Rules worth knowing before you write a `@check=` by
+   hand". Neither is true: nothing in `ingest.py` consumes it and nothing
+   constructs a `Check` from it. `tests/test_ingest.py:121` pins the current
+   behaviour — `- [ ] Sub @check=command` yields `authored_subtasks ==
+   ("Sub",)` — so the token is parsed, stripped from the subtask text, and
+   discarded. It fails silently: the token vanishes from the printed plan
+   exactly as it would if it had been honoured, while decompose still asks
+   the model for a check.
+
+   This matters beyond tidiness. `decompose` asks the model to author checks
+   even when the breakdown is authored (`_authored_prompt`, `decompose.py:145`
+   — "Supply a `check` for each"), so the check — the system's whole unit of
+   trust — is always model-chosen. A user-written check is what makes a
+   weaker or local execute model safe to use.
+
+   Design note before any code: `_META_RE` is `@([\w-]+)=(\S+)`
+   (`ingest.py:51`), which stops at whitespace, so a token can never hold an
+   argv like `python3 /path/verify.py --kind=stale-pr /path/file.md`. The
+   honest shape is probably a `check:` line under the subtask rather than a
+   trailing token; that makes `authored_subtasks: list[str]`
+   (`report.py:546`, `models.py`) a record of text plus optional check, which
+   ripples into `PlanResult`, `format_plan_text`, `_authored_prompt` and
+   `_parse_and_validate`. One seam, real work.
+
+   Shape: honour an author-written check for a subtask, or reject the token
+   at ingest with a warning. Silently accepting it is the one option to rule
+   out. Which of the two, and the syntax if the first — human decision.
+
+   *Validation (once decided):* `make check` + `pytest tests/test_ingest.py
+   tests/test_decompose.py -q`, extended with: an authored check reaching
+   `Plan` unmodified and the model never asked to supply one for that
+   subtask; the same check rejected at planning time if it violates the
+   existing check rules (no shell wrapper, must be able to fail).
+   *Closes:* `specs/02-functional-spec.md:45`'s token list and USAGE §9's
+   by-hand claim — or corrects both, if rejection is chosen.
+   *Branch slug:* `authored-check-pinning`
+
+W11. **plan-dry-run-decompose-contract** — README's Status table says
+   "`jumar plan` | Ingest, select, decompose, print. `--dry-run` stops before
+   execution", and §Quick start says it "decomposes the next eligible item
+   and prints the subtasks and their checks". Neither holds. The only
+   `decompose()` call site in `cli.py` is line 499, inside the run pipeline;
+   `_cmd_plan` does ingest → select → print and returns (`cli.py:296` — plain
+   `jumar plan` prints "full pipeline not yet implemented" and exits 2).
+   Checks cannot be printed regardless: `PlanResult.authored_subtasks` is
+   `list[str]` (`report.py:546`), so `format_plan_text` and
+   `format_plan_json` have no check data to render. The documented behaviour
+   already exists as `jumar run --dry-run`, which decomposes, journals
+   `plan_created`, and stops at `GateDecision.dry_run`.
+
+   Shape: most likely the docs are the stale artefact and should point at
+   `run --dry-run`; the alternative is making `plan --dry-run` decompose and
+   carrying checks on `PlanResult`. Do not guess which — same convention as
+   W5.
+
+   *Validation (once decided):* if docs are corrected — no `src/jumar/`
+   change. If `plan` is changed — `make check` + `pytest tests/test_cli.py -q`
+   with `plan --dry-run` asserted to journal `plan_created` and render each
+   subtask's check in both text and `--json`.
+   *Closes:* README's Status table row and Quick start claim.
+   *Branch slug:* `plan-dry-run-decompose-contract` (only if the code route
+   is chosen)
+
+W12. **doctor-config-file-presence** — `jumar doctor` reports
+   `[ok] config: Config is valid.` when no config file exists at all;
+   `load_config()` returns built-in defaults and the check passes on them.
+   Observed in use: a doctor run in a directory with no `jumar.toml` reported
+   all-ok while reporting a 32-entry allow list and harness `claude` — the
+   defaults — and the todo FAIL was the only hint anything was wrong. For a
+   tool whose scheduled runs depend on cwd-resolved config (see W8), "valid"
+   without "and here is the file it came from" is the wrong report.
+
+   Shape: `doctor`'s config line names the source — the resolved
+   `jumar.toml` path, the `pyproject.toml` `[tool.jumar]` table, or
+   explicitly "built-in defaults (no config file found)" — and warns on the
+   last.
+
+   *Validation:* `make check` + `pytest tests/test_doctor.py -q`, extended
+   with: no-config-file reporting defaults as a warn and naming them;
+   `jumar.toml` and `pyproject.toml` sources each named in the ok line.
+   *Closes:* nothing in the specs; a reporting-honesty defect found in use.
+   *Branch slug:* `doctor-config-file-presence`
 
 W5. **NEEDS A HUMAN DECISION before any code — halt-on-fail / run-level item
    loop.** Stage 7's prose says budget exhaustion means "the run moves to the
