@@ -1054,6 +1054,114 @@ def test_first_attempt_never_has_retry_prefix(
 
 
 # ---------------------------------------------------------------------------
+# W9 — distinct rejection reasons: timed-out / empty-response / unparseable
+# ---------------------------------------------------------------------------
+
+
+def test_timed_out_response_journals_distinct_reason(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A timed-out agent call is rejected as `timed_out`, not `parse_error`."""
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        return _FakeResult(exit_status=-1, stdout="", stderr="", timed_out=True)
+
+    with pytest.raises(DecomposeError) as exc_info:
+        _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert exc_info.value.failure_code == FailureCode.unverifiable_plan
+    state = journal.replay()
+    rejected = [e for e in state.entries if e["event"] == PLAN_REJECTED]
+    assert len(rejected) == 2  # initial + one retry
+    assert all(e["payload"]["reason"] == "timed_out" for e in rejected)
+    assert "timed out" in rejected[0]["payload"]["rejection_detail"]
+
+
+def test_empty_response_journals_distinct_reason(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """exit_status=0 with empty stdout is `empty_response`, not `parse_error`.
+
+    This is the openai-harness case from run-in-use 2026-08-23: a model that
+    answers into `reasoning_content` with an empty `content` returns a
+    successful call that said nothing.
+    """
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        return _FakeResult(exit_status=0, stdout="", stderr="")
+
+    with pytest.raises(DecomposeError) as exc_info:
+        _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert exc_info.value.failure_code == FailureCode.unverifiable_plan
+    state = journal.replay()
+    rejected = [e for e in state.entries if e["event"] == PLAN_REJECTED]
+    assert len(rejected) == 2
+    assert all(e["payload"]["reason"] == "empty_response" for e in rejected)
+
+
+def test_prose_response_still_journals_parse_error(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """exit_status=0 with non-empty, non-JSON stdout stays `parse_error`."""
+    runner = _fake_runner(["this is not json at all", "still not json"])
+
+    with pytest.raises(DecomposeError) as exc_info:
+        _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert exc_info.value.failure_code == FailureCode.unverifiable_plan
+    state = journal.replay()
+    rejected = [e for e in state.entries if e["event"] == PLAN_REJECTED]
+    assert len(rejected) == 2
+    assert all(e["payload"]["reason"] == "parse_error" for e in rejected)
+
+
+def test_timed_out_then_valid_response_retries_and_succeeds(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A timeout on the first attempt does not prevent the retry from succeeding."""
+    call_count = [0]
+    good = _valid_response(1)
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return _FakeResult(exit_status=-1, stdout="", stderr="", timed_out=True)
+        return _FakeResult(exit_status=0, stdout=good)
+
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+    assert len(plan.subtasks) == 1
+    assert call_count[0] == 2
+
+
+def test_agent_stderr_head_journalled_when_present(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The agent's stderr is journalled alongside the rejection when non-empty.
+
+    Regression coverage for the openai harness's empty-message stderr note
+    (see test_openai_agent.py) — the note is only diagnosable if it reaches
+    the journal.
+    """
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        return _FakeResult(
+            exit_status=0,
+            stdout="",
+            stderr="assistant returned an empty message with no tool calls",
+        )
+
+    with pytest.raises(DecomposeError):
+        _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    state = journal.replay()
+    rejected = [e for e in state.entries if e["event"] == PLAN_REJECTED]
+    assert rejected[0]["payload"]["agent_stderr_head"] == (
+        "assistant returned an empty message with no tool calls"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Session id — P3 (reuse-the-execution-session)
 # ---------------------------------------------------------------------------
 
