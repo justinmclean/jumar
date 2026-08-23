@@ -256,6 +256,54 @@ def test_cli_override_todo_path(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# load_config — config_source provenance
+# ---------------------------------------------------------------------------
+
+
+def test_config_source_defaults_when_no_file(tmp_path: Path) -> None:
+    from jumar.config import DEFAULT_CONFIG_SOURCE
+
+    assert load_config(tmp_path).config_source == DEFAULT_CONFIG_SOURCE
+
+
+def test_config_source_names_jumar_toml(tmp_path: Path) -> None:
+    jumar_toml = tmp_path / "jumar.toml"
+    _write(jumar_toml, '[jumar]\ntodo_path = "work.md"\n')
+    source = load_config(tmp_path).config_source
+    assert source == str(jumar_toml.resolve())
+
+
+def test_config_source_names_pyproject_tool_jumar(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    _write(pyproject, '[tool.jumar]\ntodo_path = "tasks.md"\n')
+    source = load_config(tmp_path).config_source
+    assert str(pyproject.resolve()) in source
+    assert "[tool.jumar]" in source
+
+
+def test_config_source_defaults_when_pyproject_has_no_tool_jumar(tmp_path: Path) -> None:
+    from jumar.config import DEFAULT_CONFIG_SOURCE
+
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "myproject"\n')
+    assert load_config(tmp_path).config_source == DEFAULT_CONFIG_SOURCE
+
+
+def test_config_source_prefers_jumar_toml_over_pyproject(tmp_path: Path) -> None:
+    jumar_toml = tmp_path / "jumar.toml"
+    _write(jumar_toml, '[jumar]\ntodo_path = "from_jumar.md"\n')
+    _write(tmp_path / "pyproject.toml", '[tool.jumar]\ntodo_path = "from_pyproject.md"\n')
+    assert load_config(tmp_path).config_source == str(jumar_toml.resolve())
+
+
+def test_config_default_source_is_built_in_defaults() -> None:
+    """A Config built directly (not via load_config) reads as no-file-found —
+    every test fixture that hand-builds a Config gets this without opting in."""
+    from jumar.config import DEFAULT_CONFIG_SOURCE
+
+    assert Config().config_source == DEFAULT_CONFIG_SOURCE
+
+
+# ---------------------------------------------------------------------------
 # Config — construction and immutability
 # ---------------------------------------------------------------------------
 

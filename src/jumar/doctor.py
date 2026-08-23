@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from .config import Config
+from .config import DEFAULT_CONFIG_SOURCE, Config
 from .harness import IN_PROCESS_HARNESSES
 
 
@@ -54,6 +54,7 @@ def run_doctor(config: Config) -> DoctorReport:
     """Run all doctor checks and return the aggregate report."""
     checks: list[DoctorCheck] = []
     checks.extend(_check_config(config))
+    checks.append(_check_config_source(config))
     checks.append(_check_harness(config))
     checks.extend(_check_allowlist(config))
     checks.append(_check_todo(config))
@@ -137,6 +138,34 @@ def _check_config(config: Config) -> list[DoctorCheck]:
         )
 
     return issues
+
+
+def _check_config_source(config: Config) -> DoctorCheck:
+    """Name where the loaded config came from — a file, or built-in defaults.
+
+    `_check_config` above only validates field values, so it reports "valid"
+    even when no jumar.toml or pyproject.toml [tool.jumar] table exists and
+    every field is silently a built-in default. Observed in use: a doctor run
+    in a directory with no config reported all-ok while running the default
+    32-entry allow list and the default `claude` harness against the default
+    `todo.md` — "valid" without "and here is the file it came from" is the
+    wrong report for a tool whose scheduled runs depend on cwd-resolved config.
+    """
+    if config.config_source == DEFAULT_CONFIG_SOURCE:
+        return DoctorCheck(
+            "config.source",
+            CheckStatus.warn,
+            f"{DEFAULT_CONFIG_SOURCE} — running with todo_path='{config.todo_path}', "
+            f"harness.agent='{config.harness.agent}', harness.model='{config.harness.model}', "
+            f"{len(config.commands.allow)} allow-list entry(ies). "
+            "Create jumar.toml (or a [tool.jumar] table in pyproject.toml) to pin these "
+            "explicitly.",
+        )
+    return DoctorCheck(
+        "config.source",
+        CheckStatus.ok,
+        f"Config loaded from {config.config_source}.",
+    )
 
 
 def _check_harness(config: Config) -> DoctorCheck:
