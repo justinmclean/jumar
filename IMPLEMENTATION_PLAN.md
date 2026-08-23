@@ -8,311 +8,307 @@ item = one branch = one PR.
 REMINDER (AGENTS.md): build iterations never modify files under `specs/`, and
 never weaken a check to get green.
 
-## Status — 2026-08-22
+## What's been built
 
-**Full spec-vs-code reconciliation pass.** Every spec in `specs/` was read in
-full and compared against `src/jumar/` and `tests/` (parallel subagents plus
-direct greps/reads to confirm each finding — not inferred from routing
-snapshots). `git log`/`git branch -a` confirm every remote branch
-(`local-model-harness`, `plan-phase-15-local-models`, `fix/harness-outage-budget`,
-`contributor-onramp`, `repo-polish`, both `copilot/*` branches) is fully merged
-into `main` (`git log main..origin/<branch>` is empty for all of them) and
-there are no open PRs and no local work-item branches — nothing in flight.
-`make check` is green on `main` (94.64% coverage) as of this pass.
+**Current state (2026-08-23):** `main` HEAD is `5ede09b`, `make check` green
+(94.64% coverage). Phases 1–16 are complete and merged, except W3
+(`systemd-schedule-backend`): fully built and tested but only on the local
+`systemd-schedule-backend` branch (5 commits ahead of `main`, also green) —
+treat as done for planning purposes; a human still needs to merge it. W5
+(halt-on-fail) is open pending a human decision — see Work items below.
 
-**Newly landed since the 2026-08-11 status note (all merged to `main`,
-previously undocumented here):**
+Known doc drift, not work items (spec prose is stale, not the code — a
+human/`update`-beat fix, no `src/jumar/` change implied):
+- `specs/01-product-spec.md` still describes a "sandboxed, no-network"
+  default; `network` has been a default capability since 2026-08-08 (see
+  guardrails below) and `specs/04`/`USAGE.md` already say so correctly.
+- `specs/03-data-model.md`'s `Run`/`ItemResult`/`RunLock`/`ScheduleEntry`
+  shapes list field/file names (`interactive`, `trigger`, `eligible_at`,
+  `runs/.lock-<hash>`, `cron`, `tz`, etc.) that don't match the real code
+  (`models.py`, `lock.py`'s `.jumar.lock`, `schedule.py`'s `cron_expr`/
+  `timezone`); code also carries undocumented fields (`Plan.session_id`,
+  `HarnessInfo.base_url`/`api_key_env`/`commands_allow`/`commands_deny`).
+  `log_path` looked like the same naming drift but turned out to name a
+  missing redirection — tracked as W6 below, not doc drift. AC1.3 similarly
+  says items are "flagged `decomposition=authored`"; there is no such field
+  — `decompose.py` infers it from `bool(item.authored_subtasks)`, so the
+  behaviour is correct and only the AC's prose is stale.
+- `USAGE.md` §2/§4 transcripts still show uuid-era run ids from before F1;
+  regenerate against current output (see Manual follow-ups).
 
-- **local-model-harness** — Phase 15, L1. `src/jumar/openai_agent.py`: an
-  in-process harness (`agent = "openai"`) driving any OpenAI-compatible
-  `/chat/completions` endpoint (LM Studio, llama.cpp, vLLM) with its own
-  `read_file`/`write_file`/`run_command` tool loop, gated by the same
-  `Capability`/`is_allowed()` checks as every other stage — no
-  `allow_unrestricted_harness` needed. `harness.py` gained
-  `IN_PROCESS_HARNESSES`; `config.py` gained `base_url`/`api_key_env`;
-  `doctor.py` probes `/models`. **This item is done — do not re-plan it.**
-  `specs/04-technical-plan.md` §Harness still describes only the six
-  agent-CLI harnesses and doesn't mention the in-process route; that's a
-  human/`update`-beat doc sync, not a build gap.
-- **harness-outage-budget-exclusion** — `harness.detect_harness_error()`
-  classifies a usage-limit hit / auth failure / missing binary as
-  harness-level, distinct from an ordinary failed check; `backoff.py`'s
-  `advance_failure_count()` no-ops on it so a healthy item is never parked by
-  an outage. Journalled as `harness_error` (already in `specs/03`'s event
-  list).
-- **session-uuid-pinning** — `clock.make_session_id()` now mints a real UUID4;
-  the first subtask creates the session with `--session-id`, later subtasks
-  and repairs `--resume` it. Fixes a real bug (every multi-subtask item's
-  second subtask previously failed outright).
-- **contributor-onramp-docs** — CONTRIBUTING.md, CODE_OF_CONDUCT.md,
-  CHANGELOG.md, issue/PR templates, SECURITY.md, and a `make check` + tag
-  guard in the publish workflow. Not a `src/jumar/` change; no work item was
-  needed and none is added retroactively.
+### Completed items (merged to main unless noted)
 
-**New gaps confirmed this pass** (each verified by direct file read/grep, not
-assumed — see the work items below for the exact evidence): Stage 10's
-promised `systemd` scheduler backend does not exist (only cron/launchd);
-`select.py` computes deferred items but never journals the documented
-`item_deferred` event; a totally malformed todo line (fails the task-list
-regex) produces no parse warning, narrower than AC1.6; and AC7.4's
-`--halt-on-fail` behaviour is unwired end to end — see the decision-gated item
-below before anyone touches it.
-
-**Spec text that has drifted from a *deliberate* decision, not a code gap —
-flagged for a human/`update`-beat pass, not a build work item** (no code
-change would close these; the spec prose is what's stale):
-- `specs/01-product-spec.md` still says "Least authority… default to a
-  sandboxed, no-network… execution context." `network` has been a default
-  capability since the 2026-08-08 send-not-fetch decision (`config.py`
-  `_DEFAULT_CAPABILITIES`), and `gate.py`'s own docstring says the capability
-  check "does not sandbox the agent's process or restrict OS calls at
-  runtime." Both are already correct in `specs/04` and `USAGE.md` — only `01`'s
-  wording is stale.
-- `specs/03-data-model.md`'s `Run`, `ItemResult`, `RunLock`, and
-  `ScheduleEntry` shapes list fields (`interactive`, `trigger`, `now`, `tz`,
-  `eligible_at`, `was_overdue`, `next_occurrence`, `hostname`, `acquired_at`,
-  `backend`, `command`, `log_path`, `installed_at`) and names
-  (`runs/.lock-<hash>`, `cron`, `tz`) that the real `models.py`/`lock.py`
-  (`Lock` → `.jumar.lock`)/`schedule.py` (`cron_expr`, `timezone`) don't match.
-  Code also carries undocumented fields (`Plan.session_id`; `HarnessInfo.
-  base_url/api_key_env/commands_allow/commands_deny`). None of this is a
-  functional bug — it's a doc sync for `update`.
-- AC1.3's wording ("flagged `decomposition=authored`") overstates what's
-  stored — `TodoItem` has no `decomposition` field; `decompose.py` infers it
-  from `bool(item.authored_subtasks)`. Behaviour is correct; the AC's prose
-  names a field that was never built that way.
-
----
-
-## Status — 2026-08-11
-
-**N2 (rename-everything) completed 2026-08-11.** The project is now **jumar**
-throughout: package `src/jumar/`, CLI verb `jumar`, config `jumar.toml` with
-`[jumar]` sections (clean break, old names not read), lock `.jumar.lock`,
-schedule marker `# jumar-meta: ` and launchd label `com.jumar.<id>`.
-`jumar doctor` gained a legacy-schedule check that detects and names
-pre-rename crontab/launchd entries. README and USAGE carry the migration
-note; the old-name grep gate runs in CI (lines carrying pre-rename literals
-on purpose are tagged `legacy-name-ok`). Existing `runs/` journals untouched.
-The GitHub remote was created as `justinmclean/jumar` (private until ready).
-
-**RESOLVED 2026-08-11:** the blocker recorded earlier today is cleared. All
-three local branches (`runs-dir-relative-path`, `status-json`, `run-index-tsv`)
-are merged to main and the branches deleted. Post-merge incident: the
-`status-json` and `run-index-tsv` merges were first committed with unresolved
-conflict markers in `cli.py` and `test_resume.py` (199 ruff errors); fixed by a
-follow-up commit that resolved the conflicts properly (kept the CWD-aware
-`_resolve_run_id`, grafted in the index fast path for `latest`, kept the
-`--json` additions and both new test sections). lint and mypy verified green.
-
-The two pieces of formerly uncommitted work on main are also committed:
-1. `--strict-mcp-config` harness work (`src/getstuffdone/harness.py` +
-   `tests/test_harness_argv.py`) — committed directly to main (91f87c6); the
-   planned `block-mcp-server-inheritance` branch was not used.
-2. `IMPLEMENTATION_PLAN.md` — the plan updates (Phase 14 items, in-flight list),
-   committed 2026-08-11 (3b293c1) and superseded by this revision.
-
-All planned phases through Phase 13 (N1 + N2) and Phase 12 F1 + F2 are merged
-to main, plus Phase 14 P3 (reuse-the-execution-session) and the
-implementation-guide-run-context write-up (both merged 2026-08-11). The only
-open work item is Phase 14 P2 — blocked on its design decision.
-
-- C1 (`thread-check-rejection-reason`), R1 (`resume-can-retry-a-failed-item`),
-  D1 (`validate-depends-targets-at-ingest`), N1 (`choose-the-name`), and
-  F1 (`friendly-run-ids`) all landed on 2026-08-10 and 2026-08-11.
-- N1 decision: **jumar** (PyPI 404 confirmed 2026-08-10; branding coexistence
-  with existing "jumar" uses accepted by the human 2026-08-11; only the
-  `jumar.dev` registrar check remains before N2 begins).
-- F1 shipped items 1–3 (prefix matching, `latest`, new id format). Item 4
-  shipped separately as F2 (`run-index-tsv`), merged 2026-08-11.
-- **Sequencing note (resolved):** N2 shipped 2026-08-11, before anything was
-  pushed to the (private) remote — the "rename before publication" rule held.
-- **USER-side spec amendments applied 2026-08-11:** AC2.11, AC2.12,
-  AC3.7–3.8, AC5.6, AC6.8–6.9, AC8.8, Stage 11 (AC11.1–11.6) and AC-S5 are
-  now in `specs/02-functional-spec.md`; the run-id format/resolution rules,
-  backoff tokens, journal events and config reference are in
-  `specs/03-data-model.md`; the send-boundary security posture is reconciled
-  in `specs/04-technical-plan.md` and `USAGE.md` (README was already
-  correct); `[gsd.harness.<stage>]` and the model-selection guidance
-  (decompose high, execute cheap, judge independent) are in `USAGE.md` §7.
-  They are no longer "proposed" — the `plan` beat should stop re-deriving
-  them as gaps.
-
-### Completed (merged to main)
-
-- **models-and-invariants** — data model shapes, Check invariants at construction (AC3.1 model, AC3.4).
-- **config-and-capabilities** — `config.py`: gsd.toml loading, capability set, is_allowed() (config contract).
+- **models-and-invariants** — data model shapes, `Check` invariants at construction (AC3.1, AC3.4).
+- **config-and-capabilities** — `config.py`: `jumar.toml` loading, capability set, `is_allowed()`.
 - **journal-append-and-replay** — `journal.py`: append-only journal, strictly-increasing seq, replay, corrupt-line tolerance (AC-S1–S4).
 - **ingest-markdown-todos** — `ingest.py`: GFM task list, nested subtasks, @metadata, schedule tokens, stable item_id (AC1.1–1.10).
 - **select-next-item** — `select.py`: eligibility, dependency gate, cycle detection, sort (AC2.1–2.10).
-- **cli-plan-dry-run** — `cli.py`: gsd plan --dry-run, clock.py injectable now, run_started journalled (CLI read-only path).
-- **harness-argv** — `harness.py`: agent-CLI abstraction, scrubbed env, hard deny of git push/gh (AC8.4; specs/04 §Harness).
+- **cli-plan-dry-run** — `cli.py`: `jumar plan --dry-run`, injectable `clock.py`, `run_started` journalled.
+- **harness-argv** — `harness.py`: agent-CLI abstraction, scrubbed env, hard deny of git push/gh (AC8.4).
 - **decompose-with-required-checks** — `decompose.py`: structured plan, one retry, hard rejections, full plan journalled (AC3.1–3.6).
 - **gate-modes** — `gate.py`: --dry-run/--approve/--auto dispatch, capability refusal, startup error (AC4.1–4.4).
 - **execute-and-verify-command** — `execute.py` + `verify/command.py`: subtask dispatch, wall-clock timeout, evidence, command verifier (AC5.1–5.5, AC6.1, AC6.3, AC6.6, AC6.7).
 - **verify-file-and-absence** — `verify/file.py`: file (exists + pattern + hash) and absence (path/glob gone) verifiers (AC6.2).
-- **repair-bounded** — `repair.py`: bounded repair retries, evidence injection, terminal state on budget exhaustion, --halt-on-fail (AC7.1–7.4).
+- **repair-bounded** — `repair.py`: bounded repair retries, evidence injection, terminal state on budget exhaustion, --halt-on-fail config plumbing (AC7.1–7.4).
 - **complete-item** — `complete.py`: byte-preserving checkbox flip, optional branch commit, no push/PR (AC8.1–8.4).
-- **report-and-resume** — `report.py` + gsd resume: per-run report, exit status, partial/deferred/overdue handling, journal replay + continue (AC9.1–9.5, AC-S1, AC-S4).
+- **report-and-resume** — `report.py` + `jumar resume`: per-run report, exit status, partial/deferred/overdue handling, journal replay + continue (AC9.1–9.5, AC-S1, AC-S4).
 - **verify-judge-adversarial** — `verify/judge.py`: fresh context, default-fail, structured verdict, inconclusive on unparseable (AC6.4).
 - **verify-manual** — `verify/manual.py`: interactive confirm, inconclusive under --non-interactive (AC6.5).
-- **clock-and-recurrence** — `recurrence.py`: next-occurrence arithmetic, DST resolution; complete.py advances @not-before= in place (AC8.5–8.7).
-- **lock-single-flight** — `lock.py`: PID-stamped lock keyed to todo path, live/stale detection; wired into gsd run (AC10.5, AC10.6).
-- **schedule-os-backends** — `schedule.py`: gsd schedule add/list/remove/show with crontab + launchd backends (AC10.1–10.4, AC10.7–10.9).
-- **gsd-doctor** — `doctor.py` + gsd doctor: config validity, harness PATH, allow-list sanity, schedule readability, todo parseability (Phase 6 doctor).
-- **ci-and-coverage-floor** — GitHub Actions on push, 90% per-module coverage floor (specs/04 §Testing).
-- **failure-backoff-and-park** — `backoff.py`: @failed=N advance, @paused=auto-failures at threshold, Parked select category (AC2.11, AC8.8).
-- **gsd-status** — `status.py` + gsd status: item-centric view across todo and journals (AC11.1–11.4).
-- **json-output** — --json flag on gsd plan/run/report (not status yet), ISO-8601 UTC timestamps, schema from existing dataclasses (AC11.5–11.6).
+- **clock-and-recurrence** — `recurrence.py`: next-occurrence arithmetic, DST resolution; `complete.py` advances `@not-before=` in place (AC8.5–8.7).
+- **lock-single-flight** — `lock.py`: PID-stamped lock keyed to todo path, live/stale detection; wired into `jumar run` (AC10.5, AC10.6).
+- **schedule-os-backends** — `schedule.py`: `jumar schedule add/list/remove/show` with crontab + launchd backends (AC10.1–10.4, AC10.7–10.9).
+- **jumar-doctor** — `doctor.py` + `jumar doctor`: config validity, harness PATH, allow-list sanity, schedule readability, todo parseability.
+- **ci-and-coverage-floor** — GitHub Actions on push, 90% per-module coverage floor.
+- **failure-backoff-and-park** — `backoff.py`: `@failed=N` advance, `@paused=` at auto-failure threshold, Parked select category (AC2.11, AC8.8).
+- **jumar-status** — `status.py` + `jumar status`: item-centric view across todo and journals (AC11.1–11.4).
+- **json-output** — `--json` on plan/run/report, ISO-8601 UTC timestamps, schema from existing dataclasses (AC11.5–11.6).
 - **run-progress-output** — `progress.py`: stderr stage lines per subtask, --verbose agent stdout, suppressed under --json/non-TTY (AC5.6).
-- **reject-shell-wrapper-checks** — `Check.__post_init__` refuses `kind=command` with a shell (`bash`, `sh`, `zsh`, etc.) plus inline-program flag (`-c`, `--command`); a wrapper running a file stays legal. Tests in `tests/test_hollow_checks.py` (AC3.7).
-- **checks-must-be-falsifiable** — `Check.__post_init__` refuses `kind=command` whose argv[0] cannot fail for any reason connected to the work (`true`, `echo`, `date`, `ls` with no operands, etc.). Tests in `tests/test_hollow_checks.py` (AC3.8).
-- **fetch-failure-must-fail-the-subtask** — `verify/file.py` returns `failed` for a zero-byte path with `file_is_empty` evidence before any pattern matching; `content_head` included in evidence on pattern miss. Tests in `tests/test_hollow_checks.py` (AC6.8).
-- **enforce-command-allowlist** — `verify/command.py` calls `is_allowed()` before `subprocess.run`; denied argv yields `inconclusive` with `capability_denied` and spawns no process; `VerifyContext` carries `config`; default policy applies when config absent. Tests in `tests/test_hollow_checks.py` (AC6.9 = S1).
-- **enforce-the-send-boundary** — deny send vectors (`mail`, `mailx`, `sendmail`, `ssh`, `scp`, `sftp`, `rsync`) everywhere gsd dispatches a process; fix `git -C … push` bypass; gate unrestricted harnesses behind `allow_unrestricted_harness = true`. (S2)
-- **capability-honesty** — `Capability` is a declared-subset check, not a runtime sandbox; sweep all remaining statements into agreement and add a test asserting the gate's actual contract. (S3)
-- **per-stage-model-selection** — `HarnessConfig.for_stage()` with `[harness.<stage>]` overrides in gsd.toml; resolved model journalled in every `HarnessInfo`. (M1)
-- **wire-the-judge-harness** — pass `harness=` and `judge_timeout_s` at both `VerifyContext` construction sites (`run_item` and `repair.py`) so `kind=judge` checks actually reach the judge verifier in a real run. (M2)
-- **thread-check-rejection-reason** — C1. Propagate `ValueError` message from `Check.__post_init__` into the decompose retry prompt so the model knows which rule it violated (AC3.7 follow-up).
-- **resume-can-retry-a-failed-item** — R1. `gsd resume <run-id> --retry-failed` re-enters `run_item` from the first unverified subtask; report takes latest terminal event per item; advance_failure_count not double-counted (AC-S5).
-- **validate-depends-targets-at-ingest** — D1. Every `@depends=` target must resolve to an item in the same file; unresolvable target is a startup error with did-you-mean suggestion (AC2.12).
-- **choose-the-name** — N1. Collision checks run against PyPI JSON API, GitHub, and domains for 30+ candidates. Decision: **jumar** (PyPI 404 confirmed 2026-08-10). Human must verify `jumar.dev` at a registrar before N2 begins.
-- **friendly-run-ids** — F1. Items 1–3: new id format `YYYYMMDD-HHMM-<4 hex>` via `clock.make_run_id()`; prefix matching; `latest` resolution. Item 4 (runs/index.tsv) deferred to F2.
-- **block-mcp-server-inheritance** — `--strict-mcp-config` in the Claude harness argv so user-configured MCP servers (e.g. a mail server) cannot bypass the send-boundary deny list. Landed 2026-08-11 directly on main.
-- **runs-dir-relative-path** — `_resolve_run_id` + `_RunResolveError` in `cli.py`; prefix matching and `latest` wired into `gsd resume` and `gsd report`; CWD-aware error messages; C1 follow-up (rejection detail in decompose retry). Merged 2026-08-11.
-- **status-json** — `--json` flag on `gsd status` (AC11.5, AC11.6); run-id symbol correction from F1. Merged 2026-08-11; closes the known gap noted in `specs/02` §Stage 11.
-- **run-index-tsv** — F2. `runs/index.tsv` appended at `run_started`, status column updated at `run_finished`; `_resolve_run_id` uses the index for `latest` when present, falls back to journal scan. Merged 2026-08-11.
-- **implementation-guide-run-context** — §4 "What happens during a run" in `USAGE.md`: progress output, report, status view, agent claims, verifier evidence, repair attempts and next action, read together. Merged 2026-08-11.
-- **reuse-the-execution-session** — P3. One execution session per item (`--session-id`/`--resume`), minted at `plan_created` and journalled; repair continues the same session; verifiers and judge always get a fresh context; harnesses without resume fall back to today's argv. Merged 2026-08-11.
-- **rename-everything** — N2. Full rename GetStuffDone/`gsd` → **jumar**: package dir, entry point, CLI verb, `jumar.toml` + `[jumar]` config (clean break), `.jumar.lock`, `# jumar-meta: ` / `com.jumar.<id>` schedule markers, docs, specs, spec-loop prompts. `doctor` detects pre-rename schedule entries; CI grep gate blocks the old name. Landed 2026-08-11.
-- **local-model-harness** — L1 (Phase 15). `src/jumar/openai_agent.py`: in-process `agent = "openai"` harness against an OpenAI-compatible `/chat/completions` endpoint, its own gated `read_file`/`write_file`/`run_command` tool loop, no `allow_unrestricted_harness` needed; `harness.py`'s `IN_PROCESS_HARNESSES`; `config.py`'s `base_url`/`api_key_env`; `doctor.py`'s `/models` probe. Merged 2026-08-22 (PR #10). See the 2026-08-22 status note for the doc-sync this leaves open.
-- **harness-outage-budget-exclusion** — `harness.detect_harness_error()` + `backoff.advance_failure_count()`: a harness-level outage (usage-limit hit, auth failure, missing binary) no longer counts against an item's `@failed=` budget or triggers auto-park. Merged 2026-08-18 (PR #8).
-- **session-uuid-pinning** — `clock.make_session_id()` mints a real UUID4 and the first subtask creates the session before later subtasks/repairs `--resume` it, fixing a real second-subtask failure. Merged 2026-08-12 (PR #7).
+- **reject-shell-wrapper-checks** — `Check.__post_init__` refuses `kind=command` with a shell (`bash`, `sh`, `zsh`, ...) plus inline-program flag; a wrapper running a file stays legal (AC3.7).
+- **checks-must-be-falsifiable** — `Check.__post_init__` refuses `kind=command` whose argv[0] cannot fail for any reason connected to the work (AC3.8).
+- **fetch-failure-must-fail-the-subtask** — `verify/file.py` fails a zero-byte path with `file_is_empty` evidence before pattern matching; `content_head` included on pattern miss (AC6.8).
+- **enforce-command-allowlist** — `verify/command.py` calls `is_allowed()` before `subprocess.run`; denied argv is `inconclusive`/`capability_denied`, no process spawned (AC6.9/S1).
+- **enforce-the-send-boundary** — deny send vectors (`mail`, `mailx`, `sendmail`, `ssh`, `scp`, `sftp`, `rsync`) everywhere jumar dispatches a process; closed the `git -C … push` bypass; unrestricted harnesses gated behind `allow_unrestricted_harness` (S2).
+- **capability-honesty** — `Capability` documented and tested as a declared-subset check, not a runtime sandbox (S3).
+- **per-stage-model-selection** — `HarnessConfig.for_stage()` with `[harness.<stage>]` overrides; resolved model journalled in every `HarnessInfo` (M1).
+- **wire-the-judge-harness** — `harness=`/`judge_timeout_s` threaded to both `VerifyContext` construction sites so `kind=judge` checks reach the judge verifier in a real run (M2).
+- **thread-check-rejection-reason** — C1. `ValueError` message from `Check.__post_init__` propagated into the decompose retry prompt (AC3.7 follow-up).
+- **resume-can-retry-a-failed-item** — R1. `jumar resume <run-id> --retry-failed` re-enters `run_item` from the first unverified subtask (AC-S5).
+- **validate-depends-targets-at-ingest** — D1. Unresolvable `@depends=` target is a startup error with did-you-mean suggestion (AC2.12).
+- **choose-the-name** — N1. Decision: **jumar** (PyPI 404 confirmed 2026-08-10).
+- **friendly-run-ids** — F1 items 1–3. `YYYYMMDD-HHMM-<4 hex>` ids via `clock.make_run_id()`, prefix matching, `latest` resolution.
+- **block-mcp-server-inheritance** — `--strict-mcp-config` in the Claude harness argv so user MCP servers can't bypass the send-boundary deny list.
+- **runs-dir-relative-path** — `_resolve_run_id` + `_RunResolveError` in `cli.py`; prefix matching and `latest` wired into `resume`/`report`; CWD-aware errors.
+- **status-json** — `--json` on `jumar status` (AC11.5, AC11.6).
+- **run-index-tsv** — F2. `runs/index.tsv` appended at `run_started`, status updated at `run_finished`; `_resolve_run_id` uses it for `latest`, falls back to journal scan.
+- **implementation-guide-run-context** — `USAGE.md` §4 "What happens during a run".
+- **reuse-the-execution-session** — P3. One execution session per item (`--session-id`/`--resume`) minted at `plan_created`; repair continues it; verifiers/judge always get a fresh context.
+- **rename-everything** — N2. Full rename GetStuffDone/`gsd` → **jumar**: package, entry point, config, lock file, schedule markers, docs, specs; `doctor` detects pre-rename schedule entries; CI grep gate blocks the old name.
+- **local-model-harness** — L1 (Phase 15). `openai_agent.py`: in-process `agent = "openai"` harness against any OpenAI-compatible endpoint, gated tool loop, no `allow_unrestricted_harness` needed; `doctor.py` probes `/models`. Merged PR #10.
+- **harness-outage-budget-exclusion** — `harness.detect_harness_error()` + `backoff.advance_failure_count()`: a harness-level outage no longer counts against an item's `@failed=` budget. Merged PR #8.
+- **session-uuid-pinning** — `clock.make_session_id()` mints a real UUID4; fixed a bug where every multi-subtask item's second subtask failed outright. Merged PR #7.
+- **ingest-warns-on-unparseable-lines** — W1 (Phase 16). A line matching none of the task-list/context/heading patterns is classified `malformed` with a parse warning naming the line number (AC1.6). Merged PR #12.
+- **journal-item-deferred-event** — W2 (Phase 16). `journal.ITEM_DEFERRED` journalled once per deferred/parked item when `select_next()` returns no selection. Merged PR #13.
+- **close-thin-ac-test-coverage** — W4 (Phase 16). Added missing literal assertions for AC5.2, AC5.6, AC6.8, AC10.6, AC10.8, AC-S5. Merged PR #14.
+- **systemd-schedule-backend** — W3 (Phase 16). `SystemdBackend` alongside `CronBackend`/`LaunchdBackend`; `default_backend()` prefers it on Linux when `systemctl --user` is reachable; `doctor.py` covers it via the existing backend-agnostic `list_schedules()`; full `TestSystemdBackend`/`TestSystemdActivation`/`TestDefaultBackendSystemd` suite. **Local branch only, not yet merged** — see Current state above.
 
 ---
 
 ## Work items (priority order)
 
-Phase 15 (L1, local-model-harness) is **done** — see the 2026-08-22 status note
-and the Completed list. Phase 16 below is this pass's new material, ordered
-newest-and-clearest-first; the decision-gated item is last on purpose, same
-convention as the closed P2 above.
+Phases 15 and 16 (L1, W1–W4) are **done** — see What's been built. Phase 17
+below is this pass's new material: W6–W7 from the spec-vs-code read, and
+W8–W12 found in first real use of the `openai` harness on a scheduled-sweep
+todo file (2026-08-23). W5 (halt-on-fail) remains decision-gated and stays
+last, same convention as before.
 
-### Phase 16 — spec-vs-code reconciliation (2026-08-22 pass)
+### Phase 17 — spec-vs-code reconciliation (2026-08-23 pass)
 
-W1. **ingest-warns-on-unparseable-lines** — AC1.6 says "a malformed line does
-   not abort ingest; it is recorded as a parse warning" but `ingest.py`'s
-   `_finalize` only warns for a line that **matches** `_TASK_RE` with bad
-   *content* (bad `@` token, etc.). A line that fails `_TASK_RE` entirely
-   (matches none of the task-list/context/heading patterns) is silently
-   absorbed as `context` — no warning, contrary to the AC's plain wording.
-   Confirmed by reading `ingest.py`'s line dispatch and `tests/test_ingest.py`
-   (no test feeds a line that fails every pattern).
+W6. **schedule-log-redirection-and-id-validation** — two gaps in the same file
+   and test module, confirmed by direct read of `schedule.py` (874 lines) and
+   `specs/03-data-model.md`:
+   - Stage 10's contract text ("the installed entry redirects stdout/stderr to
+     a log path under the run directory… Jumar sends nothing outward") and
+     `ScheduleEntry.log_path` in the data model name a redirection no backend
+     implements — `grep -rn "log_path" src/jumar/` matches only the spec.
+     `_build_command()` and each backend's `add_entry` (cron line, launchd
+     `ProgramArguments`, systemd `ExecStart`) build a bare invocation with no
+     redirect. For cron this is a live send-boundary concern, not cosmetic:
+     unredirected output falls to cron's own default handling (local mail, if
+     an MTA is configured on the host), which is exactly what "sends nothing
+     outward" rules out.
+   - The data model's `schedule_id` invariant (`[a-z0-9-]{1,32}`, "must not be
+     able to break out of" the crontab/plist/unit marker it's embedded in) is
+     never checked in `add_schedule()`. Latent today — the CLI's `schedule add`
+     has no `--schedule-id` flag and always generates a compliant
+     `uuid.uuid4().hex[:8]` — but the function itself validates nothing, so any
+     future caller (or a config-driven path) can break the marker.
 
-   Shape: classify a line that isn't a task item, isn't blank, and isn't
-   recognised context/heading syntax as `malformed`, emit a parse warning
-   naming the line number and its content, and keep parsing the rest of the
-   file (AC1.6's "does not abort ingest" is already true — only the warning is
-   missing).
+   Shape: every backend's installed entry redirects stdout+stderr to a log
+   path under the run directory (mirroring the existing `runs/` layout),
+   recorded on `ScheduleEntry.log_path` and surfaced by `list_schedules()`;
+   `add_schedule()` validates `schedule_id` against `[a-z0-9-]{1,32}` before it
+   touches any backend, raising the same class of startup error other
+   validation failures use.
 
-   *Validation:* `make check` + `pytest tests/test_ingest.py -q`, adding a case
-   that feeds a line matching none of the recognised patterns and asserts a
-   warning is recorded naming the line number, while the items around it still
-   parse.
-   *Closes:* AC1.6 (the unmatched-line half of it).
-   *Branch slug:* `ingest-warns-on-unparseable-lines`
+   *Validation:* `make check` + `pytest tests/test_schedule.py -q`, extended
+   with: each backend (cron/launchd/systemd) asserted to redirect stdout+stderr
+   to a log path under the run directory in its installed command/unit, and
+   `list_schedules()` surfacing that path; `add_schedule` rejecting a
+   marker-breaking `schedule_id` (e.g. containing `*/` or a newline) before any
+   backend write happens.
+   *Closes:* Stage 10's log-redirection contract line;
+   `specs/03-data-model.md`'s `ScheduleEntry.log_path` field and `schedule_id`
+   invariant.
+   *Branch slug:* `schedule-log-redirection`
 
-W2. **journal-item-deferred-event** — `specs/03-data-model.md`'s event list
-   includes `item_deferred`, and `journal.py` already defines the
-   `ITEM_DEFERRED` constant, but grep across `src/jumar/` confirms it is never
-   passed to `journal.append()` anywhere. `select.py`'s `select_next()` already
-   computes exactly the information the event needs (`SelectionResult.deferred`
-   / `.parked`, each an `(item, reason)` pair) — it's just never journalled,
-   only printed to stdout in `cli.py`'s "Nothing eligible" branch. Separately,
-   `cli.py`'s resume path journals a bare string literal `"retry_started"`
-   (line ~1155) that has no constant in `journal.py` and isn't in `specs/03`'s
-   event list either — same class of gap, same fix location, worth doing in
-   one pass.
+W7. **test-due-field-inertness** — `specs/03-data-model.md` and
+   `specs/04-technical-plan.md` both state, in the same wording used for the
+   wall-clock rule, "a test asserts `due` is not read by `decompose`,
+   `execute`, `verify`, or `repair`." The behaviour is already correct
+   (`grep -rn "\.due\b" src/jumar/decompose.py src/jumar/execute.py
+   src/jumar/verify/*.py src/jumar/repair.py` returns nothing — only
+   `select.py` (ordering) and `report.py`/`status.py` (reporting) read it) but
+   no test asserts it. The sibling requirement in the same spec section
+   ("nothing calls `datetime.now()` outside `clock.py`") already has exactly
+   this shape of test: `tests/test_cli.py::test_clock_is_only_wall_clock_reader`
+   walks `src/jumar/*.py` with a regex over disallowed calls.
 
-   Shape: `cli.py` journals `ITEM_DEFERRED` once per deferred/parked item
-   whenever `select_next()` returns no selection (mirroring the existing
-   "Nothing eligible" print loop), with the item id and reason in the payload.
-   Add a `RETRY_STARTED` constant to `journal.py` and use it in place of the
-   bare string at the resume call site.
+   Shape: a static-analysis test modelled directly on
+   `test_clock_is_only_wall_clock_reader` — walk `src/jumar/*.py`, regex for a
+   `.due` attribute reference, and assert it appears only in the sanctioned
+   modules (`select.py`, `report.py`, `status.py`, plus wherever `TodoItem`/
+   `models.py` itself defines the field).
 
-   *Validation:* `make check` + `pytest tests/test_select.py tests/test_journal.py tests/test_run.py -q` —
-   a run with nothing eligible journals one `item_deferred` (or a parked
-   equivalent) entry per blocked item; `journal.RETRY_STARTED` exists and
-   `tests/test_resume.py`'s retry-started assertions use the constant instead
-   of the literal.
-   *Closes:* the documented-but-unemitted `item_deferred` event in
-   `specs/03-data-model.md`.
-   *Branch slug:* `journal-item-deferred-event`
+   *Validation:* `make check` + `pytest tests/test_cli.py -q` (or wherever the
+   new test lands, alongside `test_clock_is_only_wall_clock_reader`).
+   *Closes:* the "a test asserts `due` is not read by decompose/execute/
+   verify/repair" requirement in `specs/03-data-model.md` and
+   `specs/04-technical-plan.md`.
+   *Branch slug:* `test-due-field-inertness`
 
-W3. **systemd-schedule-backend** — `specs/02-functional-spec.md` Stage 10 says
-   "Backend by platform: `crontab` on Linux/BSD, `launchd` user agent on macOS,
-   `systemd --user` timer where available and preferred," and
-   `models.ScheduleBackend` already has a `systemd` member — but
-   `schedule.py` only defines `CronBackend` and `LaunchdBackend`;
-   `default_backend()` branches only on `darwin` vs. everything else, so a
-   Linux host with `systemd --user` available silently gets cron instead of
-   the "preferred" backend. Confirmed by reading `schedule.py` in full (no
-   `SystemdBackend` class, no `systemctl`/`systemd` string anywhere) — this
-   gap isn't even named in Stage 10's own "Known gaps" list (which only names
-   the Windows omission), so `plan` is recording it fresh rather than closing
-   a listed gap.
+W8. **scheduled-run-config-resolution** — `jumar schedule` cannot currently
+   install a working entry for any config that is not in the invoking cwd.
+   Two defects compound, both confirmed by direct read:
+   - `_build_command()` (`schedule.py:170`) appends `--config <path>` to
+     `jumar run --todo <path> --non-interactive`, but `run_p` in `cli.py:147`
+     defines no `--config` argument (only `schedule add`/`schedule show` do,
+     `cli.py:214`/`cli.py:239`). Every firing of an entry installed with
+     `--config` exits 2 with `unrecognized arguments`, into the scheduler's
+     log where nothing looks. `schedule add` accepts the flag without warning.
+   - Dropping the flag does not help: no backend sets a working directory
+     (launchd `add_entry` writes `ProgramArguments`/`EnvironmentVariables`
+     with no `WorkingDirectory`; the cron line and systemd `ExecStart` are
+     bare invocations). `load_config()` (`config.py:287`) takes no path and
+     `_load_raw()` reads `Path.cwd()/jumar.toml` with no upward search, so a
+     scheduled run finds no config and silently uses built-in defaults —
+     `agent = "claude"`, `todo_path = "todo.md"`. Not an error: the wrong
+     harness against a file that is not there.
 
-   Shape: a `SystemdBackend` alongside `CronBackend`/`LaunchdBackend`,
-   implementing the same `Backend` protocol — install/list/remove a
-   `~/.config/systemd/user/jumar-<schedule-id>.{service,timer}` pair, delimited
-   the same way the other backends delimit their entries (AC10.2's contract
-   applies identically). `default_backend()` prefers it on Linux when
-   `systemctl --user` is reachable (mirroring how it already prefers launchd on
-   darwin), falling back to cron otherwise. `doctor.py`'s schedule-readability
-   check gains the systemd case alongside its existing cron/launchd branches.
+   Shape: `--config PATH` on `run`, `plan`, `doctor` and `status`, threaded
+   into `load_config()` as an explicit root (or file path) rather than cwd;
+   and every backend's installed entry pinned to a working directory. Same
+   seam as W6 — both are `_build_command()` plus each backend's `add_entry`.
 
-   *Validation:* `make check` + `pytest tests/test_schedule.py -q` extended
-   with a `SystemdBackend` suite mirroring the existing `CronBackend`/
-   `LaunchdBackend` ones: AC10.1 (dry-run installs nothing), AC10.2
-   (marker-delimited install/remove, round-tripped against a fixture unit file
-   with unrelated content preserved byte-identical), AC10.3 (absolute paths +
-   `--non-interactive`), AC10.7 (list reports only jumar-owned entries), AC10.9
-   (resolved timezone recorded) — against a fake filesystem/backend, the same
-   pattern the existing suite already uses, not a live `systemctl`.
-   *Closes:* Stage 10's "backend by platform" contract line (no single AC
-   number is systemd-specific; AC10.1–10.4/10.7/10.9 all generalise to the new
-   backend).
-   *Branch slug:* `systemd-schedule-backend`
+   *Validation:* `make check` + `pytest tests/test_schedule.py tests/test_cli.py -q`,
+   extended with: the argv built by `_build_command()` asserted to parse
+   clean through `cli.py`'s argparse (the assertion that would have caught
+   this); each backend asserted to pin a working directory; `load_config`
+   honouring an explicit path with no dependence on cwd.
+   *Closes:* nothing in the specs — this is code-vs-code, a flag one module
+   emits and another rejects.
+   *Branch slug:* `scheduled-run-config-resolution`
 
-W4. **close-thin-ac-test-coverage** — six acceptance criteria are implemented
-   and already have *a* test, but not the literal assertion the AC text
-   demands, confirmed by reading each named test alongside its AC:
-   - AC5.2: a timed-out attempt is recorded (`error="timed_out"`), but no test
-     runs a timed-out subtask through the full item loop to assert the item
-     does not advance past it.
-   - AC5.6: `tests/test_run_progress.py` checks stderr-only output and
-     suppression under `--json`/non-TTY, but never byte-diffs stdout with
-     progress on vs. off as the AC specifically demands.
-   - AC6.8: `tests/test_hollow_checks.py` checks the zero-byte-file behaviour
-     but doesn't assert the literal `evidence["error"] == "file_is_empty"` key.
-   - AC10.6 / AC10.8: stale-lock reclaim and remove-nonexistent-id are both
-     tested at the `lock.py`/`schedule.py` unit level but have no `_cmd_run`/
-     CLI-level test proving the reclaimed lock lets a real run proceed, or
-     that the CLI exit code for removing an unknown id is non-zero.
-   - AC-S5: `advance_failure_count`'s "not double-counted on retry" clause has
-     no test reading the actual `@failed=N` value in the todo file before and
-     after a `--retry-failed` resume.
+W9. **decompose-failure-mode-distinction** — `decompose.py:486` parses only
+   when `result.exit_status == 0 and not result.timed_out`, and every other
+   path falls to the same branch: `subtasks, rejection, detail = (), "parse_error",
+   "response is not valid JSON"`. So a harness that timed out, one that
+   returned an empty body, and one that returned genuine malformed JSON are
+   indistinguishable — in the progress line, in `PLAN_REJECTED`, and in
+   `agent_stdout_head` (empty for the first two). `detect_harness_error()`
+   returns `None` for timeouts by design (`harness.py:171`, documented as
+   such), so nothing else picks them up either. On the `openai` harness this
+   is the common case, not an edge: `openai_agent.py:364` reads only
+   `message["content"]`, and a model that answers into `reasoning_content`
+   with empty `content` returns `exit_status=0` and an empty stdout — a
+   successful call that said nothing, reported as bad JSON.
 
-   None of these are behaviour bugs as far as this pass could confirm — each
-   is a test that doesn't yet say what its AC claims. Add the missing
-   assertion to the existing test module in each case; if writing any of them
-   surfaces an actual behavioural gap (rather than just a missing assertion),
-   stop and record that as its own item instead of silently fixing it here.
+   Shape: distinct rejection reasons for timed-out, empty-response and
+   unparseable-response, carried into the journal payload and the progress
+   line; `openai_agent` to report an empty assistant message as its own
+   condition rather than a silent success. Whether to fall back to
+   `reasoning_content` is a separate question and not part of this item.
 
-   *Validation:* `make check` + `pytest tests/test_execute.py tests/test_run_progress.py tests/test_hollow_checks.py tests/test_run.py tests/test_backoff.py -q`.
-   *Closes:* AC5.2, AC5.6, AC6.8, AC10.6, AC10.8, AC-S5 (test-coverage
-   completion only).
-   *Branch slug:* `close-thin-ac-test-coverage`
+   *Validation:* `make check` + `pytest tests/test_decompose.py -q`, extended
+   with: a runner stub returning `timed_out=True`, one returning
+   `exit_status=0` with empty stdout, and one returning prose, each asserted
+   to journal a distinct reason.
+   *Closes:* nothing in the specs; a diagnosability defect found in use.
+   *Branch slug:* `decompose-failure-mode-distinction`
+
+W10. **authored-check-pinning (`@check=`)** — `specs/02-functional-spec.md:45`
+   lists `@check=` among the tokens parsed into an item's `meta` map, and
+   `USAGE.md:589` says "Rules worth knowing before you write a `@check=` by
+   hand". Neither is true: nothing in `ingest.py` consumes it and nothing
+   constructs a `Check` from it. `tests/test_ingest.py:121` pins the current
+   behaviour — `- [ ] Sub @check=command` yields `authored_subtasks ==
+   ("Sub",)` — so the token is parsed, stripped from the subtask text, and
+   discarded. It fails silently: the token vanishes from the printed plan
+   exactly as it would if it had been honoured, while decompose still asks
+   the model for a check.
+
+   This matters beyond tidiness. `decompose` asks the model to author checks
+   even when the breakdown is authored (`_authored_prompt`, `decompose.py:145`
+   — "Supply a `check` for each"), so the check — the system's whole unit of
+   trust — is always model-chosen. A user-written check is what makes a
+   weaker or local execute model safe to use.
+
+   Design note before any code: `_META_RE` is `@([\w-]+)=(\S+)`
+   (`ingest.py:51`), which stops at whitespace, so a token can never hold an
+   argv like `python3 /path/verify.py --kind=stale-pr /path/file.md`. The
+   honest shape is probably a `check:` line under the subtask rather than a
+   trailing token; that makes `authored_subtasks: list[str]`
+   (`report.py:546`, `models.py`) a record of text plus optional check, which
+   ripples into `PlanResult`, `format_plan_text`, `_authored_prompt` and
+   `_parse_and_validate`. One seam, real work.
+
+   Shape: honour an author-written check for a subtask, or reject the token
+   at ingest with a warning. Silently accepting it is the one option to rule
+   out. Which of the two, and the syntax if the first — human decision.
+
+   *Validation (once decided):* `make check` + `pytest tests/test_ingest.py
+   tests/test_decompose.py -q`, extended with: an authored check reaching
+   `Plan` unmodified and the model never asked to supply one for that
+   subtask; the same check rejected at planning time if it violates the
+   existing check rules (no shell wrapper, must be able to fail).
+   *Closes:* `specs/02-functional-spec.md:45`'s token list and USAGE §9's
+   by-hand claim — or corrects both, if rejection is chosen.
+   *Branch slug:* `authored-check-pinning`
+
+W11. **plan-dry-run-decompose-contract** — README's Status table says
+   "`jumar plan` | Ingest, select, decompose, print. `--dry-run` stops before
+   execution", and §Quick start says it "decomposes the next eligible item
+   and prints the subtasks and their checks". Neither holds. The only
+   `decompose()` call site in `cli.py` is line 499, inside the run pipeline;
+   `_cmd_plan` does ingest → select → print and returns (`cli.py:296` — plain
+   `jumar plan` prints "full pipeline not yet implemented" and exits 2).
+   Checks cannot be printed regardless: `PlanResult.authored_subtasks` is
+   `list[str]` (`report.py:546`), so `format_plan_text` and
+   `format_plan_json` have no check data to render. The documented behaviour
+   already exists as `jumar run --dry-run`, which decomposes, journals
+   `plan_created`, and stops at `GateDecision.dry_run`.
+
+   Shape: most likely the docs are the stale artefact and should point at
+   `run --dry-run`; the alternative is making `plan --dry-run` decompose and
+   carrying checks on `PlanResult`. Do not guess which — same convention as
+   W5.
+
+   *Validation (once decided):* if docs are corrected — no `src/jumar/`
+   change. If `plan` is changed — `make check` + `pytest tests/test_cli.py -q`
+   with `plan --dry-run` asserted to journal `plan_created` and render each
+   subtask's check in both text and `--json`.
+   *Closes:* README's Status table row and Quick start claim.
+   *Branch slug:* `plan-dry-run-decompose-contract` (only if the code route
+   is chosen)
+
+W12. **doctor-config-file-presence** — `jumar doctor` reports
+   `[ok] config: Config is valid.` when no config file exists at all;
+   `load_config()` returns built-in defaults and the check passes on them.
+   Observed in use: a doctor run in a directory with no `jumar.toml` reported
+   all-ok while reporting a 32-entry allow list and harness `claude` — the
+   defaults — and the todo FAIL was the only hint anything was wrong. For a
+   tool whose scheduled runs depend on cwd-resolved config (see W8), "valid"
+   without "and here is the file it came from" is the wrong report.
+
+   Shape: `doctor`'s config line names the source — the resolved
+   `jumar.toml` path, the `pyproject.toml` `[tool.jumar]` table, or
+   explicitly "built-in defaults (no config file found)" — and warns on the
+   last.
+
+   *Validation:* `make check` + `pytest tests/test_doctor.py -q`, extended
+   with: no-config-file reporting defaults as a warn and naming them;
+   `jumar.toml` and `pyproject.toml` sources each named in the ok line.
+   *Closes:* nothing in the specs; a reporting-honesty defect found in use.
+   *Branch slug:* `doctor-config-file-presence`
 
 W5. **NEEDS A HUMAN DECISION before any code — halt-on-fail / run-level item
    loop.** Stage 7's prose says budget exhaustion means "the run moves to the
@@ -416,56 +412,33 @@ P2. **parallel-independent-subtasks** — **CLOSED 2026-08-22 by the human.**
   `network` IS a default capability and `curl`/`wget` are allowed. `mail`,
   `mailx`, `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`, `rsync` are
   denied, and `git push` / `gh` stay hard-denied in every dispatched argv. Do
-  not plan a work item that relaxes the send boundary — and do not plan one that
-  claims the allow list is a sandbox: with `python3` allowed and the network
-  reachable it is defence in depth, and the container is the control.
-- **No `shell=True`.** Every subprocess is argv. Do not plan a shell-string
+  not plan a work item that relaxes the send boundary, nor one that claims the
+  allow list is a sandbox: with `python3` allowed and the network reachable
+  it is defence in depth, and the container is the control.
+- **No `shell=True`.** Every subprocess is argv — do not plan a shell-string
   escape hatch.
-- **Out of scope for v1** (do not plan): cross-item
-  planning, non-Markdown todo inputs, sync with external trackers (Jira, Asana,
-  Todoist), a resident daemon, a web UI, Windows Task Scheduler, and
-  **cross-file `@depends=`** (decided with D1: one file's eligibility must not
-  depend on another file's run history — two related lists state their run
-  order in prose).
+- **Out of scope for v1** (do not plan): cross-item planning, non-Markdown
+  todo inputs, sync with external trackers (Jira, Asana, Todoist), a resident
+  daemon, a web UI, Windows Task Scheduler, and **cross-file `@depends=`**
+  (decided with D1: one file's eligibility must not depend on another file's
+  run history — two related lists state their run order in prose).
 - **Parallel subtask execution is CLOSED, not open** (see P2 above,
   2026-08-22) — serial execution stands because `depends_on`/`write_fs` are
   model-authored claims, not enforced facts, and an undeclared write collision
   is invisible to any planning-time check. Do not re-plan it; the reopen
   condition is written up in P2 and requires an enforced per-subtask
   filesystem sandbox, not just wall-clock pain.
-- **The product pointing at its own plan** is a milestone, not a dependency.
-  Nothing in `src/getstuffdone/` may assume it is being run against this repo.
+- **The product pointing at its own plan** is a milestone, not a dependency —
+  nothing in `src/getstuffdone/` may assume it is being run against this repo.
 
 ## Manual follow-ups (USER-side; not loop work items — do not build these)
 
-- **Register `jumar.dev`** (or chosen domain) if wanted — no longer a blocker:
-  the rename shipped 2026-08-11 at the human's direction with branding
-  coexistence accepted; the domain is now a nice-to-have, not a gate.
+- **Register `jumar.dev`** (or chosen domain) if wanted — nice-to-have, not a gate.
 - Confirm which agent CLI is on PATH before the first loop run
-  (`SPEC_LOOP_AGENT`, default `claude`).
-- Run the loop inside a sandbox with no push credentials in the environment.
-- Regenerate the `USAGE.md` transcripts against the current build — §2 and §4
-  still show uuid-era run ids, and the doc promises real output.
-- **README: quote the wall-clock price** (from P2's closure). Users currently
-  discover it by running a wide plan. State it plainly: a subtask is a full
-  agentic session of eight to ten model round trips, execution is serial
-  because each one is verified before the next starts, and fifteen subtasks is
-  about an hour before repairs. Say what reduces it — a narrower plan, cheaper
-  per-stage models on execute — and that scheduling it unattended makes the
-  number moot.
-
-Done 2026-08-11 (second doc pass): README `--json` coverage corrected to
-plan/run/report/status; USAGE command reference gained `gsd status --json` and
-a `runs/index.tsv` section (cache only, journals authoritative); `specs/02`
-§Stage 11 known gaps marked closed; `specs/04` §Execution isolation records
-`--strict-mcp-config`. Still pending: regenerate the USAGE §2/§4 transcripts
-(uuid-era run ids) — listed above. The gitignore follow-up was verified already
-satisfied (shipped `.gitignore` ignores `todo.md`, `gsd.toml`, `runs/`) and is
-removed from this list.
-
-Done 2026-08-11 (every "when X lands" spec/doc amendment — X has landed; see
-the Status note at the top for the full list): the proposed ACs are in
-`specs/02-functional-spec.md`, the run-id/backoff/config updates in
-`specs/03-data-model.md`, and the send-boundary posture, `[gsd.harness.<stage>]`
-reference and model-selection guidance in `specs/04-technical-plan.md` /
-`USAGE.md`.
+  (`SPEC_LOOP_AGENT`, default `claude`); run in a sandbox with no push credentials.
+- Regenerate the `USAGE.md` §2/§4 transcripts (still show uuid-era run ids).
+- **README: quote the wall-clock price** (from P2's closure) — a subtask is a
+  full agentic session of eight to ten model round trips, serial because each
+  is verified before the next starts, so fifteen subtasks is about an hour
+  before repairs; note what reduces it (narrower plan, cheaper per-stage
+  models) and that unattended scheduling makes the number moot.
