@@ -307,7 +307,7 @@ def _check_schedule(config: Config) -> DoctorCheck:
             "schedule",
             CheckStatus.fail,
             f"Could not read installed schedule entries: {exc}. "
-            "Check your crontab or launchd agents.",
+            "Check your crontab, launchd agents, or systemd --user timers.",
         )
 
     if not entries:
