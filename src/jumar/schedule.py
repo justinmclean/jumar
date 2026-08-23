@@ -688,8 +688,9 @@ class SystemdBackend:
             # check=True: a failure here must surface, not leave an inert timer
             # that `jumar doctor` would then report as an installed schedule.
             self._systemctl("daemon-reload", check=True)
-            self._systemctl("enable", "--now", f"{self._unit_stem(entry.schedule_id)}.timer",
-                            check=True)
+            self._systemctl(
+                "enable", "--now", f"{self._unit_stem(entry.schedule_id)}.timer", check=True
+            )
 
     def list_entries(self) -> list[ScheduleEntry]:
         if not self._dir.is_dir():
@@ -734,8 +735,9 @@ class SystemdBackend:
             # goes with it; check=False because an already-disabled unit is a
             # non-zero exit we do not care about.
             with contextlib.suppress(OSError, subprocess.SubprocessError):
-                self._systemctl("disable", "--now", f"{self._unit_stem(schedule_id)}.timer",
-                                check=False)
+                self._systemctl(
+                    "disable", "--now", f"{self._unit_stem(schedule_id)}.timer", check=False
+                )
         service_path.unlink(missing_ok=True)
         timer_path.unlink(missing_ok=True)
         if self._activate:

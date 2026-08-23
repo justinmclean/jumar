@@ -934,9 +934,7 @@ class TestOnCalendarLines:
         assert _oncalendar_lines("0 9 * * *", "UTC") == ["*-*-* 09:00:00 UTC"]
 
     def test_single_line_when_only_weekday_is_restricted(self) -> None:
-        assert _oncalendar_lines("0 9 * * 1-5", "UTC") == [
-            "Mon,Tue,Wed,Thu,Fri *-*-* 09:00:00 UTC"
-        ]
+        assert _oncalendar_lines("0 9 * * 1-5", "UTC") == ["Mon,Tue,Wed,Thu,Fri *-*-* 09:00:00 UTC"]
 
     def test_dom_and_dow_both_restricted_becomes_two_lines(self) -> None:
         """Cron ORs day-of-month with day-of-week; a systemd calendar spec ANDs
@@ -992,9 +990,7 @@ class TestSystemdActivation:
 
         def _record(argv: list[str], **_kw: object) -> None:
             if "disable" in argv:
-                seen_while_disabling.append(
-                    (tmp_path / "jumar-act22222.timer").exists()
-                )
+                seen_while_disabling.append((tmp_path / "jumar-act22222.timer").exists())
             fake.calls.append(list(argv))
 
         backend._run = _record
