@@ -630,6 +630,7 @@ class TestScheduleCLI:
                 jumar_path="/usr/local/bin/jumar",
                 config_path=None,
                 timezone="UTC",
+                log_path=str(tmp_path / "runs" / "schedule-testremove.log"),
             )
         )
         rc = main(["schedule", "remove", "testremove"])
@@ -659,6 +660,7 @@ class TestScheduleCLI:
                 jumar_path="/usr/local/bin/jumar",
                 config_path=None,
                 timezone="UTC",
+                log_path=str(tmp_path / "runs" / "schedule-untouched.log"),
             )
         )
         before = _fake_backend.current_text
