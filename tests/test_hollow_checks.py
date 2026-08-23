@@ -139,6 +139,7 @@ def test_zero_byte_file_fails_the_check(tmp_path: Path) -> None:
 
     assert result.verdict is Verdict.failed
     assert result.evidence["size_bytes"] == 0
+    assert result.evidence["error"] == "file_is_empty"
     assert "empty" in result.summary.lower()
 
 
