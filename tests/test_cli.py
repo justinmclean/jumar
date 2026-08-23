@@ -644,12 +644,32 @@ class TestScheduleCLI:
         _fake_backend: FakeBackend,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``jumar schedule remove`` for a missing id returns 1 with an error."""
+        """``jumar schedule remove`` for a missing id is a clean non-zero error
+        that modifies nothing (AC10.8)."""
+        from jumar.schedule import ScheduleEntry
+
         monkeypatch.chdir(tmp_path)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        _fake_backend.add_entry(
+            ScheduleEntry(
+                schedule_id="untouched",
+                cron_expr="0 9 * * *",
+                todo_path=str(todo),
+                jumar_path="/usr/local/bin/jumar",
+                config_path=None,
+                timezone="UTC",
+            )
+        )
+        before = _fake_backend.current_text
+
         rc = main(["schedule", "remove", "no-such-id"])
+
         assert rc == 1
         err = capsys.readouterr().err
         assert "not found" in err
+        assert _fake_backend.current_text == before
+        assert [e.schedule_id for e in _fake_backend.list_entries()] == ["untouched"]
 
     def test_no_subcommand_exits_zero(
         self,
