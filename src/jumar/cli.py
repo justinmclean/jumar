@@ -486,7 +486,7 @@ def run_item(
     from .journal import ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
     from .models import Verdict
     from .progress import Progress
-    from .repair import RepairExhausted, repair
+    from .repair import RepairExhausted, RepairHarnessError, repair
     from .verify import VerifyContext, run_verify
 
     prog = progress if progress is not None else Progress(enabled=False)
@@ -665,6 +665,18 @@ def run_item(
                     on_attempt=prog.repair_attempt,
                     on_result=lambda r: prog.repair_result(r.verdict, getattr(r, "summary", None)),
                 )
+            except RepairHarnessError as exc:
+                prog.verdict("harness_error", "execution harness failed during repair")
+                journal.append(
+                    ITEM_FAILED,
+                    item_id=item.item_id,
+                    payload={
+                        "failure_code": "harness_error",
+                        "failed_subtask_index": subtask.index,
+                        "attempt_no": exc.attempt_no,
+                    },
+                )
+                return 1
             except RepairExhausted as exc:
                 prog.verdict(
                     "repairs exhausted",
