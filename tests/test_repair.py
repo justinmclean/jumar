@@ -38,7 +38,7 @@ from jumar.models import (
     Verdict,
     VerificationResult,
 )
-from jumar.repair import RepairExhausted, repair
+from jumar.repair import RepairExhausted, RepairHarnessError, repair
 from jumar.verify import VerifyContext
 
 # ---------------------------------------------------------------------------
@@ -156,6 +156,34 @@ def _make_fake_runner() -> Any:
     return runner
 
 
+def _make_harness_error_runner() -> Any:
+    """Fake run_agent that records the prompt and returns a transport outage."""
+    calls: list[str] = []
+
+    class _R:
+        exit_status = -1
+        stdout = ""
+        stderr = "request to http://192.168.1.8:1234/v1 failed: timed out"
+        timed_out = False
+        agent_claim: str | None = None
+
+    def runner(
+        prompt: str,
+        *,
+        cwd: Path,
+        capabilities: Any,
+        timeout_s: int,
+        harness: HarnessInfo,
+        session_id: str | None = None,
+        session_is_new: bool = False,
+    ) -> _R:
+        calls.append(prompt)
+        return _R()
+
+    runner.calls = calls  # type: ignore[attr-defined]
+    return runner
+
+
 def _make_fake_verify(results: list[VerificationResult]) -> Any:
     """Fake run_verify that replays results in order and records check objects."""
     checks_seen: list[Check] = []
@@ -252,6 +280,36 @@ def test_repair_stops_on_first_pass(journal: Journal, tmp_path: Path) -> None:
 
     assert result.verdict == Verdict.passed
     assert len(runner.calls) == 1  # type: ignore[attr-defined]
+
+
+def test_repair_stops_on_harness_error_without_verifying(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A repair transport outage is not followed by the stale failed check."""
+    subtask = _make_subtask()
+    item = _make_item()
+    first_result = _failing_result(subtask.subtask_id)
+
+    runner = _make_harness_error_runner()
+    verifier = _make_fake_verify([_passing_result(subtask.subtask_id)])
+
+    with pytest.raises(RepairHarnessError) as exc_info:
+        repair(
+            subtask,
+            first_result=first_result,
+            item=item,
+            prior_evidence=[],
+            config=cfg,
+            journal=journal,
+            cwd=tmp_path,
+            run_dir=tmp_path,
+            _run_agent=runner,
+            _run_verify=verifier,
+        )
+
+    assert exc_info.value.attempt_no == 1
+    assert len(runner.calls) == 1  # type: ignore[attr-defined]
+    assert verifier.checks_seen == []  # type: ignore[attr-defined]
 
 
 def test_no_repair_when_first_result_passed(journal: Journal, cfg: Config, tmp_path: Path) -> None:

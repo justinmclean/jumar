@@ -98,6 +98,25 @@ def transport_error_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
 transport_error_agent.calls = 0
 
 
+def repair_transport_error_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Plans, fails verification once, then hits transport failure during repair."""
+    repair_transport_error_agent.calls += 1
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    if prompt.startswith("A previous attempt at this subtask"):
+        return AgentResult(
+            exit_status=-1,
+            stdout="",
+            stderr="request to http://192.168.1.8:1234/v1 failed: timed out",
+            timed_out=False,
+            agent_claim=None,
+        )
+    return _result("I got distracted and did not create the marker.", claim="not done")
+
+
+repair_transport_error_agent.calls = 0
+
+
 class _Args:
     """Minimal stand-in for the parsed argparse namespace."""
 
@@ -213,6 +232,28 @@ def test_run_harness_transport_error_fails_without_repairs(workspace: Path) -> N
     failed = next(ln for ln in lines if ln["event"] == "item_failed")
     assert failed["payload"]["failure_code"] == "harness_error"
     assert not any(ln["event"] == "repair_started" for ln in lines)
+
+
+def test_run_repair_transport_error_fails_as_harness_error(workspace: Path) -> None:
+    """A repair-time harness outage is not masked as repair exhaustion."""
+    repair_transport_error_agent.calls = 0
+
+    rc = cli._cmd_run(_Args(), _run_agent=repair_transport_error_agent)
+
+    assert rc == 1
+    assert repair_transport_error_agent.calls == 3  # decompose, initial execute, repair execute
+
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    assert any(
+        ln["event"] == "harness_error" and ln["payload"]["reason"] == "transport" for ln in lines
+    )
+    failed = next(ln for ln in lines if ln["event"] == "item_failed")
+    assert failed["payload"]["failure_code"] == "harness_error"
+    assert failed["payload"]["attempt_no"] == 1
+    assert len([ln for ln in lines if ln["event"] == "repair_started"]) == 1
 
 
 def test_run_dry_run_executes_nothing(workspace: Path) -> None:
