@@ -10,12 +10,10 @@ never weaken a check to get green.
 
 ## What's been built
 
-**Current state (2026-08-23):** `main` HEAD is `5ede09b`, `make check` green
-(94.64% coverage). Phases 1–16 are complete and merged, except W3
-(`systemd-schedule-backend`): fully built and tested but only on the local
-`systemd-schedule-backend` branch (5 commits ahead of `main`, also green) —
-treat as done for planning purposes; a human still needs to merge it. W5
-(halt-on-fail) is open pending a human decision — see Work items below.
+**Current state (2026-08-27):** `main` HEAD is `5e76c23` (PR #17). Phases
+1–17 are complete and merged except W10/W11, which need a product/documentation
+decision, and W5 (halt-on-fail), which remains decision-gated — see Work items
+below.
 
 Known doc drift, not work items (spec prose is stale, not the code — a
 human/`update`-beat fix, no `src/jumar/` change implied):
@@ -28,11 +26,10 @@ human/`update`-beat fix, no `src/jumar/` change implied):
   (`models.py`, `lock.py`'s `.jumar.lock`, `schedule.py`'s `cron_expr`/
   `timezone`); code also carries undocumented fields (`Plan.session_id`,
   `HarnessInfo.base_url`/`api_key_env`/`commands_allow`/`commands_deny`).
-  `log_path` looked like the same naming drift but turned out to name a
-  missing redirection — tracked as W6 below, not doc drift. AC1.3 similarly
-  says items are "flagged `decomposition=authored`"; there is no such field
-  — `decompose.py` infers it from `bool(item.authored_subtasks)`, so the
-  behaviour is correct and only the AC's prose is stale.
+  AC1.3 similarly says items are "flagged `decomposition=authored`"; there is
+  no such field — `decompose.py` infers it from
+  `bool(item.authored_subtasks)`, so the behaviour is correct and only the
+  AC's prose is stale.
 - `USAGE.md` §2/§4 transcripts still show uuid-era run ids from before F1;
   regenerate against current output (see Manual follow-ups).
 
@@ -89,141 +86,24 @@ human/`update`-beat fix, no `src/jumar/` change implied):
 - **ingest-warns-on-unparseable-lines** — W1 (Phase 16). A line matching none of the task-list/context/heading patterns is classified `malformed` with a parse warning naming the line number (AC1.6). Merged PR #12.
 - **journal-item-deferred-event** — W2 (Phase 16). `journal.ITEM_DEFERRED` journalled once per deferred/parked item when `select_next()` returns no selection. Merged PR #13.
 - **close-thin-ac-test-coverage** — W4 (Phase 16). Added missing literal assertions for AC5.2, AC5.6, AC6.8, AC10.6, AC10.8, AC-S5. Merged PR #14.
-- **systemd-schedule-backend** — W3 (Phase 16). `SystemdBackend` alongside `CronBackend`/`LaunchdBackend`; `default_backend()` prefers it on Linux when `systemctl --user` is reachable; `doctor.py` covers it via the existing backend-agnostic `list_schedules()`; full `TestSystemdBackend`/`TestSystemdActivation`/`TestDefaultBackendSystemd` suite. **Local branch only, not yet merged** — see Current state above.
+- **systemd-schedule-backend** — W3 (Phase 16). `SystemdBackend` alongside `CronBackend`/`LaunchdBackend`; `default_backend()` prefers it on Linux when `systemctl --user` is reachable; `doctor.py` covers it via the existing backend-agnostic `list_schedules()`; full `TestSystemdBackend`/`TestSystemdActivation`/`TestDefaultBackendSystemd` suite. Merged PR #17.
+- **schedule-log-redirection-and-id-validation** — W6 (Phase 17). `ScheduleEntry.log_path`, backend stdout/stderr redirection, log directory creation, and `[a-z0-9-]{1,32}` schedule id validation. Merged PR #17.
+- **test-due-field-inertness** — W7 (Phase 17). Static regression coverage that `due` stays inert outside selection/reporting/status code. Merged PR #17.
+- **scheduled-run-config-resolution** — W8 (Phase 17). `--config` support for scheduled `run` invocations, explicit config-path loading, and backend working-directory pinning. Merged PR #17.
+- **decompose-failure-mode-distinction** — W9 (Phase 17). Distinct timeout/empty/unparseable decompose rejection reasons and empty OpenAI-compatible harness response reporting. Merged PR #17.
+- **doctor-config-file-presence** — W12 (Phase 17). `doctor` reports config source and warns when using built-in defaults because no config file was found. Merged PR #17.
+- **versioned-python-command-policy** — follow-up from PR #17. `python3.N` executables such as `python3.12` match the default `python3` command policy while still respecting `python3` deny rules.
 
 ---
 
 ## Work items (priority order)
 
-Phases 15 and 16 (L1, W1–W4) are **done** — see What's been built. Phase 17
-below is this pass's new material: W6–W7 from the spec-vs-code read, and
-W8–W12 found in first real use of the `openai` harness on a scheduled-sweep
-todo file (2026-08-23). W5 (halt-on-fail) remains decision-gated and stays
-last, same convention as before.
+Phases 15–17 are **done** except the two decision-shaped Phase 17 follow-ups
+below: W10 (`@check=` semantics) and W11 (`plan --dry-run` documentation/code
+contract). W5 (halt-on-fail) remains decision-gated and stays last, same
+convention as before.
 
-### Phase 17 — spec-vs-code reconciliation (2026-08-23 pass)
-
-W6. **schedule-log-redirection-and-id-validation** — two gaps in the same file
-   and test module, confirmed by direct read of `schedule.py` (874 lines) and
-   `specs/03-data-model.md`:
-   - Stage 10's contract text ("the installed entry redirects stdout/stderr to
-     a log path under the run directory… Jumar sends nothing outward") and
-     `ScheduleEntry.log_path` in the data model name a redirection no backend
-     implements — `grep -rn "log_path" src/jumar/` matches only the spec.
-     `_build_command()` and each backend's `add_entry` (cron line, launchd
-     `ProgramArguments`, systemd `ExecStart`) build a bare invocation with no
-     redirect. For cron this is a live send-boundary concern, not cosmetic:
-     unredirected output falls to cron's own default handling (local mail, if
-     an MTA is configured on the host), which is exactly what "sends nothing
-     outward" rules out.
-   - The data model's `schedule_id` invariant (`[a-z0-9-]{1,32}`, "must not be
-     able to break out of" the crontab/plist/unit marker it's embedded in) is
-     never checked in `add_schedule()`. Latent today — the CLI's `schedule add`
-     has no `--schedule-id` flag and always generates a compliant
-     `uuid.uuid4().hex[:8]` — but the function itself validates nothing, so any
-     future caller (or a config-driven path) can break the marker.
-
-   Shape: every backend's installed entry redirects stdout+stderr to a log
-   path under the run directory (mirroring the existing `runs/` layout),
-   recorded on `ScheduleEntry.log_path` and surfaced by `list_schedules()`;
-   `add_schedule()` validates `schedule_id` against `[a-z0-9-]{1,32}` before it
-   touches any backend, raising the same class of startup error other
-   validation failures use.
-
-   *Validation:* `make check` + `pytest tests/test_schedule.py -q`, extended
-   with: each backend (cron/launchd/systemd) asserted to redirect stdout+stderr
-   to a log path under the run directory in its installed command/unit, and
-   `list_schedules()` surfacing that path; `add_schedule` rejecting a
-   marker-breaking `schedule_id` (e.g. containing `*/` or a newline) before any
-   backend write happens.
-   *Closes:* Stage 10's log-redirection contract line;
-   `specs/03-data-model.md`'s `ScheduleEntry.log_path` field and `schedule_id`
-   invariant.
-   *Branch slug:* `schedule-log-redirection`
-
-W7. **test-due-field-inertness** — `specs/03-data-model.md` and
-   `specs/04-technical-plan.md` both state, in the same wording used for the
-   wall-clock rule, "a test asserts `due` is not read by `decompose`,
-   `execute`, `verify`, or `repair`." The behaviour is already correct
-   (`grep -rn "\.due\b" src/jumar/decompose.py src/jumar/execute.py
-   src/jumar/verify/*.py src/jumar/repair.py` returns nothing — only
-   `select.py` (ordering) and `report.py`/`status.py` (reporting) read it) but
-   no test asserts it. The sibling requirement in the same spec section
-   ("nothing calls `datetime.now()` outside `clock.py`") already has exactly
-   this shape of test: `tests/test_cli.py::test_clock_is_only_wall_clock_reader`
-   walks `src/jumar/*.py` with a regex over disallowed calls.
-
-   Shape: a static-analysis test modelled directly on
-   `test_clock_is_only_wall_clock_reader` — walk `src/jumar/*.py`, regex for a
-   `.due` attribute reference, and assert it appears only in the sanctioned
-   modules (`select.py`, `report.py`, `status.py`, plus wherever `TodoItem`/
-   `models.py` itself defines the field).
-
-   *Validation:* `make check` + `pytest tests/test_cli.py -q` (or wherever the
-   new test lands, alongside `test_clock_is_only_wall_clock_reader`).
-   *Closes:* the "a test asserts `due` is not read by decompose/execute/
-   verify/repair" requirement in `specs/03-data-model.md` and
-   `specs/04-technical-plan.md`.
-   *Branch slug:* `test-due-field-inertness`
-
-W8. **scheduled-run-config-resolution** — `jumar schedule` cannot currently
-   install a working entry for any config that is not in the invoking cwd.
-   Two defects compound, both confirmed by direct read:
-   - `_build_command()` (`schedule.py:170`) appends `--config <path>` to
-     `jumar run --todo <path> --non-interactive`, but `run_p` in `cli.py:147`
-     defines no `--config` argument (only `schedule add`/`schedule show` do,
-     `cli.py:214`/`cli.py:239`). Every firing of an entry installed with
-     `--config` exits 2 with `unrecognized arguments`, into the scheduler's
-     log where nothing looks. `schedule add` accepts the flag without warning.
-   - Dropping the flag does not help: no backend sets a working directory
-     (launchd `add_entry` writes `ProgramArguments`/`EnvironmentVariables`
-     with no `WorkingDirectory`; the cron line and systemd `ExecStart` are
-     bare invocations). `load_config()` (`config.py:287`) takes no path and
-     `_load_raw()` reads `Path.cwd()/jumar.toml` with no upward search, so a
-     scheduled run finds no config and silently uses built-in defaults —
-     `agent = "claude"`, `todo_path = "todo.md"`. Not an error: the wrong
-     harness against a file that is not there.
-
-   Shape: `--config PATH` on `run`, `plan`, `doctor` and `status`, threaded
-   into `load_config()` as an explicit root (or file path) rather than cwd;
-   and every backend's installed entry pinned to a working directory. Same
-   seam as W6 — both are `_build_command()` plus each backend's `add_entry`.
-
-   *Validation:* `make check` + `pytest tests/test_schedule.py tests/test_cli.py -q`,
-   extended with: the argv built by `_build_command()` asserted to parse
-   clean through `cli.py`'s argparse (the assertion that would have caught
-   this); each backend asserted to pin a working directory; `load_config`
-   honouring an explicit path with no dependence on cwd.
-   *Closes:* nothing in the specs — this is code-vs-code, a flag one module
-   emits and another rejects.
-   *Branch slug:* `scheduled-run-config-resolution`
-
-W9. **decompose-failure-mode-distinction** — `decompose.py:486` parses only
-   when `result.exit_status == 0 and not result.timed_out`, and every other
-   path falls to the same branch: `subtasks, rejection, detail = (), "parse_error",
-   "response is not valid JSON"`. So a harness that timed out, one that
-   returned an empty body, and one that returned genuine malformed JSON are
-   indistinguishable — in the progress line, in `PLAN_REJECTED`, and in
-   `agent_stdout_head` (empty for the first two). `detect_harness_error()`
-   returns `None` for timeouts by design (`harness.py:171`, documented as
-   such), so nothing else picks them up either. On the `openai` harness this
-   is the common case, not an edge: `openai_agent.py:364` reads only
-   `message["content"]`, and a model that answers into `reasoning_content`
-   with empty `content` returns `exit_status=0` and an empty stdout — a
-   successful call that said nothing, reported as bad JSON.
-
-   Shape: distinct rejection reasons for timed-out, empty-response and
-   unparseable-response, carried into the journal payload and the progress
-   line; `openai_agent` to report an empty assistant message as its own
-   condition rather than a silent success. Whether to fall back to
-   `reasoning_content` is a separate question and not part of this item.
-
-   *Validation:* `make check` + `pytest tests/test_decompose.py -q`, extended
-   with: a runner stub returning `timed_out=True`, one returning
-   `exit_status=0` with empty stdout, and one returning prose, each asserted
-   to journal a distinct reason.
-   *Closes:* nothing in the specs; a diagnosability defect found in use.
-   *Branch slug:* `decompose-failure-mode-distinction`
+### Phase 17 — remaining decisions
 
 W10. **authored-check-pinning (`@check=`)** — `specs/02-functional-spec.md:45`
    lists `@check=` among the tokens parsed into an item's `meta` map, and
@@ -289,26 +169,6 @@ W11. **plan-dry-run-decompose-contract** — README's Status table says
    *Closes:* README's Status table row and Quick start claim.
    *Branch slug:* `plan-dry-run-decompose-contract` (only if the code route
    is chosen)
-
-W12. **doctor-config-file-presence** — `jumar doctor` reports
-   `[ok] config: Config is valid.` when no config file exists at all;
-   `load_config()` returns built-in defaults and the check passes on them.
-   Observed in use: a doctor run in a directory with no `jumar.toml` reported
-   all-ok while reporting a 32-entry allow list and harness `claude` — the
-   defaults — and the todo FAIL was the only hint anything was wrong. For a
-   tool whose scheduled runs depend on cwd-resolved config (see W8), "valid"
-   without "and here is the file it came from" is the wrong report.
-
-   Shape: `doctor`'s config line names the source — the resolved
-   `jumar.toml` path, the `pyproject.toml` `[tool.jumar]` table, or
-   explicitly "built-in defaults (no config file found)" — and warns on the
-   last.
-
-   *Validation:* `make check` + `pytest tests/test_doctor.py -q`, extended
-   with: no-config-file reporting defaults as a warn and naming them;
-   `jumar.toml` and `pyproject.toml` sources each named in the ok line.
-   *Closes:* nothing in the specs; a reporting-honesty defect found in use.
-   *Branch slug:* `doctor-config-file-presence`
 
 W5. **NEEDS A HUMAN DECISION before any code — halt-on-fail / run-level item
    loop.** Stage 7's prose says budget exhaustion means "the run moves to the
