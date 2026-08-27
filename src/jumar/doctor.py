@@ -181,9 +181,13 @@ def _check_harness(config: Config) -> DoctorCheck:
             CheckStatus.ok,
             f"Harness binary '{agent_bin}' found on PATH.",
         )
+    # When running on built-in defaults (no config file), a missing harness
+    # binary is a warning rather than a hard failure — the user has not yet
+    # created a jumar.toml to select their agent.
+    status = CheckStatus.warn if config.config_source == DEFAULT_CONFIG_SOURCE else CheckStatus.fail
     return DoctorCheck(
         "harness",
-        CheckStatus.fail,
+        status,
         f"Harness binary '{agent_bin}' not found on PATH. "
         'Install it or set [harness] agent = "<name>" in jumar.toml.',
     )
