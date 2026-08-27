@@ -201,7 +201,12 @@ def test_harness_found_on_path() -> None:
 
 
 def test_harness_not_found_on_path() -> None:
-    config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
+    # When the user has an explicit config file and the agent is not on PATH,
+    # the check must be a hard FAIL.
+    config = _cfg(
+        harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""),
+        config_source="/some/jumar.toml",
+    )
     report = run_doctor(config)
     check = _find(report, "harness")
     assert check.status == CheckStatus.fail
@@ -209,8 +214,22 @@ def test_harness_not_found_on_path() -> None:
     assert "PATH" in check.message
 
 
-def test_harness_fail_contributes_to_exit_status() -> None:
+def test_harness_not_found_on_path_is_warn_when_no_config_file() -> None:
+    # When running on built-in defaults (no config file), a missing harness
+    # binary is a warning — the user has not yet created a jumar.toml.
     config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
+    # _cfg() leaves config_source at DEFAULT_CONFIG_SOURCE
+    report = run_doctor(config)
+    check = _find(report, "harness")
+    assert check.status == CheckStatus.warn
+    assert "no-such-jumar-binary-zzz" in check.message
+
+
+def test_harness_fail_contributes_to_exit_status() -> None:
+    config = _cfg(
+        harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""),
+        config_source="/some/jumar.toml",
+    )
     report = run_doctor(config)
     assert report.exit_status == 1
 
