@@ -586,6 +586,10 @@ def test_python3_is_allowed() -> None:
     assert is_allowed(["python3", "script.py"], Config()) is True
 
 
+def test_versioned_python3_is_allowed_as_python3() -> None:
+    assert is_allowed(["python3.12", "script.py"], Config()) is True
+
+
 def test_pytest_is_allowed() -> None:
     assert is_allowed(["pytest", "tests/"], Config()) is True
 
@@ -651,6 +655,11 @@ def test_deny_wins_over_allow() -> None:
         )
     )
     assert is_allowed(["curl", "example.com"], cfg) is False
+
+
+def test_versioned_python3_obeys_python3_deny() -> None:
+    cfg = Config(commands=CommandPolicy(allow=("python3",), deny=("python3",)))
+    assert is_allowed(["python3.12", "script.py"], cfg) is False
 
 
 # ---------------------------------------------------------------------------

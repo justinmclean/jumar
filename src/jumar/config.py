@@ -15,6 +15,7 @@ is_allowed()    – True iff an argv list may be dispatched.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -495,5 +496,9 @@ def is_allowed(argv: list[str], config: Config) -> bool:
 
     if cmd in config.commands.deny:
         return False
+    if re.fullmatch(r"python3\.\d+", cmd) and "python3" in config.commands.deny:
+        return False
 
-    return cmd in config.commands.allow
+    return cmd in config.commands.allow or (
+        re.fullmatch(r"python3\.\d+", cmd) is not None and "python3" in config.commands.allow
+    )
