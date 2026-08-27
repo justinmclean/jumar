@@ -438,6 +438,50 @@ def test_clock_is_only_wall_clock_reader() -> None:
     )
 
 
+def test_due_field_is_inert_outside_ordering_and_reporting() -> None:
+    """Assert ``.due`` is only read for ordering (select) and reporting.
+
+    specs/03-data-model.md: "Nothing in the codebase may branch on `due`
+    other than ordering (stage 2) and reporting (stage 9)... a test asserts
+    `due` is not read by `decompose`, `execute`, `verify`, or `repair`."
+    Modelled on test_clock_is_only_wall_clock_reader above.
+    """
+    src_dir = Path(__file__).parent.parent / "src" / "jumar"
+    allowed: frozenset[str] = frozenset(
+        {
+            "models.py",  # defines the field
+            "select.py",  # stage 2: ordering
+            "report.py",  # stage 9: reporting
+            "status.py",  # reporting (jumar status)
+            "cli.py",  # journals it alongside selection, does not branch on it
+        }
+    )
+    disallowed_stages: frozenset[str] = frozenset({"decompose.py", "execute.py", "repair.py"})
+    violators: list[str] = []
+
+    for py_file in sorted(src_dir.rglob("*.py")):
+        if py_file.name in allowed:
+            continue
+        content = py_file.read_text()
+        if re.search(r"\.due\b", content):
+            violators.append(str(py_file.relative_to(src_dir)))
+
+    assert violators == [], f"These modules read `.due` but are not in the allowed set: {violators}"
+
+    # Directly pin the acceptance criterion's named stages, so a future
+    # rename into a differently-named file under an allowed directory
+    # (e.g. verify/foo.py) cannot silently reintroduce a `.due` read.
+    for stage_file in disallowed_stages:
+        path = src_dir / stage_file
+        assert not re.search(r"\.due\b", path.read_text()), (
+            f"{stage_file} must never read `.due` (decompose/execute/verify/repair are inert to it)"
+        )
+    for verify_file in sorted((src_dir / "verify").glob("*.py")):
+        assert not re.search(r"\.due\b", verify_file.read_text()), (
+            f"verify/{verify_file.name} must never read `.due`"
+        )
+
+
 # ---------------------------------------------------------------------------
 # capture_now injectable clock
 # ---------------------------------------------------------------------------
