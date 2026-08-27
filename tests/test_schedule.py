@@ -16,6 +16,11 @@ AC10.8  Removing an id that does not exist is a clean non-zero error.
 AC10.9  The resolved timezone is recorded on the entry and printed at install time.
 Round-trip  A fixture crontab containing unrelated entries survives add+remove
             byte-identical.
+W6      Every backend's installed entry redirects stdout+stderr to
+        ScheduleEntry.log_path (a log file under the todo file's runs/
+        directory), surfaced by list_schedules(); add_schedule() rejects a
+        schedule_id that would break out of the crontab/plist/unit marker it
+        is embedded in, before any backend write happens.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from jumar.schedule import (
     FakeBackend,
     LaunchdBackend,
     ScheduleEntry,
+    ScheduleIdError,
     SystemdBackend,
     _autodetect_backend_name,
     _cron_to_launchd_sci,
@@ -39,6 +45,7 @@ from jumar.schedule import (
     _expand_cron_field,
     _insert_block,
     _jumar_executable,
+    _log_path_for,
     _oncalendar_lines,
     _parse_blocks,
     _remove_block,
@@ -73,6 +80,8 @@ def _make_entry(
     jumar_path: str = _GSD,
     timezone: str = "America/Los_Angeles",
     config_path: str | None = None,
+    log_path: str | None = None,
+    work_dir: str = "",
 ) -> ScheduleEntry:
     return ScheduleEntry(
         schedule_id=schedule_id,
@@ -81,6 +90,8 @@ def _make_entry(
         jumar_path=jumar_path,
         config_path=config_path,
         timezone=timezone,
+        work_dir=work_dir,
+        log_path=log_path or f"/home/user/runs/schedule-{schedule_id}.log",
     )
 
 
@@ -460,6 +471,361 @@ class TestAddSchedule:
         text = backend.current_text
         assert str(cfg.resolve()) in text
 
+    def test_log_path_under_runs_dir_next_to_todo(self, tmp_path: Path) -> None:
+        """W6: log_path sits under the todo file's own runs/ directory."""
+        backend = FakeBackend()
+        todo = tmp_path / "todo.md"
+
+        todo.write_text("")
+        entry = add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+            schedule_id="logpath1",
+        )
+        assert entry.log_path == str(tmp_path / "runs" / "schedule-logpath1.log")
+        assert Path(entry.log_path).parent.is_dir()
+
+    def test_log_dir_created_even_when_todo_dir_did_not_have_one(self, tmp_path: Path) -> None:
+        """The runs/ dir must exist before the entry ever fires (cron's ``>>``
+        does not create missing parent directories)."""
+        backend = FakeBackend()
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        assert not (tmp_path / "runs").exists()
+        add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+        )
+        assert (tmp_path / "runs").is_dir()
+
+    def test_dry_run_does_not_create_log_dir(self, tmp_path: Path) -> None:
+        backend = FakeBackend(fail_on_write=True)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+            dry_run=True,
+        )
+        assert not (tmp_path / "runs").exists()
+
+    def test_work_dir_defaults_to_todo_parent(self, tmp_path: Path) -> None:
+        """W8: with no --config, the entry's work_dir is the todo file's
+        directory, so a scheduled run's cwd-relative jumar.toml lookup and
+        `runs/` creation land next to the todo file, not wherever the
+        scheduler's own default cwd happens to be."""
+        backend = FakeBackend()
+        sub = tmp_path / "project"
+        sub.mkdir()
+        todo = sub / "todo.md"
+        todo.write_text("")
+        entry = add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+        )
+        assert entry.work_dir == str(sub.resolve())
+
+    def test_work_dir_prefers_config_parent(self, tmp_path: Path) -> None:
+        """W8: when --config is given, work_dir follows the config file's
+        directory rather than the todo file's — the config is the more
+        specific statement of "where this invocation belongs"."""
+        backend = FakeBackend()
+        todo_dir = tmp_path / "todos"
+        todo_dir.mkdir()
+        todo = todo_dir / "todo.md"
+        todo.write_text("")
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        cfg = cfg_dir / "jumar.toml"
+        cfg.write_text("")
+        entry = add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            config_path=cfg,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+        )
+        assert entry.work_dir == str(cfg_dir.resolve())
+
+
+# ---------------------------------------------------------------------------
+# schedule_id validation (W6)
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleIdValidation:
+    def test_marker_breaking_id_rejected_before_any_write(self, tmp_path: Path) -> None:
+        backend = FakeBackend(fail_on_write=True)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        with pytest.raises(ScheduleIdError):
+            add_schedule(
+                "0 9 * * *",
+                todo_path=todo,
+                timezone="UTC",
+                backend=backend,
+                jumar_path=_GSD,
+                schedule_id="not */ ok",
+            )
+        assert backend.write_calls == 0
+
+    def test_newline_in_id_rejected(self, tmp_path: Path) -> None:
+        backend = FakeBackend(fail_on_write=True)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        with pytest.raises(ScheduleIdError):
+            add_schedule(
+                "0 9 * * *",
+                todo_path=todo,
+                timezone="UTC",
+                backend=backend,
+                jumar_path=_GSD,
+                schedule_id="line1\nline2",
+            )
+        assert backend.write_calls == 0
+
+    def test_id_too_long_rejected(self, tmp_path: Path) -> None:
+        backend = FakeBackend(fail_on_write=True)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        with pytest.raises(ScheduleIdError):
+            add_schedule(
+                "0 9 * * *",
+                todo_path=todo,
+                timezone="UTC",
+                backend=backend,
+                jumar_path=_GSD,
+                schedule_id="a" * 33,
+            )
+
+    def test_uppercase_rejected(self, tmp_path: Path) -> None:
+        backend = FakeBackend(fail_on_write=True)
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        with pytest.raises(ScheduleIdError):
+            add_schedule(
+                "0 9 * * *",
+                todo_path=todo,
+                timezone="UTC",
+                backend=backend,
+                jumar_path=_GSD,
+                schedule_id="Upper",
+            )
+
+    def test_generated_id_always_valid(self, tmp_path: Path) -> None:
+        """The default uuid4().hex[:8] id must always pass validation."""
+        backend = FakeBackend()
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        entry = add_schedule(
+            "0 9 * * *", todo_path=todo, timezone="UTC", backend=backend, jumar_path=_GSD
+        )
+        assert entry.schedule_id  # did not raise
+
+
+# ---------------------------------------------------------------------------
+# _build_command parses clean through cli.py's own argparse (W8 regression)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCommandParsesThroughCli:
+    def test_installed_argv_is_valid_run_argv(self, tmp_path: Path) -> None:
+        """W8: `_build_command()` appended --config to `jumar run`, but
+        `run_p` had no --config argument — every firing of a schedule entry
+        installed with a config path exited 2 with "unrecognized arguments".
+        This asserts the exact argv installed by a backend parses clean."""
+        from jumar.cli import build_parser
+        from jumar.schedule import _build_command
+
+        cfg = tmp_path / "jumar.toml"
+        cfg.write_text("")
+        entry = _make_entry(config_path=str(cfg))
+        argv = _build_command(entry)
+
+        args = build_parser().parse_args(argv[1:])  # argv[0] is the jumar path itself
+
+        assert args.command == "run"
+        assert args.todo == entry.todo_path
+        assert args.config == str(cfg)
+        assert args.non_interactive is True
+
+    def test_installed_argv_without_config_still_parses(self) -> None:
+        from jumar.cli import build_parser
+        from jumar.schedule import _build_command
+
+        entry = _make_entry(config_path=None)
+        argv = _build_command(entry)
+
+        args = build_parser().parse_args(argv[1:])
+
+        assert args.command == "run"
+        assert args.config is None
+
+
+# ---------------------------------------------------------------------------
+# Working-directory pinning per backend (W8)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkDirPinning:
+    def test_cron_line_cds_into_work_dir(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        text = show_entry(entry)
+        assert "cd /home/user/project &&" in text
+        assert f"cd /home/user/project && {entry.jumar_path}" in text
+
+    def test_cron_line_omits_cd_when_no_work_dir(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="")
+        text = show_entry(entry)
+        assert "cd " not in text.split("--- crontab entry")[1]
+
+    def test_cron_work_dir_quoted_for_spaces(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="/home/user/my project")
+        text = show_entry(entry)
+        assert "cd '/home/user/my project' &&" in text
+
+    def test_cron_round_trips_work_dir(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        text = _insert_block("", entry)
+        parsed = _parse_blocks(text)
+        assert len(parsed) == 1
+        assert parsed[0].work_dir == "/home/user/project"
+
+    def test_launchd_sets_working_directory(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        backend.add_entry(entry)
+        import plistlib
+
+        plist_path = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
+        with plist_path.open("rb") as fh:
+            data = plistlib.load(fh)
+        assert data["WorkingDirectory"] == "/home/user/project"
+
+        listed = backend.list_entries()
+        assert listed[0].work_dir == "/home/user/project"
+
+    def test_launchd_omits_working_directory_when_unset(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="")
+        backend.add_entry(entry)
+
+        import plistlib
+
+        plist_path = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
+        with plist_path.open("rb") as fh:
+            data = plistlib.load(fh)
+        assert "WorkingDirectory" not in data
+
+    def test_systemd_sets_working_directory(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        backend.add_entry(entry)
+
+        service_text = (tmp_path / f"jumar-{entry.schedule_id}.service").read_text()
+        assert "WorkingDirectory=/home/user/project" in service_text
+
+        listed = backend.list_entries()
+        assert listed[0].work_dir == "/home/user/project"
+
+    def test_systemd_omits_working_directory_when_unset(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="")
+        backend.add_entry(entry)
+
+        service_text = (tmp_path / f"jumar-{entry.schedule_id}.service").read_text()
+        assert "WorkingDirectory=" not in service_text
+
+
+# ---------------------------------------------------------------------------
+# Log redirection (W6): every backend's installed entry redirects
+# stdout+stderr to ScheduleEntry.log_path, surfaced by list_schedules().
+# ---------------------------------------------------------------------------
+
+
+class TestLogRedirection:
+    def test_log_path_for_helper(self, tmp_path: Path) -> None:
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        assert _log_path_for(todo, "myid") == str(tmp_path / "runs" / "schedule-myid.log")
+
+    def test_cron_line_redirects_stdout_and_stderr(self) -> None:
+        entry = _make_entry(log_path="/home/user/runs/schedule-abc12345.log")
+        text = _insert_block("", entry)
+        assert ">> /home/user/runs/schedule-abc12345.log 2>&1" in text
+
+    def test_cron_line_keeps_work_dir_and_redirect(self) -> None:
+        entry = _make_entry(
+            log_path="/home/user/project/runs/schedule-abc12345.log",
+            work_dir="/home/user/project",
+        )
+        text = _insert_block("", entry)
+        assert "cd /home/user/project &&" in text
+        assert ">> /home/user/project/runs/schedule-abc12345.log 2>&1" in text
+
+    def test_cron_backend_list_surfaces_log_path(self, tmp_path: Path) -> None:
+        backend = FakeBackend()
+        todo = tmp_path / "todo.md"
+        todo.write_text("")
+        add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+            schedule_id="cronlog1",
+        )
+        entries = list_schedules(backend)
+        assert entries[0].log_path == str(tmp_path / "runs" / "schedule-cronlog1.log")
+
+    def test_launchd_plist_redirects_stdout_and_stderr(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(log_path=str(tmp_path / "runs" / "schedule-abc12345.log"))
+        backend.add_entry(entry)
+
+        import plistlib
+
+        plist_path = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
+        with plist_path.open("rb") as fh:
+            data = plistlib.load(fh)
+        assert data["StandardOutPath"] == entry.log_path
+        assert data["StandardErrorPath"] == entry.log_path
+
+    def test_launchd_list_surfaces_log_path(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(log_path=str(tmp_path / "runs" / "schedule-abc12345.log"))
+        backend.add_entry(entry)
+        entries = backend.list_entries()
+        assert entries[0].log_path == entry.log_path
+
+    def test_systemd_service_redirects_stdout_and_stderr(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(log_path=str(tmp_path / "runs" / "schedule-abc12345.log"))
+        backend.add_entry(entry)
+        service_text = (tmp_path / f"jumar-{entry.schedule_id}.service").read_text()
+        assert f"StandardOutput=append:{entry.log_path}" in service_text
+        assert f"StandardError=append:{entry.log_path}" in service_text
+
+    def test_systemd_list_surfaces_log_path(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(log_path=str(tmp_path / "runs" / "schedule-abc12345.log"))
+        backend.add_entry(entry)
+        entries = backend.list_entries()
+        assert entries[0].log_path == entry.log_path
+
 
 # ---------------------------------------------------------------------------
 # list_schedules (AC10.7)
@@ -578,6 +944,7 @@ class TestShowEntry:
         assert entry.todo_path in text
         assert "Asia/Tokyo" in text
         assert "--non-interactive" in text
+        assert entry.log_path in text
 
     def test_show_entry_contains_jumar_markers(self) -> None:
         entry = _make_entry()

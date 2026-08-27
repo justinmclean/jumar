@@ -97,6 +97,96 @@ def test_config_multiple_bad_fields_all_reported() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Config source checks
+# ---------------------------------------------------------------------------
+
+
+def test_config_source_defaults_is_warn_and_names_defaults() -> None:
+    # _cfg() builds a Config directly, so config_source keeps its own default —
+    # DEFAULT_CONFIG_SOURCE, i.e. "no file found".
+    config = _cfg()
+    report = run_doctor(config)
+    check = _find(report, "config.source")
+    assert check.status == CheckStatus.warn
+    assert "no config file found" in check.message.lower()
+    assert config.todo_path in check.message
+    assert config.harness.agent in check.message
+    assert str(len(config.commands.allow)) in check.message
+
+
+def test_config_source_jumar_toml_is_ok_and_names_path(tmp_path: Path) -> None:
+    jumar_toml = tmp_path / "jumar.toml"
+    config = _cfg(config_source=str(jumar_toml))
+    report = run_doctor(config)
+    check = _find(report, "config.source")
+    assert check.status == CheckStatus.ok
+    assert str(jumar_toml) in check.message
+
+
+def test_config_source_pyproject_is_ok_and_names_table(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    config = _cfg(config_source=f"{pyproject} [tool.jumar]")
+    report = run_doctor(config)
+    check = _find(report, "config.source")
+    assert check.status == CheckStatus.ok
+    assert str(pyproject) in check.message
+    assert "[tool.jumar]" in check.message
+
+
+def test_config_source_defaults_does_not_contribute_to_exit_status(tmp_path: Path) -> None:
+    """Defaults are a warn, not a fail — doctor should still exit 0 overall
+    when everything else (harness, todo) is fine."""
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Task\n")
+    config = _cfg(harness=HarnessConfig(agent="python3", model=""), todo_path=str(todo))
+    report = run_doctor(config)
+    source_check = _find(report, "config.source")
+    assert source_check.status == CheckStatus.warn
+    fail_checks = [c for c in report.checks if c.status == CheckStatus.fail]
+    assert fail_checks == [], f"unexpected FAILs: {fail_checks}"
+
+
+def test_cli_doctor_warns_when_no_config_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Do something\n")
+
+    from jumar.cli import main
+
+    rc = main(["doctor", "--todo", str(todo)])
+    out = capsys.readouterr().out
+    assert "config.source" in out
+    assert "warn" in out.lower()
+    assert "no config file found" in out.lower()
+    # A warn-only doctor run still exits 0 when nothing else fails.
+    assert rc == 0
+
+
+def test_cli_doctor_ok_when_jumar_toml_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Do something\n")
+    (tmp_path / "jumar.toml").write_text(
+        '[jumar]\ntodo_path = "todo.md"\n\n[jumar.harness]\nagent = "python3"\nmodel = ""\n'
+    )
+
+    from jumar.cli import main
+
+    rc = main(["doctor", "--todo", str(todo)])
+    out = capsys.readouterr().out
+    assert str((tmp_path / "jumar.toml").resolve()) in out
+    assert rc == 0
+
+
+# ---------------------------------------------------------------------------
 # Harness checks
 # ---------------------------------------------------------------------------
 
@@ -111,7 +201,12 @@ def test_harness_found_on_path() -> None:
 
 
 def test_harness_not_found_on_path() -> None:
-    config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
+    # When the user has an explicit config file and the agent is not on PATH,
+    # the check must be a hard FAIL.
+    config = _cfg(
+        harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""),
+        config_source="/some/jumar.toml",
+    )
     report = run_doctor(config)
     check = _find(report, "harness")
     assert check.status == CheckStatus.fail
@@ -119,8 +214,22 @@ def test_harness_not_found_on_path() -> None:
     assert "PATH" in check.message
 
 
-def test_harness_fail_contributes_to_exit_status() -> None:
+def test_harness_not_found_on_path_is_warn_when_no_config_file() -> None:
+    # When running on built-in defaults (no config file), a missing harness
+    # binary is a warning — the user has not yet created a jumar.toml.
     config = _cfg(harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""))
+    # _cfg() leaves config_source at DEFAULT_CONFIG_SOURCE
+    report = run_doctor(config)
+    check = _find(report, "harness")
+    assert check.status == CheckStatus.warn
+    assert "no-such-jumar-binary-zzz" in check.message
+
+
+def test_harness_fail_contributes_to_exit_status() -> None:
+    config = _cfg(
+        harness=HarnessConfig(agent="no-such-jumar-binary-zzz", model=""),
+        config_source="/some/jumar.toml",
+    )
     report = run_doctor(config)
     assert report.exit_status == 1
 
