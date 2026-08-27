@@ -164,6 +164,13 @@ _HARD_DENY: tuple[tuple[str, ...], ...] = (
 # so that a typo in jumar.toml does not silently fail to apply the override.
 _VALID_HARNESS_STAGES: frozenset[str] = frozenset({"decompose", "execute", "judge"})
 
+# `Config.config_source` value when neither jumar.toml nor a populated
+# [tool.jumar] table in pyproject.toml was found — i.e. every field on the
+# returned Config is a built-in default. `doctor.py` treats this as a warn:
+# silently running on defaults (wrong todo file, wrong harness) looks
+# identical to a deliberately-configured run unless something says so.
+DEFAULT_CONFIG_SOURCE = "built-in defaults (no config file found)"
+
 # ---------------------------------------------------------------------------
 # Sub-configs
 # ---------------------------------------------------------------------------
@@ -266,6 +273,11 @@ class Config:
     # (codex, cursor, gemini, kiro, opencode). Default False because those
     # harnesses cannot enforce the git push / gh boundary at the tool-call layer.
     allow_unrestricted_harness: bool = False
+    # Where this Config came from: an absolute jumar.toml path, a
+    # "<pyproject.toml path> [tool.jumar]" description, or DEFAULT_CONFIG_SOURCE
+    # when no file supplied any field. Set by load_config(); a Config built
+    # directly (as most tests do) keeps the default, which reads as "no file".
+    config_source: str = DEFAULT_CONFIG_SOURCE
 
 
 # ---------------------------------------------------------------------------
@@ -273,14 +285,18 @@ class Config:
 # ---------------------------------------------------------------------------
 
 
-def _load_raw(root: Path, config_path: Path | None = None) -> dict[str, Any]:
-    """Return the [jumar] section from jumar.toml, or [tool.jumar] from pyproject.toml.
+def _load_raw(root: Path, config_path: Path | None = None) -> tuple[dict[str, Any], str]:
+    """Return the [jumar]/[tool.jumar] table plus a description of its source.
 
     When ``config_path`` is given, it names an explicit file to read — the
     file ``--config PATH`` resolves to — instead of searching ``root``. The
     format ([jumar] vs [tool.jumar]) is inferred from the filename. This is
     the seam a scheduled run uses so config resolution does not depend on the
     scheduler's own invocation cwd (W8).
+
+    The source string is DEFAULT_CONFIG_SOURCE when no file supplied any field —
+    including a pyproject.toml present but with no [tool.jumar] table, which is
+    indistinguishable from "no file" as far as the resolved Config is concerned.
     """
     if config_path is not None:
         if not config_path.is_file():
@@ -289,23 +305,33 @@ def _load_raw(root: Path, config_path: Path | None = None) -> dict[str, Any]:
             explicit_data: dict[str, Any] = tomllib.load(fh)
         if config_path.name == "pyproject.toml":
             explicit_tool: dict[str, Any] = cast(dict[str, Any], explicit_data.get("tool", {}))
-            return cast(dict[str, Any], explicit_tool.get("jumar", {}))
-        return cast(dict[str, Any], explicit_data.get("jumar", {}))
+            jumar_table = cast(dict[str, Any], explicit_tool.get("jumar", {}))
+            source = (
+                f"{config_path.resolve()} [tool.jumar]"
+                if jumar_table
+                else DEFAULT_CONFIG_SOURCE
+            )
+            return jumar_table, source
+        raw = cast(dict[str, Any], explicit_data.get("jumar", {}))
+        source = str(config_path.resolve()) if raw else DEFAULT_CONFIG_SOURCE
+        return raw, source
 
     jumar_toml = root / "jumar.toml"
     if jumar_toml.is_file():
         with jumar_toml.open("rb") as fh:
             data: dict[str, Any] = tomllib.load(fh)
-        return cast(dict[str, Any], data.get("jumar", {}))
+        return cast(dict[str, Any], data.get("jumar", {})), str(jumar_toml.resolve())
 
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
         with pyproject.open("rb") as fh:
             data = tomllib.load(fh)
         tool: dict[str, Any] = cast(dict[str, Any], data.get("tool", {}))
-        return cast(dict[str, Any], tool.get("jumar", {}))
+        jumar_table = cast(dict[str, Any], tool.get("jumar", {}))
+        if jumar_table:
+            return jumar_table, f"{pyproject.resolve()} [tool.jumar]"
 
-    return {}
+    return {}, DEFAULT_CONFIG_SOURCE
 
 
 def load_config(
@@ -327,7 +353,9 @@ def load_config(
         root = Path.cwd()
 
     resolved_config_path = Path(config_path) if config_path is not None else None
-    raw: dict[str, Any] = _load_raw(root, resolved_config_path)
+    raw: dict[str, Any]
+    config_source: str
+    raw, config_source = _load_raw(root, resolved_config_path)
     overrides: dict[str, object] = cli_overrides or {}
 
     def _get(key: str, default: Any) -> Any:
@@ -421,6 +449,7 @@ def load_config(
         commands=commands,
         schedule_backend=schedule_backend,
         allow_unrestricted_harness=bool(_get("allow_unrestricted_harness", False)),
+        config_source=config_source,
     )
 
 
