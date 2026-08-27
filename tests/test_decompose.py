@@ -512,6 +512,42 @@ def test_authored_source_label(journal: Journal, cfg: Config, tmp_path: Path) ->
     assert plan.source == "authored"
 
 
+def test_authored_subtasks_inherit_parent_capabilities(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """The model supplies checks for authored subtasks, not their authority.
+
+    Regression coverage for run 20260827-0736-d324: an authored Iggy subtask
+    needed to write a planning note, but the model returned only/read/no
+    capabilities and Jumar accepted the under-grant. Since there is no
+    per-authored-subtask capability syntax, authored subtasks inherit the
+    parent item's explicit grants.
+    """
+    caps = frozenset({Capability.read_fs, Capability.write_fs, Capability.run_commands})
+    item = _make_item(authored_subtasks=("Write the planning note",), capabilities=caps)
+    response = json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "ignored",
+                    "check": {
+                        "kind": "command",
+                        "statement": "planning note exists",
+                        "command": ["test", "-f", "planning_notes.md"],
+                    },
+                    "capabilities": ["read_fs"],
+                    "depends_on": [],
+                }
+            ]
+        }
+    )
+    runner = _fake_runner([response])
+    plan = _decompose(item, runner, journal, cfg, tmp_path)
+
+    assert plan.source == "authored"
+    assert plan.subtasks[0].capabilities == caps
+
+
 def test_authored_count_mismatch_is_retriable(
     journal: Journal, cfg: Config, tmp_path: Path
 ) -> None:
