@@ -133,6 +133,7 @@ class AgentResult:
 HARNESS_ERROR_USAGE_LIMIT = "usage_limit"
 HARNESS_ERROR_AUTH_FAILURE = "auth_failure"
 HARNESS_ERROR_BINARY_MISSING = "binary_missing"
+HARNESS_ERROR_TRANSPORT = "transport"
 
 _USAGE_LIMIT_PHRASES: tuple[str, ...] = (
     "session limit",
@@ -150,19 +151,30 @@ _BINARY_MISSING_PHRASES: tuple[str, ...] = (
     "command not found",
     "is not recognized as an internal or external command",
 )
+_TRANSPORT_FAILURE_PHRASES: tuple[str, ...] = (
+    "request to http://",
+    "request to https://",
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "failed to establish a new connection",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "network is unreachable",
+    "timed out",
+)
 
 
 def detect_harness_error(result: AgentResult) -> str | None:
     """Classify *result* as a harness-level infrastructure outage, or None.
 
     Returns one of HARNESS_ERROR_USAGE_LIMIT / HARNESS_ERROR_AUTH_FAILURE /
-    HARNESS_ERROR_BINARY_MISSING when stdout/stderr carries the signature of
-    a usage-limit hit, an authentication failure, or a missing agent binary —
-    the harness CLI failed to run at all, as opposed to running and producing
-    a bad response. Returns None for everything else, including a genuine
-    timeout (already modelled separately as ``AgentResult.timed_out`` /
-    ``FailureCode.timed_out``, which retrying can plausibly fix — an outage
-    cannot).
+    HARNESS_ERROR_BINARY_MISSING / HARNESS_ERROR_TRANSPORT when stdout/stderr
+    carries the signature of a usage-limit hit, an authentication failure, a
+    missing agent binary, or an endpoint transport failure — the harness failed
+    to run the prompt, as opposed to running and producing a bad response.
+    Returns None for everything else, including a subprocess timeout already
+    modelled separately as ``AgentResult.timed_out`` / ``FailureCode.timed_out``.
 
     Pure function: only inspects fields already on *result*. Callers decide
     what to do with the classification (journal it, skip a retry, exclude it
@@ -173,6 +185,8 @@ def detect_harness_error(result: AgentResult) -> str | None:
     haystack = f"{result.stdout}\n{result.stderr}".lower()
     if any(phrase in haystack for phrase in _BINARY_MISSING_PHRASES):
         return HARNESS_ERROR_BINARY_MISSING
+    if any(phrase in haystack for phrase in _TRANSPORT_FAILURE_PHRASES):
+        return HARNESS_ERROR_TRANSPORT
     if any(phrase in haystack for phrase in _USAGE_LIMIT_PHRASES):
         return HARNESS_ERROR_USAGE_LIMIT
     if any(phrase in haystack for phrase in _AUTH_FAILURE_PHRASES) or any(

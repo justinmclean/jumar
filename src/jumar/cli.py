@@ -591,6 +591,18 @@ def run_item(
         )
 
         prog.agent_transcript(getattr(attempt, "transcript_path", None))
+        if attempt.error == "harness_error":
+            prog.verdict("harness_error", "execution harness failed before running the subtask")
+            journal.append(
+                ITEM_FAILED,
+                item_id=item.item_id,
+                payload={
+                    "failure_code": "harness_error",
+                    "failed_subtask_index": subtask.index,
+                },
+            )
+            return 1
+
         prog.verifying(subtask.check.kind)
 
         # The judge verifier needs a harness or it returns

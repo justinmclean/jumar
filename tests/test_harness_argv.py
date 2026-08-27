@@ -23,6 +23,7 @@ import pytest
 from jumar.harness import (
     HARNESS_ERROR_AUTH_FAILURE,
     HARNESS_ERROR_BINARY_MISSING,
+    HARNESS_ERROR_TRANSPORT,
     HARNESS_ERROR_USAGE_LIMIT,
     IN_PROCESS_HARNESSES,
     SESSION_RESUMABLE_HARNESSES,
@@ -1096,6 +1097,14 @@ def test_detect_harness_error_binary_missing() -> None:
         exit_status=-1,
     )
     assert detect_harness_error(result) == HARNESS_ERROR_BINARY_MISSING
+
+
+def test_detect_harness_error_openai_transport_timeout() -> None:
+    result = _result(
+        stderr="request to http://192.168.1.8:1234/v1 failed: timed out",
+        exit_status=-1,
+    )
+    assert detect_harness_error(result) == HARNESS_ERROR_TRANSPORT
 
 
 def test_detect_harness_error_word_boundary_does_not_match_substring() -> None:

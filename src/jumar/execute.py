@@ -209,7 +209,9 @@ def execute(
     )
 
     error: str | None = None
-    if result.timed_out:
+    if harness_error is not None:
+        error = "harness_error"
+    elif result.timed_out:
         error = "timed_out"
     elif result.exit_status not in (0, None):
         error = f"exit_status={result.exit_status}"

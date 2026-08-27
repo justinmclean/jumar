@@ -81,6 +81,23 @@ def timeout_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
     return AgentResult(exit_status=-1, stdout="", stderr="", timed_out=True, agent_claim=None)
 
 
+def transport_error_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Plans one subtask, then fails before the execution harness can run it."""
+    transport_error_agent.calls += 1
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    return AgentResult(
+        exit_status=-1,
+        stdout="",
+        stderr="request to http://192.168.1.8:1234/v1 failed: timed out",
+        timed_out=False,
+        agent_claim=None,
+    )
+
+
+transport_error_agent.calls = 0
+
+
 class _Args:
     """Minimal stand-in for the parsed argparse namespace."""
 
@@ -174,6 +191,28 @@ def test_run_a_timed_out_attempt_does_not_advance_the_item(workspace: Path) -> N
     finished = [ln for ln in lines if ln["event"] == "attempt_finished"]
     assert finished and all(ln["payload"].get("timed_out") for ln in finished)
     assert not any(ln["event"] == "item_completed" for ln in lines)
+
+
+def test_run_harness_transport_error_fails_without_repairs(workspace: Path) -> None:
+    """A harness outage is infrastructure failure, not a repairable bad subtask."""
+    transport_error_agent.calls = 0
+
+    rc = cli._cmd_run(_Args(), _run_agent=transport_error_agent)
+
+    assert rc == 1
+    assert transport_error_agent.calls == 2  # decompose once, execute once, no repair
+    assert not (workspace / "marker.txt").exists()
+
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    assert any(
+        ln["event"] == "harness_error" and ln["payload"]["reason"] == "transport" for ln in lines
+    )
+    failed = next(ln for ln in lines if ln["event"] == "item_failed")
+    assert failed["payload"]["failure_code"] == "harness_error"
+    assert not any(ln["event"] == "repair_started" for ln in lines)
 
 
 def test_run_dry_run_executes_nothing(workspace: Path) -> None:
