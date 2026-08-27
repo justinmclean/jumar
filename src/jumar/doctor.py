@@ -184,7 +184,10 @@ def _check_harness(config: Config) -> DoctorCheck:
     # When running on built-in defaults (no config file), a missing harness
     # binary is a warning rather than a hard failure — the user has not yet
     # created a jumar.toml to select their agent.
-    status = CheckStatus.warn if config.config_source == DEFAULT_CONFIG_SOURCE else CheckStatus.fail
+    if config.config_source == DEFAULT_CONFIG_SOURCE:
+        status = CheckStatus.warn
+    else:
+        status = CheckStatus.fail
     return DoctorCheck(
         "harness",
         status,
