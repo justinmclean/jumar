@@ -47,7 +47,9 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 # Retriable: retry once before failing as unverifiable_plan.
-_RETRIABLE: frozenset[str] = frozenset({"missing_check", "parse_error"})
+_RETRIABLE: frozenset[str] = frozenset(
+    {"missing_check", "parse_error", "timed_out", "empty_response"}
+)
 
 # Non-retriable: fail immediately with the mapped FailureCode.
 _FAILURE_CODE: dict[str, FailureCode] = {
@@ -482,23 +484,40 @@ def decompose(
                 },
             )
 
+        # Distinguish *why* there is no parseable plan. A harness that timed
+        # out, one that returned nothing, and one that returned genuine
+        # malformed JSON used to collapse into the same "parse_error" —
+        # indistinguishable in the progress line, in `plan_rejected`, and in
+        # `agent_stdout_head` (empty for the first two). On the `openai`
+        # harness the empty case is the common one, not an edge: a model that
+        # answers into `reasoning_content` with an empty `content` returns
+        # `exit_status=0` with empty stdout — a successful call that said
+        # nothing, previously reported as "not valid JSON".
         data: dict[str, Any] | None = None
-        if result.exit_status == 0 and not result.timed_out:
-            data = _extract_json(result.stdout)
-
         rejection: str | None
         detail: str | None
         subtasks: tuple[Subtask, ...]
-        if data is None:
-            subtasks, rejection, detail = (), "parse_error", "response is not valid JSON"
-        else:
-            subtasks, rejection, detail = _parse_and_validate(
-                data,
-                item.item_id,
-                item.capabilities,
-                config.max_subtasks,
-                item.authored_subtasks,
+        if result.timed_out:
+            subtasks, rejection, detail = (
+                (),
+                "timed_out",
+                f"agent call timed out after {config.subtask_timeout_s}s",
             )
+        elif result.exit_status == 0 and not result.stdout.strip():
+            subtasks, rejection, detail = (), "empty_response", "agent returned an empty response"
+        else:
+            if result.exit_status == 0:
+                data = _extract_json(result.stdout)
+            if data is None:
+                subtasks, rejection, detail = (), "parse_error", "response is not valid JSON"
+            else:
+                subtasks, rejection, detail = _parse_and_validate(
+                    data,
+                    item.item_id,
+                    item.capabilities,
+                    config.max_subtasks,
+                    item.authored_subtasks,
+                )
 
         if rejection is None:
             # Success — journal the full plan before returning (AC3.6).
@@ -536,6 +555,8 @@ def decompose(
         }
         if detail:
             journal_payload["rejection_detail"] = detail
+        if result.stderr:
+            journal_payload["agent_stderr_head"] = result.stderr[:500]
         journal.append(
             PLAN_REJECTED,
             item_id=item.item_id,

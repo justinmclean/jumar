@@ -369,10 +369,21 @@ def run_openai_agent(
         if not tool_calls or not allow_tools:
             stdout = "\n".join(transcript)
             lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+            # A model can return exit_status=0 having said nothing — e.g. an
+            # answer parked entirely in a `reasoning_content` field the chat-
+            # completions schema does not surface here, leaving `content`
+            # empty. That is a successful HTTP call but not a successful
+            # answer; flag it in stderr rather than returning a bare success
+            # indistinguishable from one that actually said something, so a
+            # caller inspecting the result (or the harness_error/decompose
+            # rejection classifiers) can tell the two apart.
+            stderr = (
+                "" if stdout.strip() else "assistant returned an empty message with no tool calls"
+            )
             return AgentResult(
                 exit_status=0,
                 stdout=stdout,
-                stderr="",
+                stderr=stderr,
                 timed_out=False,
                 agent_claim=lines[-1] if lines else None,
             )
