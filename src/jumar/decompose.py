@@ -327,13 +327,15 @@ def _parse_and_validate(
 
         check = check_result
 
-        raw_caps = raw.get("capabilities", [])
-        subtask_caps: frozenset[Capability] = frozenset()
-        if isinstance(raw_caps, list):
+        if authored_texts:
+            subtask_caps = item_capabilities
+        else:
+            raw_caps = raw.get("capabilities", [])
             valid_caps: set[Capability] = set()
-            for c in raw_caps:
-                with contextlib.suppress(ValueError):
-                    valid_caps.add(Capability(c))
+            if isinstance(raw_caps, list):
+                for c in raw_caps:
+                    with contextlib.suppress(ValueError):
+                        valid_caps.add(Capability(c))
             subtask_caps = frozenset(valid_caps) & item_capabilities
 
         raw_deps = raw.get("depends_on", [])
