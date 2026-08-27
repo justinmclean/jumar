@@ -182,6 +182,43 @@ def test_tool_call_then_final_answer(tmp_path: Path, chat_server: Any) -> None:
     assert tool_payload["content"] == "hello world"
 
 
+def test_empty_content_no_tool_calls_flagged_in_stderr(tmp_path: Path, chat_server: Any) -> None:
+    """A model that answers with empty content and no tool calls is not a silent success.
+
+    Regression coverage for W9: a model that parks its answer entirely in a
+    field this schema does not surface (e.g. `reasoning_content`) returns
+    `content=""` and no `tool_calls` — exit_status=0 with empty stdout,
+    indistinguishable from a real success unless stderr names the condition.
+    """
+    base_url, handler = chat_server([_message("")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert result.exit_status == 0  # the HTTP call itself succeeded
+    assert result.stdout == ""
+    assert result.agent_claim is None
+    assert "empty message" in result.stderr
+    assert len(handler.received) == 1
+
+
+def test_nonempty_content_no_stderr_note(tmp_path: Path, chat_server: Any) -> None:
+    """A real final answer must not carry the empty-message stderr note."""
+    base_url, handler = chat_server([_message("All done.")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert result.exit_status == 0
+    assert result.stderr == ""
+
+
 # ---------------------------------------------------------------------------
 # Step cap
 # ---------------------------------------------------------------------------
