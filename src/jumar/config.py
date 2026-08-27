@@ -308,9 +308,7 @@ def _load_raw(root: Path, config_path: Path | None = None) -> tuple[dict[str, An
             explicit_tool: dict[str, Any] = cast(dict[str, Any], explicit_data.get("tool", {}))
             jumar_table = cast(dict[str, Any], explicit_tool.get("jumar", {}))
             source = (
-                f"{config_path.resolve()} [tool.jumar]"
-                if jumar_table
-                else DEFAULT_CONFIG_SOURCE
+                f"{config_path.resolve()} [tool.jumar]" if jumar_table else DEFAULT_CONFIG_SOURCE
             )
             return jumar_table, source
         raw = cast(dict[str, Any], explicit_data.get("jumar", {}))
