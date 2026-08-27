@@ -7,6 +7,7 @@ Capability      – coarse-grained authority enum.
 HarnessConfig   – nested agent/model settings.
 CommandPolicy   – argv[0] allow/deny policy; deny wins.
 Config          – frozen resolved configuration.
+ConfigError     – raised when an explicit --config path is missing/unreadable.
 load_config()   – locate, parse, and merge config from file + CLI overrides.
 is_allowed()    – True iff an argv list may be dispatched.
 """
@@ -23,6 +24,12 @@ from typing import Any, cast
 # ---------------------------------------------------------------------------
 # Enumerations
 # ---------------------------------------------------------------------------
+
+
+class ConfigError(ValueError):
+    """Raised when config loading fails — e.g. an explicit ``--config`` path
+    does not exist. Distinct from a missing file falling back to defaults,
+    which is not an error."""
 
 
 class Capability(StrEnum):
@@ -266,8 +273,25 @@ class Config:
 # ---------------------------------------------------------------------------
 
 
-def _load_raw(root: Path) -> dict[str, Any]:
-    """Return the [jumar] section from jumar.toml, or [tool.jumar] from pyproject.toml."""
+def _load_raw(root: Path, config_path: Path | None = None) -> dict[str, Any]:
+    """Return the [jumar] section from jumar.toml, or [tool.jumar] from pyproject.toml.
+
+    When ``config_path`` is given, it names an explicit file to read — the
+    file ``--config PATH`` resolves to — instead of searching ``root``. The
+    format ([jumar] vs [tool.jumar]) is inferred from the filename. This is
+    the seam a scheduled run uses so config resolution does not depend on the
+    scheduler's own invocation cwd (W8).
+    """
+    if config_path is not None:
+        if not config_path.is_file():
+            raise ConfigError(f"config file not found: {config_path}")
+        with config_path.open("rb") as fh:
+            explicit_data: dict[str, Any] = tomllib.load(fh)
+        if config_path.name == "pyproject.toml":
+            explicit_tool: dict[str, Any] = cast(dict[str, Any], explicit_data.get("tool", {}))
+            return cast(dict[str, Any], explicit_tool.get("jumar", {}))
+        return cast(dict[str, Any], explicit_data.get("jumar", {}))
+
     jumar_toml = root / "jumar.toml"
     if jumar_toml.is_file():
         with jumar_toml.open("rb") as fh:
@@ -288,16 +312,22 @@ def load_config(
     root: Path | None = None,
     *,
     cli_overrides: dict[str, object] | None = None,
+    config_path: Path | str | None = None,
 ) -> Config:
     """Load config from file then apply CLI overrides.
 
     Priority (highest wins): CLI overrides > jumar.toml / [tool.jumar] > built-in defaults.
     jumar.toml is preferred over pyproject.toml when both are present.
+
+    ``config_path``, when given, names an explicit config file (e.g. from
+    ``--config``) that is read directly instead of searching ``root``.
+    Raises :class:`ConfigError` if it does not exist.
     """
     if root is None:
         root = Path.cwd()
 
-    raw: dict[str, Any] = _load_raw(root)
+    resolved_config_path = Path(config_path) if config_path is not None else None
+    raw: dict[str, Any] = _load_raw(root, resolved_config_path)
     overrides: dict[str, object] = cli_overrides or {}
 
     def _get(key: str, default: Any) -> Any:
