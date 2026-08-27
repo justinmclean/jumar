@@ -81,6 +81,7 @@ def _make_entry(
     timezone: str = "America/Los_Angeles",
     config_path: str | None = None,
     log_path: str | None = None,
+    work_dir: str = "",
 ) -> ScheduleEntry:
     return ScheduleEntry(
         schedule_id=schedule_id,
@@ -89,6 +90,7 @@ def _make_entry(
         jumar_path=jumar_path,
         config_path=config_path,
         timezone=timezone,
+        work_dir=work_dir,
         log_path=log_path or f"/home/user/runs/schedule-{schedule_id}.log",
     )
 
@@ -473,6 +475,7 @@ class TestAddSchedule:
         """W6: log_path sits under the todo file's own runs/ directory."""
         backend = FakeBackend()
         todo = tmp_path / "todo.md"
+
         todo.write_text("")
         entry = add_schedule(
             "0 9 * * *",
@@ -514,6 +517,48 @@ class TestAddSchedule:
             dry_run=True,
         )
         assert not (tmp_path / "runs").exists()
+
+    def test_work_dir_defaults_to_todo_parent(self, tmp_path: Path) -> None:
+        """W8: with no --config, the entry's work_dir is the todo file's
+        directory, so a scheduled run's cwd-relative jumar.toml lookup and
+        `runs/` creation land next to the todo file, not wherever the
+        scheduler's own default cwd happens to be."""
+        backend = FakeBackend()
+        sub = tmp_path / "project"
+        sub.mkdir()
+        todo = sub / "todo.md"
+        todo.write_text("")
+        entry = add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+        )
+        assert entry.work_dir == str(sub.resolve())
+
+    def test_work_dir_prefers_config_parent(self, tmp_path: Path) -> None:
+        """W8: when --config is given, work_dir follows the config file's
+        directory rather than the todo file's — the config is the more
+        specific statement of "where this invocation belongs"."""
+        backend = FakeBackend()
+        todo_dir = tmp_path / "todos"
+        todo_dir.mkdir()
+        todo = todo_dir / "todo.md"
+        todo.write_text("")
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        cfg = cfg_dir / "jumar.toml"
+        cfg.write_text("")
+        entry = add_schedule(
+            "0 9 * * *",
+            todo_path=todo,
+            config_path=cfg,
+            timezone="UTC",
+            backend=backend,
+            jumar_path=_GSD,
+        )
+        assert entry.work_dir == str(cfg_dir.resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +637,120 @@ class TestScheduleIdValidation:
 
 
 # ---------------------------------------------------------------------------
+# _build_command parses clean through cli.py's own argparse (W8 regression)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCommandParsesThroughCli:
+    def test_installed_argv_is_valid_run_argv(self, tmp_path: Path) -> None:
+        """W8: `_build_command()` appended --config to `jumar run`, but
+        `run_p` had no --config argument — every firing of a schedule entry
+        installed with a config path exited 2 with "unrecognized arguments".
+        This asserts the exact argv installed by a backend parses clean."""
+        from jumar.cli import build_parser
+        from jumar.schedule import _build_command
+
+        cfg = tmp_path / "jumar.toml"
+        cfg.write_text("")
+        entry = _make_entry(config_path=str(cfg))
+        argv = _build_command(entry)
+
+        args = build_parser().parse_args(argv[1:])  # argv[0] is the jumar path itself
+
+        assert args.command == "run"
+        assert args.todo == entry.todo_path
+        assert args.config == str(cfg)
+        assert args.non_interactive is True
+
+    def test_installed_argv_without_config_still_parses(self) -> None:
+        from jumar.cli import build_parser
+        from jumar.schedule import _build_command
+
+        entry = _make_entry(config_path=None)
+        argv = _build_command(entry)
+
+        args = build_parser().parse_args(argv[1:])
+
+        assert args.command == "run"
+        assert args.config is None
+
+
+# ---------------------------------------------------------------------------
+# Working-directory pinning per backend (W8)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkDirPinning:
+    def test_cron_line_cds_into_work_dir(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        text = show_entry(entry)
+        assert "cd /home/user/project &&" in text
+        assert f"cd /home/user/project && {entry.jumar_path}" in text
+
+    def test_cron_line_omits_cd_when_no_work_dir(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="")
+        text = show_entry(entry)
+        assert "cd " not in text.split("--- crontab entry")[1]
+
+    def test_cron_work_dir_quoted_for_spaces(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="/home/user/my project")
+        text = show_entry(entry)
+        assert "cd '/home/user/my project' &&" in text
+
+    def test_cron_round_trips_work_dir(self) -> None:
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        text = _insert_block("", entry)
+        parsed = _parse_blocks(text)
+        assert len(parsed) == 1
+        assert parsed[0].work_dir == "/home/user/project"
+
+    def test_launchd_sets_working_directory(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        backend.add_entry(entry)
+        import plistlib
+
+        plist_path = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
+        with plist_path.open("rb") as fh:
+            data = plistlib.load(fh)
+        assert data["WorkingDirectory"] == "/home/user/project"
+
+        listed = backend.list_entries()
+        assert listed[0].work_dir == "/home/user/project"
+
+    def test_launchd_omits_working_directory_when_unset(self, tmp_path: Path) -> None:
+        backend = LaunchdBackend(agents_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="")
+        backend.add_entry(entry)
+
+        import plistlib
+
+        plist_path = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
+        with plist_path.open("rb") as fh:
+            data = plistlib.load(fh)
+        assert "WorkingDirectory" not in data
+
+    def test_systemd_sets_working_directory(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="/home/user/project")
+        backend.add_entry(entry)
+
+        service_text = (tmp_path / f"jumar-{entry.schedule_id}.service").read_text()
+        assert "WorkingDirectory=/home/user/project" in service_text
+
+        listed = backend.list_entries()
+        assert listed[0].work_dir == "/home/user/project"
+
+    def test_systemd_omits_working_directory_when_unset(self, tmp_path: Path) -> None:
+        backend = SystemdBackend(units_dir=tmp_path)
+        entry = _make_entry(config_path=None, work_dir="")
+        backend.add_entry(entry)
+
+        service_text = (tmp_path / f"jumar-{entry.schedule_id}.service").read_text()
+        assert "WorkingDirectory=" not in service_text
+
+
+# ---------------------------------------------------------------------------
 # Log redirection (W6): every backend's installed entry redirects
 # stdout+stderr to ScheduleEntry.log_path, surfaced by list_schedules().
 # ---------------------------------------------------------------------------
@@ -607,6 +766,15 @@ class TestLogRedirection:
         entry = _make_entry(log_path="/home/user/runs/schedule-abc12345.log")
         text = _insert_block("", entry)
         assert ">> /home/user/runs/schedule-abc12345.log 2>&1" in text
+
+    def test_cron_line_keeps_work_dir_and_redirect(self) -> None:
+        entry = _make_entry(
+            log_path="/home/user/project/runs/schedule-abc12345.log",
+            work_dir="/home/user/project",
+        )
+        text = _insert_block("", entry)
+        assert "cd /home/user/project &&" in text
+        assert ">> /home/user/project/runs/schedule-abc12345.log 2>&1" in text
 
     def test_cron_backend_list_surfaces_log_path(self, tmp_path: Path) -> None:
         backend = FakeBackend()
@@ -627,6 +795,7 @@ class TestLogRedirection:
         backend = LaunchdBackend(agents_dir=tmp_path)
         entry = _make_entry(log_path=str(tmp_path / "runs" / "schedule-abc12345.log"))
         backend.add_entry(entry)
+
         import plistlib
 
         plist_path = tmp_path / f"com.jumar.{entry.schedule_id}.plist"
