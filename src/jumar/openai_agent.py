@@ -23,7 +23,9 @@ third-party binary may or may not honour — so this harness needs no
 stdlib only (``urllib.request``) — ``dependencies`` in pyproject.toml stays
 empty. ``timeout_s`` is a deadline across the *whole* tool-calling loop, not a
 per-request timeout: a chatty local model that keeps calling tools does not
-get a fresh budget on every round trip.
+get a fresh budget on every round trip. A request still in flight when that
+deadline passes is reported as a timeout (``timed_out=True``), not as a
+transport outage — the endpoint was healthy, the clock ran out.
 """
 
 from __future__ import annotations
@@ -240,6 +242,22 @@ def _dispatch_tool_call(
 # ---------------------------------------------------------------------------
 
 
+# How much of an error response body to keep. Local model servers explain a
+# rejection in the body — a context-length overflow, an unsupported field —
+# while urllib's own message flattens all of it to "HTTP Error 400: Bad
+# Request". Capped because the body is server-controlled and can be large.
+_ERROR_BODY_HEAD_BYTES = 500
+
+
+class ChatCompletionsHTTPError(ValueError):
+    """An HTTP error response from the chat-completions endpoint, carrying the
+    server's own explanation from the response body.
+
+    Subclasses ValueError so it lands in the same handler as every other
+    request failure — the point is the message, not new control flow.
+    """
+
+
 def _post_chat_completions(
     base_url: str,
     payload: dict[str, Any],
@@ -249,9 +267,11 @@ def _post_chat_completions(
 ) -> dict[str, Any]:
     """POST *payload* to ``{base_url}/chat/completions`` and return the parsed JSON body.
 
-    Raises OSError/urllib.error.URLError/TimeoutError on transport failure and
-    ValueError on an unparseable or non-object response — callers turn all of
-    these into a failed AgentResult rather than letting them propagate.
+    Raises OSError/urllib.error.URLError/TimeoutError on transport failure,
+    ChatCompletionsHTTPError on an HTTP error status (with the server's own
+    explanation read from the response body), and ValueError on an unparseable
+    or non-object response — callers turn all of these into a failed
+    AgentResult rather than letting them propagate.
     """
     url = base_url.rstrip("/") + "/chat/completions"
     body = json.dumps(payload).encode("utf-8")
@@ -259,8 +279,22 @@ def _post_chat_completions(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout_s) as resp:  # noqa: S310
-        raw = resp.read()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as resp:  # noqa: S310
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        # Read the body before it is discarded. This is the difference between
+        # "HTTP Error 400: Bad Request" and "the number of tokens to keep from
+        # the initial prompt is greater than the context length" — the server
+        # already told us what was wrong, and we were throwing it away.
+        detail = ""
+        with contextlib.suppress(OSError, ValueError):
+            detail = exc.read().decode("utf-8", "replace").strip()
+        if not detail:
+            raise
+        raise ChatCompletionsHTTPError(
+            f"HTTP {exc.code} from {url}: {detail[:_ERROR_BODY_HEAD_BYTES]}"
+        ) from exc
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise ValueError(f"Non-object JSON response from {url}")
@@ -360,6 +394,26 @@ def run_openai_agent(
                 timeout_s=max(remaining, _MIN_REQUEST_TIMEOUT_S),
             )
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            # Distinguish "we ran out of loop budget mid-generation" from "the
+            # endpoint is unreachable". Each request is issued with the whole
+            # remaining budget, so a slow model that is still generating when
+            # the deadline passes raises here rather than reaching the
+            # deadline check at the top of the next iteration. Reporting that
+            # as a transport outage is wrong twice over: it reads in the
+            # journal as "the server fell over" when the server was working
+            # fine, and it leaves `timed_out` False, so everything downstream
+            # keyed on a timeout never fires.
+            if time.monotonic() >= deadline:
+                return AgentResult(
+                    exit_status=-1,
+                    stdout="\n".join(transcript),
+                    stderr=(
+                        f"deadline of {timeout_s}s exceeded across the tool-calling loop "
+                        f"(request to {harness.base_url} was still in flight: {exc})"
+                    ),
+                    timed_out=True,
+                    agent_claim=None,
+                )
             return AgentResult(
                 exit_status=-1,
                 stdout="\n".join(transcript),

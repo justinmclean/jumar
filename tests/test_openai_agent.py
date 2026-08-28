@@ -361,6 +361,125 @@ def test_deadline_covers_the_whole_loop(tmp_path: Path, chat_server: Any) -> Non
     assert len(handler.received) == 2
 
 
+def test_request_still_in_flight_at_deadline_is_a_timeout_not_a_transport_error(
+    tmp_path: Path, chat_server: Any
+) -> None:
+    """A slow model that is still generating when the budget runs out is a
+    timeout, not an endpoint outage.
+
+    Regression: every request is issued with the whole remaining budget, so
+    the FIRST request can outlive the deadline and raise before the loop's own
+    deadline check is ever reached. That was reported as
+    `request to <url> failed: timed out` with `timed_out=False` — which reads
+    in the journal as "the server fell over" for a server that was working
+    fine, and leaves everything keyed on `timed_out` unfired.
+    """
+    base_url, handler = chat_server(
+        [_message("done", [])],
+        delay_s=2.0,
+    )
+    result = run_openai_agent(
+        "slow generation",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=1,
+        harness=_harness(base_url),
+    )
+    assert result.timed_out is True
+    assert result.exit_status == -1
+    assert "deadline" in (result.stderr or "")
+    # The endpoint was reachable throughout — one request was made and the
+    # server was mid-response when the clock ran out.
+    assert len(handler.received) == 1
+
+
+# ---------------------------------------------------------------------------
+# HTTP error responses carry the server's own explanation
+# ---------------------------------------------------------------------------
+
+
+class _ErrorHandler(BaseHTTPRequestHandler):
+    """Serves one HTTP error status with a JSON body, like a local model server."""
+
+    status: int = 400
+    body: bytes = b""
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib method name
+        self.send_response(self.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, *args: object) -> None:  # silence stdlib's access log
+        pass
+
+
+@pytest.fixture
+def error_server() -> Iterator[Callable[[int, bytes], str]]:
+    servers: list[HTTPServer] = []
+
+    def _make(status: int, body: bytes) -> str:
+        handler = type("_Handler", (_ErrorHandler,), {"status": status, "body": body})
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        servers.append(server)
+        host, port = server.server_address[:2]
+        return f"http://{host}:{port}/v1"
+
+    yield _make
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_error_body_is_surfaced(tmp_path: Path, error_server: Any) -> None:
+    """A 400 must carry the server's explanation, not just urllib's status line.
+
+    Observed: LM Studio answered a too-large prompt with a body naming the
+    context-length overflow, and the harness reported only "HTTP Error 400:
+    Bad Request" — three round trips of debugging to recover a message the
+    server had already sent.
+    """
+    body = json.dumps(
+        {
+            "error": "The number of tokens to keep from the initial prompt is greater "
+            "than the context length."
+        }
+    ).encode()
+    base_url = error_server(400, body)
+
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=10,
+        harness=_harness(base_url),
+    )
+
+    assert result.exit_status == -1
+    assert result.timed_out is False
+    assert "context length" in (result.stderr or "")
+    assert "400" in (result.stderr or "")
+
+
+def test_http_error_body_is_capped(tmp_path: Path, error_server: Any) -> None:
+    """The body is server-controlled, so it must not land in the journal whole."""
+    base_url = error_server(500, b"x" * 50_000)
+
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=10,
+        harness=_harness(base_url),
+    )
+
+    assert result.exit_status == -1
+    assert len(result.stderr or "") < 2_000
+
+
 # ---------------------------------------------------------------------------
 # Unreachable endpoint / misconfiguration — fail closed, never raise
 # ---------------------------------------------------------------------------
