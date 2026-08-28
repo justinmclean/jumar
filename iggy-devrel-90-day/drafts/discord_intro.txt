@@ -1,0 +1,8 @@
+Status: draft
+Evidence: project_context/channels.md, project_context/channels_notes.md, project_context/0_identified_targets.txt
+
+Hey everyone, I'm Justin. I've started a part-time DevRel role with LaserData, working across Apache Iggy and the surrounding open-source/open-core ecosystem.
+
+I'm starting by getting familiar with the project, the docs, the issues, the examples, and the places where new contributors or users tend to get stuck. My likely focus areas are onboarding, docs, examples, integrations, and contributor support.
+
+I'd love to hear where you think I can be most useful. Happy to chat about Iggy, Rust, high-performance streaming, real-time data, docs, examples, or contributor experience!

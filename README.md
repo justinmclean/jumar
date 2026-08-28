@@ -100,7 +100,7 @@ Everything below is built, tested and merged.
 | Command | What it does |
 |---|---|
 | `jumar plan` | Ingest, select, decompose, print. `--dry-run` stops before execution. |
-| `jumar run` | The full pipeline for the next eligible item. |
+| `jumar run` | The full pipeline for the next eligible item. Add `--until-empty` to keep going sequentially. |
 | `jumar resume <run-id>` | Replay the journal and continue from the first unverified subtask. |
 | `jumar report <run-id>` | Render a run report. Exit 1 if anything failed. |
 | `jumar status` | Item-centric view across the todo file and every run journal. |
@@ -108,8 +108,10 @@ Everything below is built, tested and merged.
 | `jumar doctor` | Check config, harness binary, allow list, schedules, todo file. |
 
 `--json` is available on `plan`, `run`, `report` and `status`; `--verbose` streams the
-agent's output during `run`. Progress goes to stderr so stdout stays clean, and
-is suppressed under `--json` or when stderr is not a TTY, so scheduled runs stay
+agent's output during `run`. `run --until-empty` keeps one lock and starts the
+next eligible item only after the previous item has finished. Progress goes to
+stderr so stdout stays clean, and is suppressed under `--json` or when stderr is
+not a TTY, so scheduled runs stay
 quiet. CI runs `make check` with a per-module coverage floor.
 
 Known gaps are tracked in **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**.

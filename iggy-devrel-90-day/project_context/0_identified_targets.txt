@@ -1,0 +1,5 @@
+Apache Iggy mailing list identifier found.
+Mailing list: dev@iggy.apache.org
+Mailing list archives: https://lists.apache.org/list.html?dev@iggy.apache.org
+Discord invite: https://discord.gg/apache-iggy
+Discord channel: general introduction/community channel (choose the intro/#general channel in the server at send time)

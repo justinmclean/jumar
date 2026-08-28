@@ -1,0 +1,3 @@
+Apache Iggy mailing list identifier found.
+Mailing list: dev@iggy.apache.org
+Discord: https://discord.gg/apache-iggy
