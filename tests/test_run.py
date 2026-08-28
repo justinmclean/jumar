@@ -125,6 +125,7 @@ class _Args:
         self.dry_run = False
         self.approve = False
         self.non_interactive = True
+        self.until_empty = False
         self.run_id: str | None = None
         self.runs_dir: str | None = None
         self.retry_failed = False
@@ -359,6 +360,128 @@ def test_run_journals_item_deferred_for_a_not_before_gated_item(
     assert entry["item_id"]
     assert entry["payload"]["eligible_at"] == next_eligible
     assert entry["payload"]["eligible_at"] in entry["payload"]["reason"]
+
+
+def test_run_until_empty_completes_multiple_items_sequentially(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--until-empty keeps selecting eligible work until the queue is drained."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Create first marker @capability=write_fs\n"
+        "- [ ] Create second marker @capability=write_fs\n"
+    )
+
+    calls: list[str] = []
+
+    def two_item_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            if "first marker" in prompt:
+                return _result(
+                    json.dumps(
+                        {
+                            "subtasks": [
+                                {
+                                    "description": "Write first.txt containing FIRST",
+                                    "capabilities": ["write_fs"],
+                                    "depends_on": [],
+                                    "check": {
+                                        "kind": "file",
+                                        "statement": "first.txt contains FIRST",
+                                        "path": "first.txt",
+                                        "pattern": "FIRST",
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                )
+            return _result(
+                json.dumps(
+                    {
+                        "subtasks": [
+                            {
+                                "description": "Write second.txt containing SECOND",
+                                "capabilities": ["write_fs"],
+                                "depends_on": [],
+                                "check": {
+                                    "kind": "file",
+                                    "statement": "second.txt contains SECOND",
+                                    "path": "second.txt",
+                                    "pattern": "SECOND",
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        calls.append(prompt)
+        if "first.txt" in prompt:
+            (Path(cwd) / "first.txt").write_text("FIRST\n")
+            return _result("wrote first.txt")
+        (Path(cwd) / "second.txt").write_text("SECOND\n")
+        return _result("wrote second.txt")
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=two_item_agent)
+
+    assert rc == 0
+    assert (tmp_path / "first.txt").read_text().strip() == "FIRST"
+    assert (tmp_path / "second.txt").read_text().strip() == "SECOND"
+    assert tmp_path.joinpath("todo.md").read_text() == (
+        "- [x] Create first marker @capability=write_fs\n"
+        "- [x] Create second marker @capability=write_fs\n"
+    )
+    assert len(calls) == 2
+
+
+def test_run_until_empty_skips_failed_item_without_unblocking_dependents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed item is skipped for the pass, but its dependents stay blocked."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Fails first @id=first @priority=1 @capability=write_fs\n"
+        "- [ ] Depends on failed first @depends=first @priority=2 @capability=write_fs\n"
+        "- [ ] Independent second @priority=3 @capability=write_fs\n"
+    )
+
+    def partial_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            if "Fails first" in prompt:
+                return _result(_PLAN)
+            return _result(
+                json.dumps(
+                    {
+                        "subtasks": [
+                            {
+                                "description": "Write independent.txt containing OK",
+                                "capabilities": ["write_fs"],
+                                "depends_on": [],
+                                "check": {
+                                    "kind": "file",
+                                    "statement": "independent.txt contains OK",
+                                    "path": "independent.txt",
+                                    "pattern": "OK",
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        if "marker.txt" in prompt:
+            return _result("claimed marker without writing it")
+        (Path(cwd) / "independent.txt").write_text("OK\n")
+        return _result("wrote independent.txt")
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=partial_agent)
+
+    assert rc == 1
+    assert not (tmp_path / "marker.txt").exists()
+    assert (tmp_path / "independent.txt").read_text().strip() == "OK"
+    todo_text = tmp_path.joinpath("todo.md").read_text()
+    assert "- [ ] Fails first" in todo_text
+    assert "- [ ] Depends on failed first" in todo_text
+    assert "- [x] Independent second" in todo_text
 
 
 # ---------------------------------------------------------------------------

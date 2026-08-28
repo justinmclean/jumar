@@ -169,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable all interactive prompts (required for scheduled / headless runs).",
     )
     run_p.add_argument(
+        "--until-empty",
+        action="store_true",
+        help=(
+            "Keep running eligible todo items sequentially until none remain. "
+            "Failed items are skipped for the rest of this pass."
+        ),
+    )
+    run_p.add_argument(
         "--verbose",
         action="store_true",
         help="Echo the agent's captured output after each attempt (progress to stderr).",
@@ -751,8 +759,8 @@ def _cmd_run(
 ) -> int:
     """Implement ``jumar run [--dry-run | --approve] [--non-interactive]``.
 
-    Acquires the single-flight lock, ingests, selects one eligible item, and
-    hands it to :func:`run_item` — the same orchestration ``jumar resume`` uses.
+    Acquires the single-flight lock, ingests, selects eligible items, and hands
+    them to :func:`run_item` — the same orchestration ``jumar resume`` uses.
     """
     from .gate import GateMode, GateStartupError, check_harness_policy, check_startup_flags
 
@@ -847,55 +855,6 @@ def _cmd_run(
         if lock.reclaimed_info is not None:
             journal.append(LOCK_RECLAIMED, payload=lock.reclaimed_info)
 
-        try:
-            result = ingest(todo_path, config)
-        except IngestError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-
-        for w in result.warnings:
-            print(f"warning: {w.message}", file=sys.stderr)
-
-        try:
-            sel = select_next(result.items, now)
-        except CycleError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-
-        # Journal parked items so the report can list them.
-        for p_item, p_reason in sel.parked:
-            journal.append(
-                ITEM_PARKED,
-                item_id=p_item.item_id,
-                payload={"text": p_item.text, "reason": p_reason},
-            )
-
-        # Journal deferred items (gated by @not-before=) so the report can list
-        # them and the run's audit trail records why they were skipped.
-        for d_item, d_eligible_at in sel.deferred:
-            journal.append(
-                ITEM_DEFERRED,
-                item_id=d_item.item_id,
-                payload={
-                    "text": d_item.text,
-                    "reason": f"deferred until {d_eligible_at}",
-                    "eligible_at": d_eligible_at,
-                },
-            )
-
-        if sel.selected is None:
-            # AC2.10 / AC9.4: nothing eligible is a success, not a failure.
-            print("Nothing eligible to work on.")
-            if sel.next_eligible_at:
-                print(f"Next eligible: {sel.next_eligible_at}")
-            if sel.parked:
-                print(f"Parked ({len(sel.parked)}):")
-                for p_item, p_reason in sel.parked:
-                    print(f"  - {p_item.text!r}  [paused: {p_reason}]")
-            journal.append(RUN_FINISHED, payload={"exit_status": 0})
-            update_run_finished(run_dir.parent, run_id, "", STATUS_COMPLETED)
-            return 0
-
         from .progress import Progress
 
         prog = Progress.for_run(
@@ -904,30 +863,111 @@ def _cmd_run(
             force=_progress_force,
         )
 
-        status = run_item(
-            sel.selected,
-            config=config,
-            journal=journal,
-            todo_path=todo_path,
-            run_dir=run_dir,
-            now=now,
-            mode=mode,
-            progress=prog,
-            _run_agent=_run_agent,
-        )
+        until_empty = bool(getattr(args, "until_empty", False))
+        failed_this_pass: set[str] = set()
+        seen_parked: set[tuple[str, str]] = set()
+        seen_deferred: set[tuple[str, str]] = set()
+        selected_item_id = ""
+        exit_status = 0
 
-        prog.item_finished("done" if status == 0 else "failed")
-        journal.append(RUN_FINISHED, payload={"exit_status": status})
+        while True:
+            try:
+                result = ingest(todo_path, config)
+            except IngestError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                exit_status = 1
+                break
+
+            for w in result.warnings:
+                print(f"warning: {w.message}", file=sys.stderr)
+
+            selectable_items = [
+                item for item in result.items if item.item_id not in failed_this_pass
+            ]
+            try:
+                sel = select_next(selectable_items, now)
+            except CycleError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                exit_status = 1
+                break
+
+            # Journal parked items so the report can list them.
+            for p_item, p_reason in sel.parked:
+                marker = (p_item.item_id, p_reason)
+                if marker in seen_parked:
+                    continue
+                seen_parked.add(marker)
+                journal.append(
+                    ITEM_PARKED,
+                    item_id=p_item.item_id,
+                    payload={"text": p_item.text, "reason": p_reason},
+                )
+
+            # Journal deferred items (gated by @not-before=) so the report can list
+            # them and the run's audit trail records why they were skipped.
+            for d_item, d_eligible_at in sel.deferred:
+                marker = (d_item.item_id, d_eligible_at)
+                if marker in seen_deferred:
+                    continue
+                seen_deferred.add(marker)
+                journal.append(
+                    ITEM_DEFERRED,
+                    item_id=d_item.item_id,
+                    payload={
+                        "text": d_item.text,
+                        "reason": f"deferred until {d_eligible_at}",
+                        "eligible_at": d_eligible_at,
+                    },
+                )
+
+            if sel.selected is None:
+                # AC2.10 / AC9.4: nothing eligible is a success, not a failure.
+                if not selected_item_id:
+                    print("Nothing eligible to work on.")
+                elif until_empty:
+                    print("No more eligible work.")
+                if sel.next_eligible_at:
+                    print(f"Next eligible: {sel.next_eligible_at}")
+                if sel.parked:
+                    print(f"Parked ({len(sel.parked)}):")
+                    for p_item, p_reason in sel.parked:
+                        print(f"  - {p_item.text!r}  [paused: {p_reason}]")
+                break
+
+            selected_item_id = sel.selected.item_id
+            status = run_item(
+                sel.selected,
+                config=config,
+                journal=journal,
+                todo_path=todo_path,
+                run_dir=run_dir,
+                now=now,
+                mode=mode,
+                progress=prog,
+                _run_agent=_run_agent,
+            )
+
+            prog.item_finished("done" if status == 0 else "failed")
+            if status != 0:
+                exit_status = 1
+                failed_this_pass.add(sel.selected.item_id)
+                if config.halt_on_fail:
+                    break
+            if not until_empty:
+                exit_status = status
+                break
+
+        journal.append(RUN_FINISHED, payload={"exit_status": exit_status})
         update_run_finished(
             run_dir.parent,
             run_id,
-            sel.selected.item_id,
-            STATUS_COMPLETED if status == 0 else STATUS_FAILED,
+            selected_item_id,
+            STATUS_COMPLETED if exit_status == 0 else STATUS_FAILED,
         )
         report = build_report(run_dir)
         write_report(report, run_dir)
         print(format_summary(report))
-        return status
+        return exit_status
     finally:
         lock.release()
 
