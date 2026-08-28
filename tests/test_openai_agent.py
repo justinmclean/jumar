@@ -520,6 +520,17 @@ def test_unreachable_endpoint_fails_closed(tmp_path: Path) -> None:
             True,
             id="wrapped-timeout",
         ),
+        pytest.param(
+            urllib.error.HTTPError(
+                "http://127.0.0.1:1234/v1/chat/completions",
+                500,
+                "boom",
+                hdrs=None,
+                fp=None,
+            ),
+            False,
+            id="http-error",
+        ),
         pytest.param(OSError("boom"), False, id="non-timeout-oserror"),
     ],
 )
