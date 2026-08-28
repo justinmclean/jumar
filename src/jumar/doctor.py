@@ -26,6 +26,10 @@ from pathlib import Path
 from .config import DEFAULT_CONFIG_SOURCE, Config
 from .harness import IN_PROCESS_HARNESSES
 
+# The stages whose resolved harness the doctor probes. Mirrors
+# config._VALID_HARNESS_STAGES, ordered for stable, readable messages.
+_HARNESS_STAGES: tuple[str, ...] = ("decompose", "execute", "judge")
+
 
 class CheckStatus(StrEnum):
     ok = "ok"
@@ -161,6 +165,13 @@ def _check_config_source(config: Config) -> DoctorCheck:
             "Create jumar.toml (or a [tool.jumar] table in pyproject.toml) to pin these "
             "explicitly.",
         )
+    if config.harness_profile:
+        return DoctorCheck(
+            "config.source",
+            CheckStatus.ok,
+            f"Config loaded from {config.config_source}, "
+            f"harness profile '{config.harness_profile}'.",
+        )
     return DoctorCheck(
         "config.source",
         CheckStatus.ok,
@@ -195,54 +206,100 @@ def _check_harness(config: Config) -> DoctorCheck:
 
 def _check_openai_harness(config: Config) -> DoctorCheck:
     """GET ``{base_url}/models`` and report whether the endpoint is reachable
-    and, when it is, whether the configured model id is among those served.
+    and, when it is, whether the model ids the run will use are among those
+    served.
 
     ``shutil.which()`` is meaningless here — there is no binary, only an HTTP
     endpoint, so this is the in-process harness's equivalent check.
+
+    The probe covers the RESOLVED model for every stage, not the top-level
+    ``[harness] model``. Once each stage carries an override the top-level id
+    is one nothing calls, and this check reported "ok" against it while the
+    models actually being invoked went unverified — a harness profile makes
+    that the normal case rather than the odd one.
     """
-    base_url = config.harness.base_url
-    if not base_url:
+    resolved = {stage: config.harness.for_stage(stage) for stage in _HARNESS_STAGES}
+
+    without_base_url = sorted(stage for stage, r in resolved.items() if not r.base_url)
+    if without_base_url:
+        detail = (
+            ""
+            if len(without_base_url) == len(resolved)
+            else f" (stage(s): {', '.join(without_base_url)})"
+        )
         return DoctorCheck(
             "harness",
             CheckStatus.fail,
-            '[harness] agent = "openai" but no base_url is configured. '
+            f'[harness] agent = "openai" but no base_url is configured{detail}. '
             'Set [harness] base_url = "http://<host>:<port>/v1" in jumar.toml.',
         )
 
-    models_url = base_url.rstrip("/") + "/models"
-    try:
-        request = urllib.request.Request(models_url, method="GET")
-        with urllib.request.urlopen(request, timeout=5) as resp:  # noqa: S310
-            raw = resp.read()
-        parsed = json.loads(raw)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        return DoctorCheck(
-            "harness",
-            CheckStatus.fail,
-            f"Could not reach OpenAI-compatible endpoint at '{models_url}': {exc}. "
-            "Is the local model server running?",
+    # Group by endpoint so one server is probed once even when three stages
+    # share it, which is the usual local-model layout.
+    by_endpoint: dict[str, set[str]] = {}
+    for stage_resolved in resolved.values():
+        base_url = str(stage_resolved.base_url)
+        by_endpoint.setdefault(base_url, set())
+        if stage_resolved.model:
+            by_endpoint[base_url].add(stage_resolved.model)
+
+    unserved: list[tuple[str, str, set[str]]] = []
+    for base_url in sorted(by_endpoint):
+        models_url = base_url.rstrip("/") + "/models"
+        try:
+            request = urllib.request.Request(models_url, method="GET")
+            with urllib.request.urlopen(request, timeout=5) as resp:  # noqa: S310
+                raw = resp.read()
+            parsed = json.loads(raw)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            return DoctorCheck(
+                "harness",
+                CheckStatus.fail,
+                f"Could not reach OpenAI-compatible endpoint at '{models_url}': {exc}. "
+                "Is the local model server running?",
+            )
+
+        served = parsed.get("data") if isinstance(parsed, dict) else None
+        served_ids = (
+            {str(entry["id"]) for entry in served if isinstance(entry, dict) and "id" in entry}
+            if isinstance(served, list)
+            else set()
         )
+        for model in sorted(by_endpoint[base_url] - served_ids):
+            unserved.append((base_url, model, served_ids))
 
-    served = parsed.get("data") if isinstance(parsed, dict) else None
-    served_ids = (
-        {str(entry["id"]) for entry in served if isinstance(entry, dict) and "id" in entry}
-        if isinstance(served, list)
-        else set()
-    )
-
-    model = config.harness.model
-    if model and model not in served_ids:
+    if unserved:
+        base_url, model, served_ids = unserved[0]
         listed = ", ".join(sorted(served_ids)) if served_ids else "(none)"
+        models_url = base_url.rstrip("/") + "/models"
+        also = (
+            ""
+            if len(unserved) == 1
+            else f" ({len(unserved) - 1} other configured model(s) also unserved.)"
+        )
         return DoctorCheck(
             "harness",
             CheckStatus.warn,
             f"Endpoint '{base_url}' is reachable but model '{model}' is not in its "
-            f"served list: {listed}. Check the exact id with `curl {models_url}`.",
+            f"served list: {listed}. Check the exact id with `curl {models_url}`.{also}",
         )
+
+    all_models = sorted({m for models in by_endpoint.values() for m in models})
+    endpoints = sorted(by_endpoint)
+    if len(endpoints) == 1 and len(all_models) == 1:
+        return DoctorCheck(
+            "harness",
+            CheckStatus.ok,
+            f"OpenAI-compatible endpoint '{endpoints[0]}' reachable; "
+            f"model '{all_models[0]}' is served.",
+        )
+    listed_models = ", ".join(f"'{m}'" for m in all_models) or "(none configured)"
+    listed_endpoints = ", ".join(f"'{e}'" for e in endpoints)
     return DoctorCheck(
         "harness",
         CheckStatus.ok,
-        f"OpenAI-compatible endpoint '{base_url}' reachable; model '{model}' is served.",
+        f"OpenAI-compatible endpoint(s) {listed_endpoints} reachable; "
+        f"model(s) {listed_models} served.",
     )
 
 

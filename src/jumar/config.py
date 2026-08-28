@@ -165,6 +165,17 @@ _HARD_DENY: tuple[tuple[str, ...], ...] = (
 # so that a typo in jumar.toml does not silently fail to apply the override.
 _VALID_HARNESS_STAGES: frozenset[str] = frozenset({"decompose", "execute", "judge"})
 
+# Scalar keys valid at [harness], inside a stage table, and inside a profile.
+_HARNESS_SCALAR_KEYS: frozenset[str] = frozenset({"agent", "model", "base_url", "api_key_env"})
+
+# Sub-table under [harness] holding named alternative harnesses:
+# [harness.profiles.<name>] with the same shape as [harness] itself. One is
+# selected per run with --harness-profile; without it the base [harness]
+# applies. This exists so a second model line-up (a slower, heavier pass) is
+# one table in the same file rather than a duplicate jumar.toml that drifts
+# out of step on todo_path, capabilities, and everything else.
+_HARNESS_PROFILES_KEY = "profiles"
+
 # `Config.config_source` value when neither jumar.toml nor a populated
 # [tool.jumar] table in pyproject.toml was found — i.e. every field on the
 # returned Config is a built-in default. `doctor.py` treats this as a warn:
@@ -195,6 +206,11 @@ class HarnessConfig:
     both.
 
     ``None`` for a per-stage field means "inherit the top-level value".
+
+    A ``HarnessConfig`` is always fully resolved by the time it reaches this
+    class: ``load_config`` has already layered the selected
+    ``[harness.profiles.<name>]`` table (if any) over ``[harness]``, so
+    nothing downstream needs to know which profile is active.
     """
 
     agent: str = "claude"
@@ -274,6 +290,11 @@ class Config:
     # (codex, cursor, gemini, kiro, opencode). Default False because those
     # harnesses cannot enforce the git push / gh boundary at the tool-call layer.
     allow_unrestricted_harness: bool = False
+    # Name of the [harness.profiles.<name>] table layered over [harness] for
+    # this run (--harness-profile), or None when the base [harness] applies.
+    # Recorded so `doctor` and the run journal can say which line-up ran; the
+    # resolved models themselves live in `harness`.
+    harness_profile: str | None = None
     # Where this Config came from: an absolute jumar.toml path, a
     # "<pyproject.toml path> [tool.jumar]" description, or DEFAULT_CONFIG_SOURCE
     # when no file supplied any field. Set by load_config(); a Config built
@@ -338,6 +359,7 @@ def load_config(
     *,
     cli_overrides: dict[str, object] | None = None,
     config_path: Path | str | None = None,
+    harness_profile: str | None = None,
 ) -> Config:
     """Load config from file then apply CLI overrides.
 
@@ -347,6 +369,12 @@ def load_config(
     ``config_path``, when given, names an explicit config file (e.g. from
     ``--config``) that is read directly instead of searching ``root``.
     Raises :class:`ConfigError` if it does not exist.
+
+    ``harness_profile``, when given, names a ``[harness.profiles.<name>]``
+    table to layer over ``[harness]`` (from ``--harness-profile``). The
+    returned ``Config.harness`` is already resolved, so no caller downstream
+    of this function needs to know a profile was involved. Raises
+    :class:`ConfigError` if the named profile is not defined.
     """
     if root is None:
         root = Path.cwd()
@@ -364,57 +392,126 @@ def load_config(
     raw_caps: list[str] = _get("capabilities", [c.value for c in _DEFAULT_CAPABILITIES])
     capabilities = frozenset(Capability(c) for c in raw_caps)
 
-    # Nested sections come from the file only (no CLI flag counterparts).
+    # Nested sections come from the file only (no CLI flag counterparts) —
+    # except which harness profile to layer on top, which is a per-invocation
+    # choice (--harness-profile) rather than a property of the file.
     harness_raw: dict[str, Any] = raw.get("harness", {})
-    harness_agent = str(harness_raw.get("agent", "claude"))
-    harness_model = str(harness_raw.get("model", "sonnet"))
-    harness_base_url = (
-        str(harness_raw["base_url"]) if harness_raw.get("base_url") is not None else None
-    )
-    harness_api_key_env = (
-        str(harness_raw["api_key_env"]) if harness_raw.get("api_key_env") is not None else None
-    )
 
-    # Validate: every key under [harness] must be a scalar key or a stage name.
-    _harness_scalar_keys: frozenset[str] = frozenset({"agent", "model", "base_url", "api_key_env"})
+    # Validate: every key under [harness] must be a scalar key, a stage name,
+    # or the profiles table.
     unknown_harness_keys = {
-        k for k in harness_raw if k not in _harness_scalar_keys | _VALID_HARNESS_STAGES
+        k
+        for k in harness_raw
+        if k not in _HARNESS_SCALAR_KEYS | _VALID_HARNESS_STAGES | {_HARNESS_PROFILES_KEY}
     }
     if unknown_harness_keys:
         raise ValueError(
             f"Unknown key(s) under [harness] in jumar.toml: {sorted(unknown_harness_keys)}. "
-            f"Valid stage names: {sorted(_VALID_HARNESS_STAGES)}."
+            f"Valid stage names: {sorted(_VALID_HARNESS_STAGES)}; named profiles go under "
+            f"[harness.{_HARNESS_PROFILES_KEY}.<name>]."
         )
 
-    # Parse per-stage overrides.
-    _stage_keys: frozenset[str] = frozenset({"agent", "model", "base_url", "api_key_env"})
-    stage_kwargs: dict[str, str | None] = {}
-    for _stage in sorted(_VALID_HARNESS_STAGES):
-        stage_raw: Any = harness_raw.get(_stage)
+    def _stage_table(table: dict[str, Any], stage: str, label: str) -> dict[str, Any]:
+        """Return the validated stage sub-table of *table*, or {} if absent."""
+        stage_raw: Any = table.get(stage)
         if stage_raw is None:
-            stage_kwargs[f"{_stage}_agent"] = None
-            stage_kwargs[f"{_stage}_model"] = None
-            stage_kwargs[f"{_stage}_base_url"] = None
-            stage_kwargs[f"{_stage}_api_key_env"] = None
-            continue
+            return {}
         if not isinstance(stage_raw, dict):
-            raise ValueError(
-                f"[harness.{_stage}] must be a TOML table, got {type(stage_raw).__name__!r}"
-            )
-        unknown_stage_keys = {k for k in stage_raw if k not in _stage_keys}
+            raise ValueError(f"[{label}] must be a TOML table, got {type(stage_raw).__name__!r}")
+        unknown_stage_keys = {k for k in stage_raw if k not in _HARNESS_SCALAR_KEYS}
         if unknown_stage_keys:
             raise ValueError(
-                f"Unknown key(s) under [harness.{_stage}]: {sorted(unknown_stage_keys)}; "
-                f"only {sorted(_stage_keys)} are valid inside a stage table."
+                f"Unknown key(s) under [{label}]: {sorted(unknown_stage_keys)}; "
+                f"only {sorted(_HARNESS_SCALAR_KEYS)} are valid inside a stage table."
             )
-        stage_kwargs[f"{_stage}_agent"] = str(stage_raw["agent"]) if "agent" in stage_raw else None
-        stage_kwargs[f"{_stage}_model"] = str(stage_raw["model"]) if "model" in stage_raw else None
-        stage_kwargs[f"{_stage}_base_url"] = (
-            str(stage_raw["base_url"]) if stage_raw.get("base_url") is not None else None
+        return cast(dict[str, Any], stage_raw)
+
+    def _scalar(table: dict[str, Any], key: str) -> str | None:
+        """Return ``table[key]`` as a string, or None when absent/null."""
+        return str(table[key]) if table.get(key) is not None else None
+
+    def _first(*values: str | None) -> str | None:
+        """First non-None value — the resolution chain, in priority order."""
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
+    # Validate EVERY profile, not just the selected one. A typo in a profile
+    # you are not running today is still a config error; discovering it only
+    # on the run that finally selects it is the silent-misconfiguration
+    # failure the [harness] key check above exists to prevent.
+    profiles_raw: Any = harness_raw.get(_HARNESS_PROFILES_KEY, {})
+    if not isinstance(profiles_raw, dict):
+        raise ValueError(
+            f"[harness.{_HARNESS_PROFILES_KEY}] must be a table of named profiles, "
+            f"got {type(profiles_raw).__name__!r}"
         )
-        stage_kwargs[f"{_stage}_api_key_env"] = (
-            str(stage_raw["api_key_env"]) if stage_raw.get("api_key_env") is not None else None
+    for _name in sorted(profiles_raw):
+        _profile: Any = profiles_raw[_name]
+        _label = f"harness.{_HARNESS_PROFILES_KEY}.{_name}"
+        if not isinstance(_profile, dict):
+            raise ValueError(f"[{_label}] must be a TOML table, got {type(_profile).__name__!r}")
+        _unknown = {k for k in _profile if k not in _HARNESS_SCALAR_KEYS | _VALID_HARNESS_STAGES}
+        if _unknown:
+            raise ValueError(
+                f"Unknown key(s) under [{_label}]: {sorted(_unknown)}. Valid keys: "
+                f"{sorted(_HARNESS_SCALAR_KEYS)}; valid stage tables: "
+                f"{sorted(_VALID_HARNESS_STAGES)}."
+            )
+        for _stage in sorted(_VALID_HARNESS_STAGES):
+            _stage_table(_profile, _stage, f"{_label}.{_stage}")
+
+    # Select the profile, if one was asked for. An unknown name is an error,
+    # never a silent fall-back to the base harness: a scheduled run that
+    # quietly used the wrong model line-up would be indistinguishable from
+    # one that used the right one.
+    profile_raw: dict[str, Any] = {}
+    if harness_profile is not None:
+        if harness_profile not in profiles_raw:
+            known = ", ".join(sorted(profiles_raw)) if profiles_raw else "(none defined)"
+            raise ConfigError(
+                f"Unknown harness profile {harness_profile!r}. "
+                f"Profiles defined in {config_source}: {known}."
+            )
+        profile_raw = cast(dict[str, Any], profiles_raw[harness_profile])
+
+    # Resolution order, highest first:
+    #   [harness.profiles.<name>.<stage>]  →  [harness.profiles.<name>]
+    #   →  [harness.<stage>]               →  [harness]
+    # The selected profile's top-level therefore outranks the base file's
+    # per-stage overrides: a profile that says model = "qwen" means every
+    # stage runs qwen, not "qwen except where the base file named something
+    # else", which would make the profile's effect depend on what it is
+    # layered over.
+    harness_agent = _first(_scalar(profile_raw, "agent"), _scalar(harness_raw, "agent")) or "claude"
+    harness_model = _first(_scalar(profile_raw, "model"), _scalar(harness_raw, "model")) or "sonnet"
+    harness_base_url = _first(_scalar(profile_raw, "base_url"), _scalar(harness_raw, "base_url"))
+    harness_api_key_env = _first(
+        _scalar(profile_raw, "api_key_env"), _scalar(harness_raw, "api_key_env")
+    )
+
+    stage_kwargs: dict[str, str | None] = {}
+    for _stage in sorted(_VALID_HARNESS_STAGES):
+        _base_stage = _stage_table(harness_raw, _stage, f"harness.{_stage}")
+        _profile_stage = (
+            _stage_table(
+                profile_raw,
+                _stage,
+                f"harness.{_HARNESS_PROFILES_KEY}.{harness_profile}.{_stage}",
+            )
+            if profile_raw
+            else {}
         )
+        for _key in sorted(_HARNESS_SCALAR_KEYS):
+            # No final fall-back to the base top-level here: a None leaves
+            # HarnessConfig.for_stage() to inherit the resolved top-level
+            # above, which already accounts for the profile.
+            stage_kwargs[f"{_stage}_{_key}"] = _first(
+                _scalar(_profile_stage, _key),
+                _scalar(profile_raw, _key),
+                _scalar(_base_stage, _key),
+            )
 
     harness = HarnessConfig(
         agent=harness_agent,
@@ -448,6 +545,7 @@ def load_config(
         commands=commands,
         schedule_backend=schedule_backend,
         allow_unrestricted_harness=bool(_get("allow_unrestricted_harness", False)),
+        harness_profile=harness_profile,
         config_source=config_source,
     )
 

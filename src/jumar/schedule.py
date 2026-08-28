@@ -50,6 +50,11 @@ class ScheduleEntry:
     jumar_path: str
     config_path: str | None
     timezone: str
+    # The --harness-profile the installed entry runs with, or None for the
+    # base [harness]. Defaulted so the list parsers — which reconstruct
+    # entries from an installed command line and already do not recover
+    # config_path — keep working unchanged.
+    harness_profile: str | None = None
     # The directory the installed entry runs from — the config file's
     # directory when one was given, else the todo file's directory. Pinning
     # this is what makes cwd-relative resolution (jumar.toml lookup, `runs/`
@@ -203,6 +208,8 @@ def _build_command(entry: ScheduleEntry) -> list[str]:
     cmd = [entry.jumar_path, "run", "--todo", entry.todo_path, "--non-interactive"]
     if entry.config_path:
         cmd += ["--config", entry.config_path]
+    if entry.harness_profile:
+        cmd += ["--harness-profile", entry.harness_profile]
     return cmd
 
 
@@ -903,6 +910,8 @@ def show_entry(entry: ScheduleEntry) -> str:
         f"Cron expr   : {entry.cron_expr}",
         f"Todo file   : {entry.todo_path}",
     ]
+    if entry.harness_profile:
+        lines.append(f"Harness prof: {entry.harness_profile}")
     if entry.work_dir:
         lines.append(f"Work dir    : {entry.work_dir}")
     lines += [
@@ -921,6 +930,7 @@ def add_schedule(
     *,
     todo_path: str | Path,
     config_path: str | Path | None = None,
+    harness_profile: str | None = None,
     timezone: str = "UTC",
     backend: Backend | None = None,
     jumar_path: str | None = None,
@@ -952,6 +962,7 @@ def add_schedule(
         todo_path=str(resolved_todo),
         jumar_path=jumar_path or _jumar_executable(),
         config_path=str(resolved_config) if resolved_config else None,
+        harness_profile=harness_profile,
         timezone=timezone,
         work_dir=work_dir,
         log_path=_log_path_for(resolved_todo, sid),
