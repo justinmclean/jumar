@@ -136,6 +136,18 @@ def ingest(path: Path, config: Config) -> IngestResult:
     warnings: list[ParseWarning] = []
     _parse_lines(lines, tz, config, items, warnings)
     _validate_depends(items)
+    # Fail before any model call on an @harness= naming a profile the config
+    # does not define. Mid-run is too late: the item would already have spent
+    # a decompose call, and a typo must never fall back to the default model.
+    for item in items:
+        wanted = item.meta.get("harness")
+        if wanted and wanted not in config.harness_profiles:
+            known = ", ".join(sorted(config.harness_profiles)) or "(none defined)"
+            raise IngestError(
+                f"Line {item.line_no}: @harness={wanted!r} on {item.item_id!r} names no "
+                f"profile in {config.config_source}. Defined: {known}."
+            )
+
     return IngestResult(items=items, warnings=warnings)
 
 

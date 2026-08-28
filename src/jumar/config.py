@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePath
@@ -295,6 +296,11 @@ class Config:
     # Recorded so `doctor` and the run journal can say which line-up ran; the
     # resolved models themselves live in `harness`.
     harness_profile: str | None = None
+    # Every declared [harness.profiles.<name>], each already layered over
+    # [harness] exactly as `harness` above would be. Kept so an individual
+    # todo item can select one with @harness=<name> after config load: which
+    # model an item wants is a property of the item, not of the invocation.
+    harness_profiles: Mapping[str, HarnessConfig] = field(default_factory=dict)
     # Where this Config came from: an absolute jumar.toml path, a
     # "<pyproject.toml path> [tool.jumar]" description, or DEFAULT_CONFIG_SOURCE
     # when no file supplied any field. Set by load_config(); a Config built
@@ -305,6 +311,30 @@ class Config:
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
+
+
+def resolve_harness(config: Config, item_profile: str | None) -> HarnessConfig:
+    """Return the HarnessConfig for an item declaring ``@harness=item_profile``.
+
+    An explicit ``--harness-profile`` wins: it is a deliberate instruction to
+    run this pass on one line-up, which is what makes an A/B comparison
+    across items possible. Otherwise the item's own token applies, and with
+    neither the base [harness] does.
+
+    Raises ConfigError for a name with no matching profile — a typo must not
+    silently fall back to the default model.
+    """
+    if config.harness_profile is not None:
+        return config.harness
+    if not item_profile:
+        return config.harness
+    if item_profile not in config.harness_profiles:
+        known = ", ".join(sorted(config.harness_profiles)) or "(none defined)"
+        raise ConfigError(
+            f"Unknown harness profile {item_profile!r} on a todo item. "
+            f"Profiles defined in {config.config_source}: {known}."
+        )
+    return config.harness_profiles[item_profile]
 
 
 def _load_raw(root: Path, config_path: Path | None = None) -> tuple[dict[str, Any], str]:
@@ -479,47 +509,47 @@ def load_config(
     # Resolution order, highest first:
     #   [harness.profiles.<name>.<stage>]  →  [harness.profiles.<name>]
     #   →  [harness.<stage>]               →  [harness]
-    # The selected profile's top-level therefore outranks the base file's
-    # per-stage overrides: a profile that says model = "qwen" means every
-    # stage runs qwen, not "qwen except where the base file named something
-    # else", which would make the profile's effect depend on what it is
-    # layered over.
-    harness_agent = _first(_scalar(profile_raw, "agent"), _scalar(harness_raw, "agent")) or "claude"
-    harness_model = _first(_scalar(profile_raw, "model"), _scalar(harness_raw, "model")) or "sonnet"
-    harness_base_url = _first(_scalar(profile_raw, "base_url"), _scalar(harness_raw, "base_url"))
-    harness_api_key_env = _first(
-        _scalar(profile_raw, "api_key_env"), _scalar(harness_raw, "api_key_env")
-    )
-
-    stage_kwargs: dict[str, str | None] = {}
-    for _stage in sorted(_VALID_HARNESS_STAGES):
-        _base_stage = _stage_table(harness_raw, _stage, f"harness.{_stage}")
-        _profile_stage = (
-            _stage_table(
-                profile_raw,
-                _stage,
-                f"harness.{_HARNESS_PROFILES_KEY}.{harness_profile}.{_stage}",
+    # A profile's top-level therefore outranks the base file's per-stage
+    # overrides: a profile that says model = "qwen" means every stage runs
+    # qwen, not "qwen except where the base file named something else", which
+    # would make the profile's effect depend on what it is layered over.
+    def _build(profile_table: dict[str, Any], profile_name: str | None) -> HarnessConfig:
+        """Layer *profile_table* over [harness] into one flat HarnessConfig."""
+        label = f"harness.{_HARNESS_PROFILES_KEY}.{profile_name}"
+        stage_kwargs: dict[str, str | None] = {}
+        for stage in sorted(_VALID_HARNESS_STAGES):
+            base_stage = _stage_table(harness_raw, stage, f"harness.{stage}")
+            profile_stage = (
+                _stage_table(profile_table, stage, f"{label}.{stage}") if profile_table else {}
             )
-            if profile_raw
-            else {}
+            for key in sorted(_HARNESS_SCALAR_KEYS):
+                # No final fall-back to the base top-level here: a None leaves
+                # HarnessConfig.for_stage() to inherit the resolved top-level
+                # below, which already accounts for the profile.
+                stage_kwargs[f"{stage}_{key}"] = _first(
+                    _scalar(profile_stage, key),
+                    _scalar(profile_table, key),
+                    _scalar(base_stage, key),
+                )
+        agent = _first(_scalar(profile_table, "agent"), _scalar(harness_raw, "agent"))
+        model = _first(_scalar(profile_table, "model"), _scalar(harness_raw, "model"))
+        return HarnessConfig(
+            agent=agent or "claude",
+            model=model or "sonnet",
+            base_url=_first(_scalar(profile_table, "base_url"), _scalar(harness_raw, "base_url")),
+            api_key_env=_first(
+                _scalar(profile_table, "api_key_env"), _scalar(harness_raw, "api_key_env")
+            ),
+            **stage_kwargs,
         )
-        for _key in sorted(_HARNESS_SCALAR_KEYS):
-            # No final fall-back to the base top-level here: a None leaves
-            # HarnessConfig.for_stage() to inherit the resolved top-level
-            # above, which already accounts for the profile.
-            stage_kwargs[f"{_stage}_{_key}"] = _first(
-                _scalar(_profile_stage, _key),
-                _scalar(profile_raw, _key),
-                _scalar(_base_stage, _key),
-            )
 
-    harness = HarnessConfig(
-        agent=harness_agent,
-        model=harness_model,
-        base_url=harness_base_url,
-        api_key_env=harness_api_key_env,
-        **stage_kwargs,
-    )
+    harness = _build(profile_raw, harness_profile)
+    # Every profile is resolved, not just the selected one, so an item can
+    # name one with @harness= after load without re-reading the file.
+    harness_profiles: dict[str, HarnessConfig] = {
+        name: _build(cast(dict[str, Any], profiles_raw[name]), name)
+        for name in sorted(profiles_raw)
+    }
 
     commands_raw: dict[str, Any] = raw.get("commands", {})
     commands = CommandPolicy(
@@ -546,6 +576,7 @@ def load_config(
         schedule_backend=schedule_backend,
         allow_unrestricted_harness=bool(_get("allow_unrestricted_harness", False)),
         harness_profile=harness_profile,
+        harness_profiles=harness_profiles,
         config_source=config_source,
     )
 
