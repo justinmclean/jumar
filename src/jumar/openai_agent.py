@@ -23,7 +23,9 @@ third-party binary may or may not honour — so this harness needs no
 stdlib only (``urllib.request``) — ``dependencies`` in pyproject.toml stays
 empty. ``timeout_s`` is a deadline across the *whole* tool-calling loop, not a
 per-request timeout: a chatty local model that keeps calling tools does not
-get a fresh budget on every round trip.
+get a fresh budget on every round trip. A request still in flight when that
+deadline passes is reported as a timeout (``timed_out=True``), not as a
+transport outage — the endpoint was healthy, the clock ran out.
 """
 
 from __future__ import annotations
@@ -342,6 +344,26 @@ def run_openai_agent(
                 timeout_s=max(remaining, _MIN_REQUEST_TIMEOUT_S),
             )
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            # Distinguish "we ran out of loop budget mid-generation" from "the
+            # endpoint is unreachable". Each request is issued with the whole
+            # remaining budget, so a slow model that is still generating when
+            # the deadline passes raises here rather than reaching the
+            # deadline check at the top of the next iteration. Reporting that
+            # as a transport outage is wrong twice over: it reads in the
+            # journal as "the server fell over" when the server was working
+            # fine, and it leaves `timed_out` False, so everything downstream
+            # keyed on a timeout never fires.
+            if time.monotonic() >= deadline:
+                return AgentResult(
+                    exit_status=-1,
+                    stdout="\n".join(transcript),
+                    stderr=(
+                        f"deadline of {timeout_s}s exceeded across the tool-calling loop "
+                        f"(request to {harness.base_url} was still in flight: {exc})"
+                    ),
+                    timed_out=True,
+                    agent_claim=None,
+                )
             return AgentResult(
                 exit_status=-1,
                 stdout="\n".join(transcript),
