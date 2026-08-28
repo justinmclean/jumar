@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 
+import jumar.openai_agent as openai_agent
 from jumar.harness import IN_PROCESS_HARNESSES
 from jumar.models import Capability, HarnessInfo
 from jumar.openai_agent import run_openai_agent
@@ -388,6 +389,26 @@ def test_unreachable_endpoint_fails_closed(tmp_path: Path) -> None:
     assert result.exit_status == -1
     assert result.timed_out is False
     assert result.agent_claim is None
+
+
+def test_request_timeout_is_reported_as_timed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _timeout(*_a: object, **_kw: object) -> dict[str, object]:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(openai_agent, "_post_chat_completions", _timeout)
+
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=5,
+        harness=_harness("http://127.0.0.1:1234/v1"),
+    )
+    assert result.exit_status == -1
+    assert result.timed_out is True
+    assert "timed out" in (result.stderr or "")
 
 
 # ---------------------------------------------------------------------------

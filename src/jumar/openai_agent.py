@@ -267,6 +267,13 @@ def _post_chat_completions(
     return parsed
 
 
+def _is_timeout_error(exc: OSError | TimeoutError | urllib.error.URLError | ValueError) -> bool:
+    """Return True when *exc* represents a request timeout."""
+    if isinstance(exc, TimeoutError):
+        return True
+    return isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, TimeoutError)
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -357,7 +364,7 @@ def run_openai_agent(
                 exit_status=-1,
                 stdout="\n".join(transcript),
                 stderr=f"request to {harness.base_url} failed: {exc}",
-                timed_out=False,
+                timed_out=_is_timeout_error(exc),
                 agent_claim=None,
                 **_rate(),
             )
