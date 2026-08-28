@@ -17,6 +17,7 @@ from jumar.config import (
     HarnessConfig,
     is_allowed,
     load_config,
+    resolve_harness,
 )
 
 # ---------------------------------------------------------------------------
@@ -554,6 +555,49 @@ def test_profiles_must_be_a_table(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as exc:
         load_config(tmp_path)
     assert "profiles" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# resolve_harness() — an item selects its own line-up with @harness=
+# ---------------------------------------------------------------------------
+
+
+def test_every_profile_is_resolved_not_just_the_selected_one(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path)
+    assert sorted(cfg.harness_profiles) == ["allqwen", "heavy"]
+    assert cfg.harness_profiles["heavy"].for_stage("execute").model == "qwen"
+
+
+def test_item_without_a_token_gets_the_base_harness(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path)
+    assert resolve_harness(cfg, None).for_stage("execute").model == "gemma"
+
+
+def test_item_token_selects_its_profile(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path)
+    assert resolve_harness(cfg, "heavy").for_stage("execute").model == "qwen"
+    # Stages the profile is silent about still come from the base file.
+    assert resolve_harness(cfg, "heavy").for_stage("judge").model == "gemma-judge"
+
+
+def test_cli_flag_outranks_the_item_token(tmp_path: Path) -> None:
+    """--harness-profile is a deliberate instruction to run one pass on one
+    line-up, which is what makes an A/B across items possible."""
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path, harness_profile="allqwen")
+    assert resolve_harness(cfg, "heavy").for_stage("judge").model == "qwen"
+
+
+def test_unknown_item_profile_raises_and_names_the_defined_ones(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path)
+    with pytest.raises(ConfigError) as exc:
+        resolve_harness(cfg, "nope")
+    assert "nope" in str(exc.value)
+    assert "heavy" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

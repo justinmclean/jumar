@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from jumar.config import Config
+from jumar.config import Config, HarnessConfig
 from jumar.ingest import IngestError, IngestResult, ingest
 from jumar.models import ItemStatus, RecurUnit
 
@@ -589,3 +589,31 @@ def test_unresolvable_depends_blocks_before_any_agent_call(tmp_path: Path) -> No
     # Error is raised by ingest(), which runs before select() or any execution stage.
     with pytest.raises(IngestError):
         _todo(tmp_path, "- [ ] Task @id=my-task @depends=nonexistent\n")
+
+
+# ---------------------------------------------------------------------------
+# @harness= names a profile that must exist
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_harness_profile_on_an_item_fails_ingest(tmp_path: Path) -> None:
+    """A typo must fail before any model call, not fall back to the default.
+
+    Mid-run is too late: the item has already spent a decompose call, and a
+    silent fall-back would run the wrong model with nothing in the journal to
+    say so.
+    """
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] do a thing @id=t1 @harness=nosuch\n")
+    with pytest.raises(IngestError) as exc:
+        ingest(todo, Config())
+    assert "nosuch" in str(exc.value)
+    assert "t1" in str(exc.value)
+
+
+def test_known_harness_profile_on_an_item_ingests(tmp_path: Path) -> None:
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] do a thing @id=t1 @harness=heavy\n")
+    config = Config(harness_profiles={"heavy": HarnessConfig(model="qwen")})
+    result = ingest(todo, config)
+    assert result.items[0].meta["harness"] == "heavy"

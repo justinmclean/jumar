@@ -179,6 +179,7 @@ never treated as work.
 | `@depends=` | Blocks until the named item is done. Cycles are a startup error. |
 | `@capability=` | Grants authority: `read_fs`, `write_fs`, `run_commands`, `network`, `git_commit`. |
 | `@max-subtasks=` | Per-item override of the plan-length cap. |
+| `@harness=` | Runs this item on a named `[harness.profiles.<name>]` line-up. Unknown name is a startup error. |
 | `@not-before=` | Eligibility gate. Before this instant the item is *deferred*. |
 | `@due=` | Advisory deadline. Affects ordering and reporting only. |
 | `@every=` | Recurrence: `weekday`, `1d`, `2w`, `mon,thu`. |

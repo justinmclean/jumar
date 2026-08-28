@@ -528,6 +528,7 @@ def run_item(
     """
     from .backoff import advance_failure_count, clear_failure_count
     from .complete import complete
+    from .config import resolve_harness
     from .decompose import DecomposeError, decompose
     from .execute import execute
     from .gate import GateDecision, GateError, GateMode, gate
@@ -660,7 +661,7 @@ def run_item(
         # who sets [harness.judge] (e.g. to keep judge on a frontier model
         # while execute uses a cheaper or local one) must actually get it here,
         # the one live call site that dispatches a judge.
-        judge_resolved = config.harness.for_stage("judge")
+        judge_resolved = resolve_harness(config, item.meta.get("harness")).for_stage("judge")
         judge_harness = HarnessInfo(
             agent=judge_resolved.agent,
             model=judge_resolved.model,

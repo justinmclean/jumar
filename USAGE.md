@@ -517,6 +517,14 @@ Notes that matter:
 
 - **`deny` beats `allow`.** An `argv[0]` outside `allow` is refused *before* the
   process is spawned, with `capability_denied`.
+- **`@harness=<name>` routes one item to one profile.** Which model an item
+  needs is a property of the item, not of the invocation: an extraction task
+  and a task turning on judgement want different models, and `--until-empty`
+  cannot express that from the command line. Put `@harness=heavy` on the item
+  and every run picks it up. An explicit `--harness-profile` still wins, so
+  you can force a whole pass onto one line-up to compare. A name with no
+  matching profile fails at ingest, before any model call — never a silent
+  fall-back to the default.
 - **Harness profiles are for a second model line-up, not a second config file.**
   `jumar run --harness-profile heavy` layers `[jumar.harness.profiles.heavy]`
   over `[jumar.harness]`; everything else in the file — `todo_path`,

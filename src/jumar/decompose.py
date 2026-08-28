@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .clock import make_session_id, stamp
-from .config import Config
+from .config import Config, resolve_harness
 from .harness import AgentResult, detect_harness_error
 from .harness import run_agent as _default_run_agent
 from .journal import HARNESS_ERROR, PLAN_CREATED, PLAN_REJECTED, Journal
@@ -429,7 +429,7 @@ def decompose(
     """
     runner = _run_agent if _run_agent is not None else _default_run_agent
 
-    resolved = config.harness.for_stage("decompose")
+    resolved = resolve_harness(config, item.meta.get("harness")).for_stage("decompose")
     harness_info = HarnessInfo(
         agent=resolved.agent,
         model=resolved.model,
