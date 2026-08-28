@@ -141,6 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
     plan_p.add_argument(
+        "--harness-profile",
+        default=None,
+        metavar="NAME",
+        help="Use the [harness.profiles.NAME] table from the config file.",
+    )
+    plan_p.add_argument(
         "--json",
         action="store_true",
         help="Emit the plan result as a JSON document on stdout (warnings still go to stderr).",
@@ -151,6 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--todo", default=None, metavar="PATH", help="Override the todo file path.")
     run_p.add_argument(
         "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
+    )
+    run_p.add_argument(
+        "--harness-profile",
+        default=None,
+        metavar="NAME",
+        help="Use the [harness.profiles.NAME] table from the config file.",
     )
     _mode_group = run_p.add_mutually_exclusive_group()
     _mode_group.add_argument(
@@ -228,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
     _schedule_add_p.add_argument(
+        "--harness-profile",
+        default=None,
+        metavar="NAME",
+        help="Use the [harness.profiles.NAME] table from the config file.",
+    )
+    _schedule_add_p.add_argument(
         "--dry-run", action="store_true", help="Print the entry without installing."
     )
     _schedule_add_p.add_argument(
@@ -252,6 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
     _schedule_show_p.add_argument(
         "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
+    _schedule_show_p.add_argument(
+        "--harness-profile",
+        default=None,
+        metavar="NAME",
+        help="Use the [harness.profiles.NAME] table from the config file.",
+    )
 
     # doctor
     doctor_p = subs.add_parser("doctor", help="Check config, harness, and todo file.")
@@ -261,6 +285,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p.add_argument(
         "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
     )
+    doctor_p.add_argument(
+        "--harness-profile",
+        default=None,
+        metavar="NAME",
+        help="Use the [harness.profiles.NAME] table from the config file.",
+    )
 
     # status
     status_p = subs.add_parser("status", help="Show item-centric status across all runs.")
@@ -269,6 +299,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status_p.add_argument(
         "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
+    )
+    status_p.add_argument(
+        "--harness-profile",
+        default=None,
+        metavar="NAME",
+        help="Use the [harness.profiles.NAME] table from the config file.",
     )
     status_p.add_argument(
         "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
@@ -336,7 +372,11 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         cli_overrides["todo_path"] = args.todo
     config_path = Path(args.config) if getattr(args, "config", None) else None
     try:
-        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+        config = load_config(
+            cli_overrides=cli_overrides or None,
+            config_path=config_path,
+            harness_profile=getattr(args, "harness_profile", None),
+        )
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -787,7 +827,11 @@ def _cmd_run(
         cli_overrides["todo_path"] = args.todo
     config_path = Path(args.config) if getattr(args, "config", None) else None
     try:
-        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+        config = load_config(
+            cli_overrides=cli_overrides or None,
+            config_path=config_path,
+            harness_profile=getattr(args, "harness_profile", None),
+        )
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -1327,6 +1371,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
                 args.cron_expr,
                 todo_path=args.todo,
                 config_path=getattr(args, "config", None),
+                harness_profile=getattr(args, "harness_profile", None),
                 timezone=config.timezone,
                 backend=default_backend(backend_override),
                 dry_run=getattr(args, "dry_run", False),
@@ -1345,6 +1390,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
                 args.cron_expr,
                 todo_path=args.todo,
                 config_path=getattr(args, "config", None),
+                harness_profile=getattr(args, "harness_profile", None),
                 timezone=config.timezone,
                 backend=default_backend(backend_override),
                 dry_run=True,
@@ -1396,7 +1442,11 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         cli_overrides["todo_path"] = args.todo
     config_path = Path(args.config) if getattr(args, "config", None) else None
     try:
-        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+        config = load_config(
+            cli_overrides=cli_overrides or None,
+            config_path=config_path,
+            harness_profile=getattr(args, "harness_profile", None),
+        )
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -1425,7 +1475,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
         cli_overrides["todo_path"] = args.todo
     config_path = Path(args.config) if getattr(args, "config", None) else None
     try:
-        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+        config = load_config(
+            cli_overrides=cli_overrides or None,
+            config_path=config_path,
+            harness_profile=getattr(args, "harness_profile", None),
+        )
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

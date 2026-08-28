@@ -301,6 +301,9 @@ model = "opus"
 [jumar.harness.judge]
 model = "opus"            # valid stage tables: decompose, execute, judge
 
+[jumar.harness.profiles.heavy]   # named alternative harness; same shape as
+execute = { model = "opus" }     # [jumar.harness]. Select with --harness-profile heavy
+
 [jumar.schedule]
 backend    = "auto"        # auto | cron | launchd | systemd
 log_dir    = "runs/logs"
@@ -319,3 +322,18 @@ are allowed, because an agent that cannot fetch a primary source fabricates it
 instead. `git push` and `gh` are hard-denied regardless of these lists. An
 unknown key under `[jumar.harness]` or a stage table other than
 `decompose`/`execute`/`judge` is a startup error, not a silent no-op.
+
+`[jumar.harness.profiles.<name>]` declares a named alternative harness with the
+same shape as `[jumar.harness]` — scalar keys and/or stage tables. One is
+selected per invocation with `--harness-profile <name>`; `Config.harness` is
+fully resolved by `load_config`, so nothing downstream knows a profile was
+involved. Resolution is highest-first:
+`[…profiles.NAME.<stage>]` → `[…profiles.NAME]` → `[harness.<stage>]` →
+`[harness]`. A selected profile's top-level outranks the base file's per-stage
+overrides, so a profile's stated model applies to every stage rather than
+depending on what it is layered over. An unknown profile name is a startup
+error rather than a fall-back to the base harness — a scheduled run that
+quietly used the wrong line-up is indistinguishable from one that used the
+right one — and every profile is shape-checked at load, not only the selected
+one. The selected name is recorded on `Config.harness_profile` and reported by
+`doctor`.

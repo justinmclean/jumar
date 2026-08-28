@@ -152,7 +152,10 @@ system, in-process — no `allow_unrestricted_harness` opt-in needed. `jumar
 doctor` swaps its usual PATH check for a GET on `{base_url}/models`. Keep
 `[jumar.harness.judge]` on a frontier model even when `execute` runs locally —
 a local model grading its own output is a weaker check than the design
-assumes. Full config keys and the caveats in **[USAGE.md §8](USAGE.md#8-configuration)**.
+assumes. For a second, heavier line-up, add a `[jumar.harness.profiles.<name>]`
+table and select it per run with `--harness-profile <name>` rather than keeping
+a second config file that drifts. Full config keys and the caveats in
+**[USAGE.md §8](USAGE.md#8-configuration)**.
 
 ## Todo file syntax
 

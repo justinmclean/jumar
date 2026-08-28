@@ -502,6 +502,12 @@ model = "opus"
 [jumar.harness.judge]
 model = "opus"
 
+# Named alternative harnesses. Same shape as [jumar.harness] itself: scalar
+# keys and/or stage tables. Selected per run with --harness-profile NAME;
+# without the flag the base [jumar.harness] above applies unchanged.
+[jumar.harness.profiles.heavy.execute]
+model = "opus"
+
 [jumar.commands]
 allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]
 deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]
@@ -511,6 +517,22 @@ Notes that matter:
 
 - **`deny` beats `allow`.** An `argv[0]` outside `allow` is refused *before* the
   process is spawned, with `capability_denied`.
+- **Harness profiles are for a second model line-up, not a second config file.**
+  `jumar run --harness-profile heavy` layers `[jumar.harness.profiles.heavy]`
+  over `[jumar.harness]`; everything else in the file — `todo_path`,
+  `capabilities`, the command policy — is shared, so it cannot drift between
+  the fast and slow line-ups the way two config files do. Resolution runs
+  highest-first: `[…profiles.NAME.<stage>]` → `[…profiles.NAME]` →
+  `[jumar.harness.<stage>]` → `[jumar.harness]`. The selected profile's
+  top-level therefore outranks the base file's per-stage overrides: a profile
+  that says `model = "opus"` means *every* stage, not "opus except where the
+  base file named something else". An unknown profile name is a startup
+  error, never a silent fall-back to the base harness, and every defined
+  profile is shape-checked at load — a typo in one you are not running today
+  still fails now rather than on the run that finally selects it.
+  `jumar schedule add` bakes the flag into the installed command, so a
+  scheduled run pins its line-up the same way. `jumar doctor` names the
+  active profile on its `config.source` line.
 - **The boundary is send, not fetch.** `network` *is* a default capability and
   `curl`/`wget` are allowed — an agent that cannot read a primary source
   fabricates it instead. The deny list is the outbound-transmission vectors
@@ -560,8 +582,11 @@ model = "sonnet"
 - **What `jumar doctor` checks.** For every other harness, `doctor` looks for a
   binary on `PATH`. For `agent = "openai"` there is no binary — instead it GETs
   `{base_url}/models` and reports `fail` if the endpoint is unreachable, `warn`
-  if it's reachable but the configured `model` isn't in the served list, `ok`
-  otherwise.
+  if it's reachable but a configured `model` isn't in the served list, `ok`
+  otherwise. It probes the *resolved* model for every stage — including the
+  one the selected `--harness-profile` supplies — not just the top-level
+  `[jumar.harness] model`, which once every stage carries an override is an id
+  nothing ever calls.
 - **`api_key_env` names an environment variable**, not the key itself — the key
   never goes in `jumar.toml`. Leave it unset for a local server that takes no
   auth; the request is then sent with no `Authorization` header at all.

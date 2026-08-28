@@ -387,6 +387,176 @@ def test_harness_config_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
+# [harness.profiles.<name>] — named alternative harnesses
+# ---------------------------------------------------------------------------
+
+
+_PROFILE_TOML = """\
+    [jumar]
+    todo_path = "work.md"
+
+    [jumar.harness]
+    agent = "openai"
+    model = "gemma"
+    base_url = "http://local:1234/v1"
+
+    [jumar.harness.judge]
+    model = "gemma-judge"
+
+    [jumar.harness.profiles.heavy.execute]
+    model = "qwen"
+
+    [jumar.harness.profiles.allqwen]
+    model = "qwen"
+    """
+
+
+def test_no_profile_selected_leaves_base_harness_untouched(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path)
+    assert cfg.harness_profile is None
+    assert cfg.harness.for_stage("execute").model == "gemma"
+    assert cfg.harness.for_stage("judge").model == "gemma-judge"
+
+
+def test_profile_stage_override_applies(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path, harness_profile="heavy")
+    assert cfg.harness.for_stage("execute").model == "qwen"
+    # Stages the profile is silent about keep the base file's resolution.
+    assert cfg.harness.for_stage("decompose").model == "gemma"
+    assert cfg.harness.for_stage("judge").model == "gemma-judge"
+
+
+def test_profile_top_level_outranks_base_stage_override(tmp_path: Path) -> None:
+    # The profile says "run qwen"; that must mean every stage, not "qwen
+    # except where the base file happened to name something else".
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path, harness_profile="allqwen")
+    for stage in ("decompose", "execute", "judge"):
+        assert cfg.harness.for_stage(stage).model == "qwen"
+
+
+def test_profile_inherits_base_scalars_it_does_not_set(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    cfg = load_config(tmp_path, harness_profile="heavy")
+    resolved = cfg.harness.for_stage("execute")
+    assert resolved.agent == "openai"
+    assert resolved.base_url == "http://local:1234/v1"
+
+
+def test_selected_profile_is_recorded_on_config(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    assert load_config(tmp_path, harness_profile="heavy").harness_profile == "heavy"
+
+
+def test_profile_does_not_disturb_other_config_fields(tmp_path: Path) -> None:
+    # The whole point of profiles over a second config file: everything that
+    # is not the harness stays in one place.
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    assert load_config(tmp_path, harness_profile="heavy").todo_path == "work.md"
+
+
+def test_unknown_profile_name_is_an_error_not_a_fallback(tmp_path: Path) -> None:
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    with pytest.raises(ConfigError) as exc:
+        load_config(tmp_path, harness_profile="nope")
+    assert "nope" in str(exc.value)
+    # The message must name what IS defined, so the typo is self-correcting.
+    assert "heavy" in str(exc.value)
+    assert "allqwen" in str(exc.value)
+
+
+def test_unknown_profile_when_none_defined_says_so(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar]
+        todo_path = "work.md"
+
+        [jumar.harness]
+        model = "gemma"
+        """,
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(tmp_path, harness_profile="heavy")
+    assert "none defined" in str(exc.value)
+
+
+def test_profiles_key_is_valid_under_harness(tmp_path: Path) -> None:
+    # Regression: "profiles" must not trip the unknown-key check on [harness].
+    _write(tmp_path / "jumar.toml", _PROFILE_TOML)
+    load_config(tmp_path)
+
+
+def test_unknown_key_in_unselected_profile_still_raises(tmp_path: Path) -> None:
+    # A typo in a profile you are not running today is still a config error;
+    # finding it only on the run that finally selects it is the silent
+    # misconfiguration the [harness] key check exists to prevent.
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar]
+        todo_path = "work.md"
+
+        [jumar.harness.profiles.heavy]
+        modle = "qwen"
+        """,
+    )
+    with pytest.raises(ValueError) as exc:
+        load_config(tmp_path)
+    assert "modle" in str(exc.value)
+
+
+def test_unknown_stage_key_in_profile_raises(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar]
+        todo_path = "work.md"
+
+        [jumar.harness.profiles.heavy.executee]
+        model = "qwen"
+        """,
+    )
+    with pytest.raises(ValueError) as exc:
+        load_config(tmp_path)
+    assert "executee" in str(exc.value)
+
+
+def test_unknown_key_inside_profile_stage_table_raises(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar]
+        todo_path = "work.md"
+
+        [jumar.harness.profiles.heavy.execute]
+        modle = "qwen"
+        """,
+    )
+    with pytest.raises(ValueError) as exc:
+        load_config(tmp_path)
+    assert "modle" in str(exc.value)
+
+
+def test_profiles_must_be_a_table(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar]
+        todo_path = "work.md"
+
+        [jumar.harness]
+        profiles = "heavy"
+        """,
+    )
+    with pytest.raises(ValueError) as exc:
+        load_config(tmp_path)
+    assert "profiles" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
 # HarnessConfig.for_stage() — per-stage resolution
 # ---------------------------------------------------------------------------
 
