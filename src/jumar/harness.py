@@ -109,6 +109,13 @@ class AgentResult:
     timed_out: bool
     # Last non-empty stdout line — stored as a *claim*, never as a verdict.
     agent_claim: str | None
+    # Generation throughput, when the harness can measure it. Only the
+    # in-process `openai` harness can: a subprocess CLI reports no token
+    # counts, so these stay None there rather than being guessed. Completion
+    # tokens only — prompt tokens are heavily prefix-cached across a tool
+    # loop, so counting them would flatter the rate rather than describe it.
+    completion_tokens: int | None = None
+    generation_seconds: float | None = None
 
 
 # ---------------------------------------------------------------------------

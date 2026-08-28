@@ -19,6 +19,7 @@ import json
 import subprocess
 import threading
 import time
+import urllib.error
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -26,6 +27,7 @@ from typing import Any
 
 import pytest
 
+import jumar.openai_agent as openai_agent
 from jumar.harness import IN_PROCESS_HARNESSES
 from jumar.models import Capability, HarnessInfo
 from jumar.openai_agent import run_openai_agent
@@ -507,6 +509,52 @@ def test_unreachable_endpoint_fails_closed(tmp_path: Path) -> None:
     assert result.exit_status == -1
     assert result.timed_out is False
     assert result.agent_claim is None
+
+
+@pytest.mark.parametrize(
+    ("error", "timed_out"),
+    [
+        pytest.param(TimeoutError("timed out"), True, id="bare-timeout"),
+        pytest.param(
+            urllib.error.URLError(TimeoutError("timed out")),
+            True,
+            id="wrapped-timeout",
+        ),
+        pytest.param(
+            urllib.error.HTTPError(
+                "http://127.0.0.1:1234/v1/chat/completions",
+                500,
+                "boom",
+                hdrs=None,
+                fp=None,
+            ),
+            False,
+            id="http-error",
+        ),
+        pytest.param(OSError("boom"), False, id="non-timeout-oserror"),
+    ],
+)
+def test_request_errors_set_timeout_flag_correctly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    *,
+    timed_out: bool,
+) -> None:
+    def _fail(*_a: object, **_kw: object) -> dict[str, object]:
+        raise error
+
+    monkeypatch.setattr(openai_agent, "_post_chat_completions", _fail)
+
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=5,
+        harness=_harness("http://127.0.0.1:1234/v1"),
+    )
+    assert result.exit_status == -1
+    assert result.timed_out is timed_out
 
 
 # ---------------------------------------------------------------------------

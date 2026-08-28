@@ -301,6 +301,13 @@ def _post_chat_completions(
     return parsed
 
 
+def _is_timeout_error(exc: OSError | TimeoutError | urllib.error.URLError | ValueError) -> bool:
+    """Return True when *exc* represents a request timeout."""
+    if isinstance(exc, TimeoutError):
+        return True
+    return isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, TimeoutError)
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -350,9 +357,18 @@ def run_openai_agent(
         commands=CommandPolicy(allow=harness.commands_allow, deny=harness.commands_deny)
     )
 
-    deadline = time.monotonic() + max(timeout_s, 0)
+    started = time.monotonic()
+    deadline = started + max(timeout_s, 0)
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     transcript: list[str] = []
+    completion_tokens = 0
+
+    def _rate() -> dict[str, Any]:
+        """Throughput fields for an AgentResult, whenever the loop ends."""
+        return {
+            "completion_tokens": completion_tokens,
+            "generation_seconds": time.monotonic() - started,
+        }
 
     for _step in range(MAX_TOOL_STEPS):
         remaining = deadline - time.monotonic()
@@ -363,6 +379,7 @@ def run_openai_agent(
                 stderr=f"deadline of {timeout_s}s exceeded across the tool-calling loop",
                 timed_out=True,
                 agent_claim=None,
+                **_rate(),
             )
 
         payload: dict[str, Any] = {"model": harness.model, "messages": messages}
@@ -401,9 +418,15 @@ def run_openai_agent(
                 exit_status=-1,
                 stdout="\n".join(transcript),
                 stderr=f"request to {harness.base_url} failed: {exc}",
-                timed_out=False,
+                timed_out=_is_timeout_error(exc),
                 agent_claim=None,
+                **_rate(),
             )
+
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            with contextlib.suppress(TypeError, ValueError):
+                completion_tokens += int(usage.get("completion_tokens") or 0)
 
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -413,6 +436,7 @@ def run_openai_agent(
                 stderr=f"no choices in response from {harness.base_url}",
                 timed_out=False,
                 agent_claim=None,
+                **_rate(),
             )
 
         message = choices[0].get("message") or {}
@@ -441,6 +465,7 @@ def run_openai_agent(
                 stderr=stderr,
                 timed_out=False,
                 agent_claim=lines[-1] if lines else None,
+                **_rate(),
             )
 
         messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
@@ -462,4 +487,5 @@ def run_openai_agent(
         stderr=f"tool-call step cap ({MAX_TOOL_STEPS}) exceeded without a final answer",
         timed_out=False,
         agent_claim=None,
+        **_rate(),
     )

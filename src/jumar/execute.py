@@ -216,6 +216,12 @@ def execute(
     elif result.exit_status not in (0, None):
         error = f"exit_status={result.exit_status}"
 
+    # Throughput, when the harness measured it. getattr rather than attribute
+    # access: only the in-process harness populates these, and a caller may
+    # supply any object satisfying the AgentResult contract.
+    tokens: int | None = getattr(result, "completion_tokens", None)
+    gen_s: float | None = getattr(result, "generation_seconds", None)
+
     journal.append(
         ATTEMPT_FINISHED,
         subtask_id=subtask.subtask_id,
@@ -226,6 +232,9 @@ def execute(
             "exit_status": result.exit_status,
             "timed_out": result.timed_out,
             "agent_claim": result.agent_claim,
+            "completion_tokens": tokens,
+            "generation_seconds": round(gen_s, 1) if gen_s is not None else None,
+            "tokens_per_second": round(tokens / gen_s, 1) if tokens and gen_s else None,
             "files_touched": list(touched),
             "error": error,
         },
