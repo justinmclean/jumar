@@ -364,6 +364,14 @@ The written `runs/<run-id>/report.md`:
 inconclusive. Deferred and blocked items do not fail a run. A scheduled run with
 nothing to do is a success and must not page anyone.
 
+`jumar run --until-empty` repeats the same verified pipeline in one foreground
+process until no eligible item remains. It holds the normal single-flight lock
+for the whole pass, re-ingests the todo file after each completed item, and only
+starts the next item after the previous one has finished. If an item fails, that
+item is skipped for the rest of the pass so independent work can continue; its
+dependents remain blocked because the failed item is not treated as complete.
+The command exits `1` if any attempted item failed.
+
 ```bash
 jumar report <run-id> --runs-dir /path/to/runs   # non-default runs directory
 ```
@@ -639,7 +647,7 @@ and uuid-era run directories without an index row still resolve by prefix.
 ```
 jumar [--version] [--help]
 jumar plan   [--dry-run] [--todo PATH] [--json]
-jumar run    [--dry-run | --approve] [--non-interactive] [--verbose] [--json] [--todo PATH]
+jumar run    [--dry-run | --approve] [--non-interactive] [--until-empty] [--verbose] [--json] [--todo PATH]
 jumar resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
 jumar report RUN_ID [--runs-dir DIR] [--json]             # ditto
 jumar status [--todo PATH] [--runs-dir DIR] [--json]

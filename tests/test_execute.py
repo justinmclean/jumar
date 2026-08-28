@@ -270,7 +270,7 @@ def test_harness_outage_journalled_as_harness_error(
             )
         ]
     )
-    execute(
+    attempt = execute(
         _make_subtask(),
         item=_make_item(),
         prior_evidence=[],
@@ -290,6 +290,8 @@ def test_harness_outage_journalled_as_harness_error(
     # attempt_finished is unaffected — still journalled as today.
     finished = next(e for e in state.entries if e["event"] == ATTEMPT_FINISHED)
     assert finished["payload"]["exit_status"] == -1
+    assert finished["payload"]["error"] == "harness_error"
+    assert attempt.error == "harness_error"
 
 
 # ---------------------------------------------------------------------------

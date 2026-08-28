@@ -81,6 +81,42 @@ def timeout_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
     return AgentResult(exit_status=-1, stdout="", stderr="", timed_out=True, agent_claim=None)
 
 
+def transport_error_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Plans one subtask, then fails before the execution harness can run it."""
+    transport_error_agent.calls += 1
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    return AgentResult(
+        exit_status=-1,
+        stdout="",
+        stderr="request to http://192.168.1.8:1234/v1 failed: timed out",
+        timed_out=False,
+        agent_claim=None,
+    )
+
+
+transport_error_agent.calls = 0
+
+
+def repair_transport_error_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Plans, fails verification once, then hits transport failure during repair."""
+    repair_transport_error_agent.calls += 1
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    if prompt.startswith("A previous attempt at this subtask"):
+        return AgentResult(
+            exit_status=-1,
+            stdout="",
+            stderr="request to http://192.168.1.8:1234/v1 failed: timed out",
+            timed_out=False,
+            agent_claim=None,
+        )
+    return _result("I got distracted and did not create the marker.", claim="not done")
+
+
+repair_transport_error_agent.calls = 0
+
+
 class _Args:
     """Minimal stand-in for the parsed argparse namespace."""
 
@@ -89,6 +125,7 @@ class _Args:
         self.dry_run = False
         self.approve = False
         self.non_interactive = True
+        self.until_empty = False
         self.run_id: str | None = None
         self.runs_dir: str | None = None
         self.retry_failed = False
@@ -174,6 +211,50 @@ def test_run_a_timed_out_attempt_does_not_advance_the_item(workspace: Path) -> N
     finished = [ln for ln in lines if ln["event"] == "attempt_finished"]
     assert finished and all(ln["payload"].get("timed_out") for ln in finished)
     assert not any(ln["event"] == "item_completed" for ln in lines)
+
+
+def test_run_harness_transport_error_fails_without_repairs(workspace: Path) -> None:
+    """A harness outage is infrastructure failure, not a repairable bad subtask."""
+    transport_error_agent.calls = 0
+
+    rc = cli._cmd_run(_Args(), _run_agent=transport_error_agent)
+
+    assert rc == 1
+    assert transport_error_agent.calls == 2  # decompose once, execute once, no repair
+    assert not (workspace / "marker.txt").exists()
+
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    assert any(
+        ln["event"] == "harness_error" and ln["payload"]["reason"] == "transport" for ln in lines
+    )
+    failed = next(ln for ln in lines if ln["event"] == "item_failed")
+    assert failed["payload"]["failure_code"] == "harness_error"
+    assert not any(ln["event"] == "repair_started" for ln in lines)
+
+
+def test_run_repair_transport_error_fails_as_harness_error(workspace: Path) -> None:
+    """A repair-time harness outage is not masked as repair exhaustion."""
+    repair_transport_error_agent.calls = 0
+
+    rc = cli._cmd_run(_Args(), _run_agent=repair_transport_error_agent)
+
+    assert rc == 1
+    assert repair_transport_error_agent.calls == 3  # decompose, initial execute, repair execute
+
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    lines = [
+        json.loads(ln) for ln in (run_dir / "journal.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    assert any(
+        ln["event"] == "harness_error" and ln["payload"]["reason"] == "transport" for ln in lines
+    )
+    failed = next(ln for ln in lines if ln["event"] == "item_failed")
+    assert failed["payload"]["failure_code"] == "harness_error"
+    assert failed["payload"]["attempt_no"] == 1
+    assert len([ln for ln in lines if ln["event"] == "repair_started"]) == 1
 
 
 def test_run_dry_run_executes_nothing(workspace: Path) -> None:
@@ -279,6 +360,128 @@ def test_run_journals_item_deferred_for_a_not_before_gated_item(
     assert entry["item_id"]
     assert entry["payload"]["eligible_at"] == next_eligible
     assert entry["payload"]["eligible_at"] in entry["payload"]["reason"]
+
+
+def test_run_until_empty_completes_multiple_items_sequentially(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--until-empty keeps selecting eligible work until the queue is drained."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Create first marker @capability=write_fs\n"
+        "- [ ] Create second marker @capability=write_fs\n"
+    )
+
+    calls: list[str] = []
+
+    def two_item_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            if "first marker" in prompt:
+                return _result(
+                    json.dumps(
+                        {
+                            "subtasks": [
+                                {
+                                    "description": "Write first.txt containing FIRST",
+                                    "capabilities": ["write_fs"],
+                                    "depends_on": [],
+                                    "check": {
+                                        "kind": "file",
+                                        "statement": "first.txt contains FIRST",
+                                        "path": "first.txt",
+                                        "pattern": "FIRST",
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                )
+            return _result(
+                json.dumps(
+                    {
+                        "subtasks": [
+                            {
+                                "description": "Write second.txt containing SECOND",
+                                "capabilities": ["write_fs"],
+                                "depends_on": [],
+                                "check": {
+                                    "kind": "file",
+                                    "statement": "second.txt contains SECOND",
+                                    "path": "second.txt",
+                                    "pattern": "SECOND",
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        calls.append(prompt)
+        if "first.txt" in prompt:
+            (Path(cwd) / "first.txt").write_text("FIRST\n")
+            return _result("wrote first.txt")
+        (Path(cwd) / "second.txt").write_text("SECOND\n")
+        return _result("wrote second.txt")
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=two_item_agent)
+
+    assert rc == 0
+    assert (tmp_path / "first.txt").read_text().strip() == "FIRST"
+    assert (tmp_path / "second.txt").read_text().strip() == "SECOND"
+    assert tmp_path.joinpath("todo.md").read_text() == (
+        "- [x] Create first marker @capability=write_fs\n"
+        "- [x] Create second marker @capability=write_fs\n"
+    )
+    assert len(calls) == 2
+
+
+def test_run_until_empty_skips_failed_item_without_unblocking_dependents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed item is skipped for the pass, but its dependents stay blocked."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Fails first @id=first @priority=1 @capability=write_fs\n"
+        "- [ ] Depends on failed first @depends=first @priority=2 @capability=write_fs\n"
+        "- [ ] Independent second @priority=3 @capability=write_fs\n"
+    )
+
+    def partial_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            if "Fails first" in prompt:
+                return _result(_PLAN)
+            return _result(
+                json.dumps(
+                    {
+                        "subtasks": [
+                            {
+                                "description": "Write independent.txt containing OK",
+                                "capabilities": ["write_fs"],
+                                "depends_on": [],
+                                "check": {
+                                    "kind": "file",
+                                    "statement": "independent.txt contains OK",
+                                    "path": "independent.txt",
+                                    "pattern": "OK",
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        if "marker.txt" in prompt:
+            return _result("claimed marker without writing it")
+        (Path(cwd) / "independent.txt").write_text("OK\n")
+        return _result("wrote independent.txt")
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=partial_agent)
+
+    assert rc == 1
+    assert not (tmp_path / "marker.txt").exists()
+    assert (tmp_path / "independent.txt").read_text().strip() == "OK"
+    todo_text = tmp_path.joinpath("todo.md").read_text()
+    assert "- [ ] Fails first" in todo_text
+    assert "- [ ] Depends on failed first" in todo_text
+    assert "- [x] Independent second" in todo_text
 
 
 # ---------------------------------------------------------------------------

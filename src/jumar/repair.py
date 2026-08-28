@@ -45,6 +45,14 @@ class RepairExhausted(Exception):
         self.halt = halt
 
 
+class RepairHarnessError(Exception):
+    """A repair attempt could not run because the execution harness failed."""
+
+    def __init__(self, *, attempt_no: int) -> None:
+        self.attempt_no = attempt_no
+        super().__init__(f"Repair attempt {attempt_no} failed before the harness ran")
+
+
 # ---------------------------------------------------------------------------
 # Repair prompt construction
 # ---------------------------------------------------------------------------
@@ -192,7 +200,7 @@ def repair(
 
         repair_prompt = _build_repair_prompt(subtask, item, prior_evidence, last_result)
 
-        execute(
+        attempt = execute(
             subtask,
             item=item,
             prior_evidence=prior_evidence,
@@ -205,6 +213,8 @@ def repair(
             _run_agent=_run_agent,
             prompt_override=repair_prompt,
         )
+        if attempt.error == "harness_error":
+            raise RepairHarnessError(attempt_no=attempt_no)
 
         # Always re-run the original check — never a modified substitute (AC7.3).
         ctx = VerifyContext(
