@@ -166,8 +166,17 @@ _HARD_DENY: tuple[tuple[str, ...], ...] = (
 # so that a typo in jumar.toml does not silently fail to apply the override.
 _VALID_HARNESS_STAGES: frozenset[str] = frozenset({"decompose", "execute", "judge"})
 
+# Values accepted for `reasoning_effort`. Sent verbatim to the chat-completions
+# endpoint, which passes it to the model's chat template; a model that does not
+# understand the key ignores it. Validated rather than free-form so a typo is a
+# startup error instead of a silently ignored setting that looks applied.
+# "none" is included because several thinking models spell "off" that way.
+_VALID_REASONING_EFFORTS: frozenset[str] = frozenset({"none", "low", "medium", "high", "xhigh"})
+
 # Scalar keys valid at [harness], inside a stage table, and inside a profile.
-_HARNESS_SCALAR_KEYS: frozenset[str] = frozenset({"agent", "model", "base_url", "api_key_env"})
+_HARNESS_SCALAR_KEYS: frozenset[str] = frozenset(
+    {"agent", "model", "base_url", "api_key_env", "reasoning_effort"}
+)
 
 # Sub-table under [harness] holding named alternative harnesses:
 # [harness.profiles.<name>] with the same shape as [harness] itself. One is
@@ -206,6 +215,11 @@ class HarnessConfig:
     none, e.g. a local LM Studio server). Every subprocess harness ignores
     both.
 
+    ``reasoning_effort`` is forwarded to an in-process harness's chat-
+    completions request when set. It is per-stage for the same reason the
+    model is: decompose and judge are single bounded calls, while execute
+    runs a tool loop where the cost of deliberation is paid on every turn.
+
     ``None`` for a per-stage field means "inherit the top-level value".
 
     A ``HarnessConfig`` is always fully resolved by the time it reaches this
@@ -218,19 +232,23 @@ class HarnessConfig:
     model: str = "sonnet"
     base_url: str | None = None
     api_key_env: str | None = None
+    reasoning_effort: str | None = None
     # Per-stage overrides — None inherits the top-level value.
     decompose_agent: str | None = None
     decompose_model: str | None = None
     decompose_base_url: str | None = None
     decompose_api_key_env: str | None = None
+    decompose_reasoning_effort: str | None = None
     execute_agent: str | None = None
     execute_model: str | None = None
     execute_base_url: str | None = None
     execute_api_key_env: str | None = None
+    execute_reasoning_effort: str | None = None
     judge_agent: str | None = None
     judge_model: str | None = None
     judge_base_url: str | None = None
     judge_api_key_env: str | None = None
+    judge_reasoning_effort: str | None = None
 
     def for_stage(self, stage: str) -> HarnessConfig:
         """Return the resolved ``HarnessConfig`` for *stage*.
@@ -247,11 +265,13 @@ class HarnessConfig:
         m: str | None = getattr(self, f"{stage}_model")
         b: str | None = getattr(self, f"{stage}_base_url")
         k: str | None = getattr(self, f"{stage}_api_key_env")
+        r: str | None = getattr(self, f"{stage}_reasoning_effort")
         return HarnessConfig(
             agent=a if a is not None else self.agent,
             model=m if m is not None else self.model,
             base_url=b if b is not None else self.base_url,
             api_key_env=k if k is not None else self.api_key_env,
+            reasoning_effort=r if r is not None else self.reasoning_effort,
         )
 
 
@@ -506,6 +526,25 @@ def load_config(
             )
         profile_raw = cast(dict[str, Any], profiles_raw[harness_profile])
 
+    def _validate_reasoning_efforts(resolved: HarnessConfig, label: str) -> None:
+        """Reject an unrecognised reasoning_effort at load, not at request time.
+
+        A bad value would otherwise be forwarded verbatim and silently ignored
+        by the endpoint, leaving a run that looks configured and is not. Every
+        profile is checked, not just the selected one, so a typo in an unused
+        profile still fails the next load rather than the next scheduled run
+        that selects it.
+        """
+        stage_attrs = (f"{s}_reasoning_effort" for s in sorted(_VALID_HARNESS_STAGES))
+        for attr in ("reasoning_effort", *stage_attrs):
+            value = getattr(resolved, attr)
+            if value is not None and value not in _VALID_REASONING_EFFORTS:
+                where = label if attr == "reasoning_effort" else f"{label}.{attr.split('_')[0]}"
+                raise ConfigError(
+                    f"Invalid reasoning_effort {value!r} under [{where}]. "
+                    f"Valid values: {sorted(_VALID_REASONING_EFFORTS)}."
+                )
+
     # Resolution order, highest first:
     #   [harness.profiles.<name>.<stage>]  →  [harness.profiles.<name>]
     #   →  [harness.<stage>]               →  [harness]
@@ -540,16 +579,23 @@ def load_config(
             api_key_env=_first(
                 _scalar(profile_table, "api_key_env"), _scalar(harness_raw, "api_key_env")
             ),
+            reasoning_effort=_first(
+                _scalar(profile_table, "reasoning_effort"),
+                _scalar(harness_raw, "reasoning_effort"),
+            ),
             **stage_kwargs,
         )
 
     harness = _build(profile_raw, harness_profile)
+    _validate_reasoning_efforts(harness, "harness")
     # Every profile is resolved, not just the selected one, so an item can
     # name one with @harness= after load without re-reading the file.
     harness_profiles: dict[str, HarnessConfig] = {
         name: _build(cast(dict[str, Any], profiles_raw[name]), name)
         for name in sorted(profiles_raw)
     }
+    for _name, _resolved in harness_profiles.items():
+        _validate_reasoning_efforts(_resolved, f"harness.{_HARNESS_PROFILES_KEY}.{_name}")
 
     commands_raw: dict[str, Any] = raw.get("commands", {})
     commands = CommandPolicy(

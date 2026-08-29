@@ -669,6 +669,7 @@ def run_item(
             invoked_as=judge_resolved.agent,
             base_url=judge_resolved.base_url,
             api_key_env=judge_resolved.api_key_env,
+            reasoning_effort=judge_resolved.reasoning_effort,
             commands_allow=config.commands.allow,
             commands_deny=config.commands.deny,
         )

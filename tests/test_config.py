@@ -992,3 +992,47 @@ def test_custom_deny_list() -> None:
     cfg = Config(commands=CommandPolicy(allow=("python3", "make", "git"), deny=("make",)))
     assert is_allowed(["make", "check"], cfg) is False
     assert is_allowed(["python3", "test.py"], cfg) is True
+
+
+def test_reasoning_effort_resolves_per_stage(tmp_path: Path) -> None:
+    """A stage override wins; other stages inherit the top-level value."""
+    cfg_path = tmp_path / "jumar.toml"
+    cfg_path.write_text(
+        "[jumar.harness]\n"
+        'agent = "openai"\n'
+        'model = "m"\n'
+        'reasoning_effort = "low"\n'
+        "[jumar.harness.execute]\n"
+        'reasoning_effort = "medium"\n'
+    )
+    config = load_config(tmp_path)
+    assert config.harness.for_stage("decompose").reasoning_effort == "low"
+    assert config.harness.for_stage("judge").reasoning_effort == "low"
+    assert config.harness.for_stage("execute").reasoning_effort == "medium"
+
+
+def test_reasoning_effort_defaults_to_none(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "jumar.toml"
+    cfg_path.write_text('[jumar.harness]\nagent = "openai"\nmodel = "m"\n')
+    config = load_config(tmp_path)
+    assert config.harness.for_stage("execute").reasoning_effort is None
+
+
+def test_invalid_reasoning_effort_is_a_startup_error(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "jumar.toml"
+    cfg_path.write_text('[jumar.harness]\nagent = "openai"\nreasoning_effort = "lwo"\n')
+    with pytest.raises(ConfigError, match="Invalid reasoning_effort"):
+        load_config(tmp_path)
+
+
+def test_invalid_reasoning_effort_in_an_unselected_profile_still_fails(tmp_path: Path) -> None:
+    """Every profile is validated, not only the one selected for this run."""
+    cfg_path = tmp_path / "jumar.toml"
+    cfg_path.write_text(
+        "[jumar.harness]\n"
+        'agent = "openai"\n'
+        "[jumar.harness.profiles.heavy]\n"
+        'reasoning_effort = "enormous"\n'
+    )
+    with pytest.raises(ConfigError, match="Invalid reasoning_effort"):
+        load_config(tmp_path)

@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.error
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -907,3 +908,58 @@ def test_malformed_usage_values_are_ignored(tmp_path: Path, chat_server: Any) ->
     assert result.exit_status == 0
     assert result.prompt_tokens == 0
     assert result.completion_tokens == 12
+
+
+# ---------------------------------------------------------------------------
+# reasoning_effort
+# ---------------------------------------------------------------------------
+
+
+def test_reasoning_effort_is_sent_when_configured(tmp_path: Path, chat_server: Any) -> None:
+    base_url, handler = chat_server([_message("All done.")])
+    harness = replace(_harness(base_url), reasoning_effort="low")
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=harness,
+    )
+    assert result.exit_status == 0
+    assert handler.received[0]["reasoning_effort"] == "low"
+
+
+def test_reasoning_effort_is_omitted_when_unset(tmp_path: Path, chat_server: Any) -> None:
+    """An endpoint that rejects unknown keys must not see the key by default."""
+    base_url, handler = chat_server([_message("All done.")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert result.exit_status == 0
+    assert "reasoning_effort" not in handler.received[0]
+
+
+def test_reasoning_effort_is_sent_on_every_turn_of_the_loop(
+    tmp_path: Path, chat_server: Any
+) -> None:
+    (tmp_path / "foo.txt").write_text("hello world")
+    base_url, handler = chat_server(
+        [
+            _message("", [_tool_call("1", "read_file", {"path": "foo.txt"})]),
+            _message("done."),
+        ]
+    )
+    result = run_openai_agent(
+        "read foo.txt",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=replace(_harness(base_url), reasoning_effort="medium"),
+    )
+    assert result.exit_status == 0
+    assert len(handler.received) == 2
+    assert all(r["reasoning_effort"] == "medium" for r in handler.received)

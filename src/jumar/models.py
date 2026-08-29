@@ -203,6 +203,7 @@ class HarnessInfo:
     invoked_as: str
     base_url: str | None = None
     api_key_env: str | None = None
+    reasoning_effort: str | None = None
     commands_allow: tuple[str, ...] = ()
     commands_deny: tuple[str, ...] = ()
 

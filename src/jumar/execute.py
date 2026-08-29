@@ -140,6 +140,7 @@ def execute(
         invoked_as=resolved.agent,
         base_url=resolved.base_url,
         api_key_env=resolved.api_key_env,
+        reasoning_effort=resolved.reasoning_effort,
         commands_allow=config.commands.allow,
         commands_deny=config.commands.deny,
     )
