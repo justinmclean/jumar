@@ -16,6 +16,7 @@ import contextlib
 import json
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 import zoneinfo
@@ -29,6 +30,18 @@ from .harness import IN_PROCESS_HARNESSES
 # The stages whose resolved harness the doctor probes. Mirrors
 # config._VALID_HARNESS_STAGES, ordered for stable, readable messages.
 _HARNESS_STAGES: tuple[str, ...] = ("decompose", "execute", "judge")
+
+# Below this, a local model is not really running: it is being read from disk
+# on every token. Measured on a machine that had pushed a 20.4GB model past
+# physical memory — a decompose call that normally took two minutes did not
+# finish in thirty. Healthy local generation on the same box was 7-25 t/s.
+_SLOW_GENERATION_T_PER_S = 3.0
+
+# One short completion is enough to tell resident from swapping; a model in
+# swap will not finish even this inside the timeout, which is itself the
+# answer.
+_SPEED_PROBE_TOKENS = 16
+_SPEED_PROBE_TIMEOUT_S = 60
 
 
 class CheckStatus(StrEnum):
@@ -60,6 +73,8 @@ def run_doctor(config: Config) -> DoctorReport:
     checks.extend(_check_config(config))
     checks.append(_check_config_source(config))
     checks.append(_check_harness(config))
+    if config.harness.agent in IN_PROCESS_HARNESSES:
+        checks.append(_check_generation_speed(config))
     checks.extend(_check_allowlist(config))
     checks.append(_check_todo(config))
     checks.append(_check_schedule(config))
@@ -300,6 +315,103 @@ def _check_openai_harness(config: Config) -> DoctorCheck:
         CheckStatus.ok,
         f"OpenAI-compatible endpoint(s) {listed_endpoints} reachable; "
         f"model(s) {listed_models} served.",
+    )
+
+
+def _lmstudio_loaded_context(base_url: str) -> dict[str, int | None]:
+    """Best-effort map of model id -> loaded context length.
+
+    LM Studio serves this on its own REST API alongside the OpenAI-compatible
+    one; ``/v1/models`` does not carry it. Every failure worth diagnosing on a
+    local setup has turned out to be this number being wrong, so it is worth
+    one extra request. Any error yields {} — a non-LM-Studio endpoint is not a
+    problem, just an endpoint that cannot answer the question.
+    """
+    native = base_url.rstrip("/")
+    if native.endswith("/v1"):
+        native = native[: -len("/v1")]
+    url = native + "/api/v0/models"
+    loaded: dict[str, int | None] = {}
+    try:
+        request = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(request, timeout=5) as resp:  # noqa: S310
+            parsed = json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return {}
+    entries = parsed.get("data") if isinstance(parsed, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    for entry in entries:
+        if isinstance(entry, dict) and "id" in entry:
+            value = entry.get("loaded_context_length")
+            loaded[str(entry["id"])] = int(value) if isinstance(value, int) else None
+    return loaded
+
+
+def _check_generation_speed(config: Config) -> DoctorCheck:
+    """Time one short completion, to tell a resident model from a swapping one.
+
+    `harness` above proves the endpoint answers and the model id is served.
+    Both remain true when the model has been loaded with a context window too
+    large to fit in memory, at which point every request runs at disk speed
+    and the run dies on a timeout that looks like a dozen other things. This
+    is the check that distinguishes them.
+    """
+    resolved = config.harness.for_stage("execute")
+    base_url = resolved.base_url
+    if not base_url:
+        return DoctorCheck("harness.speed", CheckStatus.warn, "No base_url configured; skipped.")
+
+    payload = {
+        "model": resolved.model,
+        "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
+        "max_tokens": _SPEED_PROBE_TOKENS,
+    }
+    url = base_url.rstrip("/") + "/chat/completions"
+    started = time.monotonic()
+    try:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=_SPEED_PROBE_TIMEOUT_S) as resp:  # noqa: S310
+            parsed = json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        return DoctorCheck(
+            "harness.speed",
+            CheckStatus.fail,
+            f"A {_SPEED_PROBE_TOKENS}-token completion did not finish in "
+            f"{_SPEED_PROBE_TIMEOUT_S}s ({exc}). The model is almost certainly not "
+            "resident in memory — check its loaded context length, which is what "
+            "sizes the KV cache.",
+        )
+
+    elapsed = max(time.monotonic() - started, 1e-6)
+    usage = parsed.get("usage") if isinstance(parsed, dict) else None
+    produced = 0
+    if isinstance(usage, dict):
+        with contextlib.suppress(TypeError, ValueError):
+            produced = int(usage.get("completion_tokens") or 0)
+    rate = produced / elapsed if produced else 0.0
+
+    loaded = _lmstudio_loaded_context(base_url).get(resolved.model)
+    ctx = f", loaded context {loaded}" if loaded else ""
+
+    if produced and rate < _SLOW_GENERATION_T_PER_S:
+        return DoctorCheck(
+            "harness.speed",
+            CheckStatus.warn,
+            f"'{resolved.model}' generated {produced} token(s) at {rate:.1f} t/s{ctx} — "
+            f"below {_SLOW_GENERATION_T_PER_S} t/s, which usually means the model does "
+            "not fit in memory at its loaded context length and is running from swap. "
+            "Reduce the context or the model size.",
+        )
+    return DoctorCheck(
+        "harness.speed",
+        CheckStatus.ok,
+        f"'{resolved.model}' generated {produced} token(s) at {rate:.1f} t/s{ctx}.",
     )
 
 

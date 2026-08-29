@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -625,3 +627,83 @@ def test_legacy_check_ok_when_crontab_unavailable(
     monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
     check = _doctor._check_legacy_schedule_markers()
     assert check.status is _doctor.CheckStatus.ok
+
+
+# ---------------------------------------------------------------------------
+# harness.speed — a resident model vs one running from swap
+# ---------------------------------------------------------------------------
+
+
+class _CompletionHandler(BaseHTTPRequestHandler):
+    """Answers /chat/completions with a canned usage block after a delay."""
+
+    tokens: int = 16
+    delay_s: float = 0.0
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib method name
+        length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(length)
+        if self.delay_s:
+            time.sleep(self.delay_s)
+        body = json.dumps(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"completion_tokens": self.tokens},
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def completion_server() -> Iterator[Callable[[int, float], str]]:
+    servers: list[HTTPServer] = []
+
+    def _make(tokens: int, delay_s: float) -> str:
+        handler = type("_H", (_CompletionHandler,), {"tokens": tokens, "delay_s": delay_s})
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        host, port = server.server_address[:2]
+        return f"http://{host}:{port}/v1"
+
+    yield _make
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def test_generation_speed_ok_when_the_model_is_resident(completion_server: Any) -> None:
+    base_url = completion_server(16, 0.0)
+    config = _cfg(harness=HarnessConfig(agent="openai", model="m", base_url=base_url))
+    check = _find(run_doctor(config), "harness.speed")
+    assert check.status == CheckStatus.ok
+    assert "t/s" in check.message
+
+
+def test_generation_speed_warns_when_the_model_is_crawling(completion_server: Any) -> None:
+    """One token in half a second is 2 t/s — the signature of a model being
+    read from disk because it does not fit in memory at its loaded context.
+
+    `harness` above stays green throughout: the endpoint answers and the id is
+    served. This is the only check that separates the two.
+    """
+    base_url = completion_server(1, 0.5)
+    config = _cfg(harness=HarnessConfig(agent="openai", model="m", base_url=base_url))
+    check = _find(run_doctor(config), "harness.speed")
+    assert check.status == CheckStatus.warn
+    assert "swap" in check.message
+
+
+def test_generation_speed_skipped_for_subprocess_harnesses() -> None:
+    """Only the in-process harness talks to an endpoint; there is nothing to
+    time for a CLI harness, and inventing a number would be worse than none."""
+    config = _cfg(harness=HarnessConfig(agent="python3", model=""))
+    names = [c.name for c in run_doctor(config).checks]
+    assert "harness.speed" not in names
