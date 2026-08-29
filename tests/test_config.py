@@ -1036,3 +1036,44 @@ def test_invalid_reasoning_effort_in_an_unselected_profile_still_fails(tmp_path:
     )
     with pytest.raises(ConfigError, match="Invalid reasoning_effort"):
         load_config(tmp_path)
+
+
+def test_max_tokens_resolves_per_stage_as_an_int(tmp_path: Path) -> None:
+    (tmp_path / "jumar.toml").write_text(
+        "[jumar.harness]\n"
+        'agent = "openai"\n'
+        "max_tokens = 4096\n"
+        "[jumar.harness.execute]\n"
+        "max_tokens = 8192\n"
+    )
+    config = load_config(tmp_path)
+    assert config.harness.for_stage("judge").max_tokens == 4096
+    assert config.harness.for_stage("execute").max_tokens == 8192
+    # Coerced back to int, not left as the string the layering produces.
+    assert isinstance(config.harness.for_stage("execute").max_tokens, int)
+
+
+def test_max_tokens_defaults_to_none(tmp_path: Path) -> None:
+    (tmp_path / "jumar.toml").write_text('[jumar.harness]\nagent = "openai"\n')
+    assert load_config(tmp_path).harness.for_stage("execute").max_tokens is None
+
+
+def test_non_positive_max_tokens_is_a_startup_error(tmp_path: Path) -> None:
+    (tmp_path / "jumar.toml").write_text('[jumar.harness]\nagent = "openai"\nmax_tokens = 0\n')
+    with pytest.raises(ConfigError, match="positive integer"):
+        load_config(tmp_path)
+
+
+def test_non_numeric_max_tokens_is_a_startup_error(tmp_path: Path) -> None:
+    (tmp_path / "jumar.toml").write_text('[jumar.harness]\nagent = "openai"\nmax_tokens = "lots"\n')
+    with pytest.raises(ConfigError, match="positive integer"):
+        load_config(tmp_path)
+
+
+def test_non_numeric_max_tokens_in_an_unselected_profile_still_fails(tmp_path: Path) -> None:
+    """Every profile is finalised, not only the one selected for this run."""
+    (tmp_path / "jumar.toml").write_text(
+        '[jumar.harness]\nagent = "openai"\n[jumar.harness.profiles.heavy]\nmax_tokens = "heaps"\n'
+    )
+    with pytest.raises(ConfigError, match="positive integer"):
+        load_config(tmp_path)

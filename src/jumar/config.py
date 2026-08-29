@@ -19,6 +19,7 @@ import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from enum import StrEnum
 from pathlib import Path, PurePath
 from typing import Any, cast
@@ -177,7 +178,7 @@ _VALID_REASONING_EFFORTS: frozenset[str] = frozenset({"none", "low", "medium", "
 
 # Scalar keys valid at [harness], inside a stage table, and inside a profile.
 _HARNESS_SCALAR_KEYS: frozenset[str] = frozenset(
-    {"agent", "model", "base_url", "api_key_env", "reasoning_effort"}
+    {"agent", "model", "base_url", "api_key_env", "reasoning_effort", "max_tokens"}
 )
 
 # Sub-table under [harness] holding named alternative harnesses:
@@ -222,6 +223,10 @@ class HarnessConfig:
     model is: decompose and judge are single bounded calls, while execute
     runs a tool loop where the cost of deliberation is paid on every turn.
 
+    ``max_tokens`` caps a single generation. Unset, the only bound is the
+    context window, so one runaway response can consume an entire subtask
+    deadline and take the whole attempt down with it.
+
     ``None`` for a per-stage field means "inherit the top-level value".
 
     A ``HarnessConfig`` is always fully resolved by the time it reaches this
@@ -235,22 +240,26 @@ class HarnessConfig:
     base_url: str | None = None
     api_key_env: str | None = None
     reasoning_effort: str | None = None
+    max_tokens: int | None = None
     # Per-stage overrides — None inherits the top-level value.
     decompose_agent: str | None = None
     decompose_model: str | None = None
     decompose_base_url: str | None = None
     decompose_api_key_env: str | None = None
     decompose_reasoning_effort: str | None = None
+    decompose_max_tokens: int | None = None
     execute_agent: str | None = None
     execute_model: str | None = None
     execute_base_url: str | None = None
     execute_api_key_env: str | None = None
     execute_reasoning_effort: str | None = None
+    execute_max_tokens: int | None = None
     judge_agent: str | None = None
     judge_model: str | None = None
     judge_base_url: str | None = None
     judge_api_key_env: str | None = None
     judge_reasoning_effort: str | None = None
+    judge_max_tokens: int | None = None
 
     def for_stage(self, stage: str) -> HarnessConfig:
         """Return the resolved ``HarnessConfig`` for *stage*.
@@ -268,12 +277,14 @@ class HarnessConfig:
         b: str | None = getattr(self, f"{stage}_base_url")
         k: str | None = getattr(self, f"{stage}_api_key_env")
         r: str | None = getattr(self, f"{stage}_reasoning_effort")
+        x: int | None = getattr(self, f"{stage}_max_tokens")
         return HarnessConfig(
             agent=a if a is not None else self.agent,
             model=m if m is not None else self.model,
             base_url=b if b is not None else self.base_url,
             api_key_env=k if k is not None else self.api_key_env,
             reasoning_effort=r if r is not None else self.reasoning_effort,
+            max_tokens=x if x is not None else self.max_tokens,
         )
 
 
@@ -528,14 +539,18 @@ def load_config(
             )
         profile_raw = cast(dict[str, Any], profiles_raw[harness_profile])
 
-    def _validate_reasoning_efforts(resolved: HarnessConfig, label: str) -> None:
-        """Reject an unrecognised reasoning_effort at load, not at request time.
+    def _finalise(resolved: HarnessConfig, label: str) -> HarnessConfig:
+        """Validate reasoning_effort and coerce max_tokens, or raise ConfigError.
 
-        A bad value would otherwise be forwarded verbatim and silently ignored
-        by the endpoint, leaving a run that looks configured and is not. Every
-        profile is checked, not just the selected one, so a typo in an unused
-        profile still fails the next load rather than the next scheduled run
-        that selects it.
+        Both are checked at load rather than at request time. A bad value would
+        otherwise be forwarded verbatim and ignored by the endpoint, leaving a
+        run that looks configured and is not. Every profile is finalised, not
+        just the selected one, so a typo in an unused profile fails the next
+        load rather than the next scheduled run that happens to select it.
+
+        max_tokens arrives as a string because the layering above resolves
+        every scalar uniformly; it is coerced back to int here, which is also
+        where a non-numeric or non-positive value is rejected.
         """
         stage_attrs = (f"{s}_reasoning_effort" for s in sorted(_VALID_HARNESS_STAGES))
         for attr in ("reasoning_effort", *stage_attrs):
@@ -547,6 +562,28 @@ def load_config(
                     f"Valid values: {sorted(_VALID_REASONING_EFFORTS)}."
                 )
 
+        # Any, not int: the values land in fields the dataclass types
+        # int | None, and **kwargs into dc_replace cannot be narrowed per key.
+        coerced: dict[str, Any] = {}
+        token_attrs = (f"{s}_max_tokens" for s in sorted(_VALID_HARNESS_STAGES))
+        for attr in ("max_tokens", *token_attrs):
+            value = getattr(resolved, attr)
+            if value is None:
+                continue
+            where = label if attr == "max_tokens" else f"{label}.{attr.split('_')[0]}"
+            try:
+                as_int = int(str(value))
+            except ValueError:
+                raise ConfigError(
+                    f"Invalid max_tokens {value!r} under [{where}]: expected a positive integer."
+                ) from None
+            if as_int <= 0:
+                raise ConfigError(
+                    f"Invalid max_tokens {as_int} under [{where}]: expected a positive integer."
+                )
+            coerced[attr] = as_int
+        return dc_replace(resolved, **coerced) if coerced else resolved
+
     # Resolution order, highest first:
     #   [harness.profiles.<name>.<stage>]  →  [harness.profiles.<name>]
     #   →  [harness.<stage>]               →  [harness]
@@ -557,7 +594,9 @@ def load_config(
     def _build(profile_table: dict[str, Any], profile_name: str | None) -> HarnessConfig:
         """Layer *profile_table* over [harness] into one flat HarnessConfig."""
         label = f"harness.{_HARNESS_PROFILES_KEY}.{profile_name}"
-        stage_kwargs: dict[str, str | None] = {}
+        # Any because max_tokens lands in an int | None field while every
+        # other scalar is str | None; _finalise coerces it after layering.
+        stage_kwargs: dict[str, Any] = {}
         for stage in sorted(_VALID_HARNESS_STAGES):
             base_stage = _stage_table(harness_raw, stage, f"harness.{stage}")
             profile_stage = (
@@ -585,19 +624,24 @@ def load_config(
                 _scalar(profile_table, "reasoning_effort"),
                 _scalar(harness_raw, "reasoning_effort"),
             ),
+            # Still a string here; _finalise coerces it to int after layering.
+            max_tokens=_first(
+                _scalar(profile_table, "max_tokens"),
+                _scalar(harness_raw, "max_tokens"),
+            ),  # type: ignore[arg-type]
             **stage_kwargs,
         )
 
-    harness = _build(profile_raw, harness_profile)
-    _validate_reasoning_efforts(harness, "harness")
+    harness = _finalise(_build(profile_raw, harness_profile), "harness")
     # Every profile is resolved, not just the selected one, so an item can
     # name one with @harness= after load without re-reading the file.
     harness_profiles: dict[str, HarnessConfig] = {
-        name: _build(cast(dict[str, Any], profiles_raw[name]), name)
+        name: _finalise(
+            _build(cast(dict[str, Any], profiles_raw[name]), name),
+            f"harness.{_HARNESS_PROFILES_KEY}.{name}",
+        )
         for name in sorted(profiles_raw)
     }
-    for _name, _resolved in harness_profiles.items():
-        _validate_reasoning_efforts(_resolved, f"harness.{_HARNESS_PROFILES_KEY}.{_name}")
 
     commands_raw: dict[str, Any] = raw.get("commands", {})
     commands = CommandPolicy(
