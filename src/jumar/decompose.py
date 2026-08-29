@@ -535,6 +535,11 @@ def decompose(
             )
             payload = _plan_payload(plan)
             payload["session_id"] = session_id
+            # Usage for the accepted plan only. A rejected attempt's tokens are
+            # still spent, but they are journalled on its own plan_rejected
+            # event rather than folded into the accepted plan's total.
+            payload["completion_tokens"] = getattr(result, "completion_tokens", None)
+            payload["prompt_tokens"] = getattr(result, "prompt_tokens", None)
             journal.append(
                 PLAN_CREATED,
                 item_id=item.item_id,
@@ -553,6 +558,8 @@ def decompose(
         journal_payload: dict[str, Any] = {
             "attempt": attempt_no + 1,
             "reason": rejection,
+            "completion_tokens": getattr(result, "completion_tokens", None),
+            "prompt_tokens": getattr(result, "prompt_tokens", None),
             "agent_stdout_head": result.stdout[:500],
         }
         if detail:

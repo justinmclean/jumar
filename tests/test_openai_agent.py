@@ -831,3 +831,79 @@ def test_non_object_response_fails_closed(tmp_path: Path, chat_server: Any) -> N
     )
     assert result.exit_status == -1
     assert result.timed_out is False
+
+
+# ---------------------------------------------------------------------------
+# Usage accounting
+# ---------------------------------------------------------------------------
+
+
+def _with_usage(
+    response: dict[str, Any], *, prompt_tokens: int, completion_tokens: int
+) -> dict[str, Any]:
+    return {
+        **response,
+        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+    }
+
+
+def test_usage_is_summed_across_the_tool_loop(tmp_path: Path, chat_server: Any) -> None:
+    """Both token counts accumulate per request, not per conversation.
+
+    The prompt grows each turn and is re-sent in full, so summing prompt_tokens
+    double-counts the prefix by design: a metered endpoint bills per call, and
+    that repeated prefix is real spend.
+    """
+    (tmp_path / "foo.txt").write_text("hello world")
+    base_url, handler = chat_server(
+        [
+            _with_usage(
+                _message("", [_tool_call("1", "read_file", {"path": "foo.txt"})]),
+                prompt_tokens=1200,
+                completion_tokens=50,
+            ),
+            _with_usage(_message("done."), prompt_tokens=1800, completion_tokens=30),
+        ]
+    )
+    result = run_openai_agent(
+        "read foo.txt",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert len(handler.received) == 2
+    assert result.prompt_tokens == 3000
+    assert result.completion_tokens == 80
+
+
+def test_usage_absent_from_response_leaves_counts_at_zero(tmp_path: Path, chat_server: Any) -> None:
+    """A server that reports no usage must not crash the loop or invent numbers."""
+    base_url, _handler = chat_server([_message("All done.")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert result.exit_status == 0
+    assert result.prompt_tokens == 0
+    assert result.completion_tokens == 0
+
+
+def test_malformed_usage_values_are_ignored(tmp_path: Path, chat_server: Any) -> None:
+    """A non-numeric token count is skipped rather than aborting the attempt."""
+    base_url, _handler = chat_server(
+        [{**_message("All done."), "usage": {"prompt_tokens": "lots", "completion_tokens": 12}}]
+    )
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert result.exit_status == 0
+    assert result.prompt_tokens == 0
+    assert result.completion_tokens == 12
