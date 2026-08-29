@@ -165,8 +165,8 @@ def _check_config_source(config: Config) -> DoctorCheck:
     `_check_config` above only validates field values, so it reports "valid"
     even when no jumar.toml or pyproject.toml [tool.jumar] table exists and
     every field is silently a built-in default. Observed in use: a doctor run
-    in a directory with no config reported all-ok while running the default
-    32-entry allow list and the default `claude` harness against the default
+    in a directory with no config reported all-ok while running the built-in
+    default allow list and the default `claude` harness against the default
     `todo.md` — "valid" without "and here is the file it came from" is the
     wrong report for a tool whose scheduled runs depend on cwd-resolved config.
     """
