@@ -98,6 +98,8 @@ _DEFAULT_ALLOW: tuple[str, ...] = (
     "make",
     "git",
     # read-only verification primitives
+    "pwd",
+    "date",
     "test",
     "grep",
     "egrep",
