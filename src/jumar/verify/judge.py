@@ -215,6 +215,8 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
             "verdict": verdict_str,
             "reason": reason,
             "artefacts_shown": shown,
+            "completion_tokens": getattr(result, "completion_tokens", None),
+            "prompt_tokens": getattr(result, "prompt_tokens", None),
         },
         summary=summary,
         evidence_path=str(artefact_file),

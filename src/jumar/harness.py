@@ -111,10 +111,21 @@ class AgentResult:
     agent_claim: str | None
     # Generation throughput, when the harness can measure it. Only the
     # in-process `openai` harness can: a subprocess CLI reports no token
-    # counts, so these stay None there rather than being guessed. Completion
-    # tokens only — prompt tokens are heavily prefix-cached across a tool
-    # loop, so counting them would flatter the rate rather than describe it.
+    # counts, so these stay None there rather than being guessed.
+    #
+    # `tokens_per_second` is derived from completion tokens alone — prompt
+    # tokens are heavily prefix-cached across a tool loop, so folding them
+    # into the rate would flatter it rather than describe it.
+    #
+    # `prompt_tokens` is recorded anyway, for a different question: cost.
+    # It is the sum of the `prompt_tokens` each request reported, so a tool
+    # loop counts its growing prefix once per turn. That is deliberate —
+    # a metered endpoint bills per call, so the repeated prefix is real
+    # spend even though it is the same text. It over-states the cost of a
+    # provider-side cached prefix, which bills at a fraction; treat it as
+    # the uncached ceiling.
     completion_tokens: int | None = None
+    prompt_tokens: int | None = None
     generation_seconds: float | None = None
 
 
