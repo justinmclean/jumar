@@ -362,11 +362,13 @@ def run_openai_agent(
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     transcript: list[str] = []
     completion_tokens = 0
+    prompt_tokens = 0
 
     def _rate() -> dict[str, Any]:
-        """Throughput fields for an AgentResult, whenever the loop ends."""
+        """Throughput and usage fields for an AgentResult, whenever the loop ends."""
         return {
             "completion_tokens": completion_tokens,
+            "prompt_tokens": prompt_tokens,
             "generation_seconds": time.monotonic() - started,
         }
 
@@ -413,6 +415,7 @@ def run_openai_agent(
                     ),
                     timed_out=True,
                     agent_claim=None,
+                    **_rate(),
                 )
             return AgentResult(
                 exit_status=-1,
@@ -427,6 +430,9 @@ def run_openai_agent(
         if isinstance(usage, dict):
             with contextlib.suppress(TypeError, ValueError):
                 completion_tokens += int(usage.get("completion_tokens") or 0)
+            # Summed per request, not per conversation: see AgentResult.
+            with contextlib.suppress(TypeError, ValueError):
+                prompt_tokens += int(usage.get("prompt_tokens") or 0)
 
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
