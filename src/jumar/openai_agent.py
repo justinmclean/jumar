@@ -389,6 +389,8 @@ def run_openai_agent(
         # is unaffected by the default.
         if harness.reasoning_effort:
             payload["reasoning_effort"] = harness.reasoning_effort
+        if harness.max_tokens:
+            payload["max_tokens"] = harness.max_tokens
         if allow_tools:
             payload["tools"] = list(_TOOLS)
 
@@ -454,6 +456,28 @@ def run_openai_agent(
         tool_calls = message.get("tool_calls") or []
         if content:
             transcript.append(content)
+
+        # A generation stopped by `max_tokens` is not an answer. Without this
+        # branch it reads as one: `finish_reason` is "length", there are no
+        # tool calls to continue the loop with, and the fall-through below
+        # would return exit_status=0 with whatever half-sentence the model got
+        # to — a silent bad result, which is worse than the timeout the cap
+        # exists to prevent. Tool calls truncated mid-emission are refused for
+        # the same reason: the arguments JSON may be incomplete, so dispatching
+        # them would act on a half-read instruction.
+        if choices[0].get("finish_reason") == "length":
+            return AgentResult(
+                exit_status=-1,
+                stdout="\n".join(transcript),
+                stderr=(
+                    f"generation hit max_tokens ({harness.max_tokens}) and was truncated; "
+                    "raise [harness] max_tokens, or lower reasoning_effort so less of the "
+                    "budget is spent before the answer"
+                ),
+                timed_out=False,
+                agent_claim=None,
+                **_rate(),
+            )
 
         if not tool_calls or not allow_tools:
             stdout = "\n".join(transcript)

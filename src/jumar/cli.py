@@ -670,6 +670,7 @@ def run_item(
             base_url=judge_resolved.base_url,
             api_key_env=judge_resolved.api_key_env,
             reasoning_effort=judge_resolved.reasoning_effort,
+            max_tokens=judge_resolved.max_tokens,
             commands_allow=config.commands.allow,
             commands_deny=config.commands.deny,
         )

@@ -963,3 +963,92 @@ def test_reasoning_effort_is_sent_on_every_turn_of_the_loop(
     assert result.exit_status == 0
     assert len(handler.received) == 2
     assert all(r["reasoning_effort"] == "medium" for r in handler.received)
+
+
+# ---------------------------------------------------------------------------
+# max_tokens / finish_reason
+# ---------------------------------------------------------------------------
+
+
+def _finished(response: dict[str, Any], reason: str) -> dict[str, Any]:
+    out = json.loads(json.dumps(response))
+    out["choices"][0]["finish_reason"] = reason
+    return out
+
+
+def test_max_tokens_is_sent_when_configured(tmp_path: Path, chat_server: Any) -> None:
+    base_url, handler = chat_server([_message("All done.")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=replace(_harness(base_url), max_tokens=4096),
+    )
+    assert result.exit_status == 0
+    assert handler.received[0]["max_tokens"] == 4096
+
+
+def test_max_tokens_is_omitted_when_unset(tmp_path: Path, chat_server: Any) -> None:
+    base_url, handler = chat_server([_message("All done.")])
+    run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url),
+    )
+    assert "max_tokens" not in handler.received[0]
+
+
+def test_truncated_generation_fails_rather_than_passing_as_an_answer(
+    tmp_path: Path, chat_server: Any
+) -> None:
+    """finish_reason=length is a cut-off mid-sentence, not a final answer."""
+    base_url, _handler = chat_server([_finished(_message("I have started to writ"), "length")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=replace(_harness(base_url), max_tokens=8),
+    )
+    assert result.exit_status == -1
+    assert result.timed_out is False
+    assert "max_tokens" in (result.stderr or "")
+    # The partial text is kept — it is evidence, not a result.
+    assert "I have started to writ" in result.stdout
+    assert result.agent_claim is None
+
+
+def test_truncated_tool_call_is_not_dispatched(tmp_path: Path, chat_server: Any) -> None:
+    """A tool call cut off mid-emission may carry incomplete arguments."""
+    (tmp_path / "foo.txt").write_text("hello world")
+    base_url, handler = chat_server(
+        [
+            _finished(_message("", [_tool_call("1", "read_file", {"path": "foo.txt"})]), "length"),
+            _message("should never be reached."),
+        ]
+    )
+    result = run_openai_agent(
+        "read foo.txt",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=replace(_harness(base_url), max_tokens=8),
+    )
+    assert result.exit_status == -1
+    assert len(handler.received) == 1
+
+
+def test_normal_stop_is_unaffected(tmp_path: Path, chat_server: Any) -> None:
+    base_url, _handler = chat_server([_finished(_message("All done."), "stop")])
+    result = run_openai_agent(
+        "do the thing",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=replace(_harness(base_url), max_tokens=4096),
+    )
+    assert result.exit_status == 0
+    assert result.agent_claim == "All done."

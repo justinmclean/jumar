@@ -141,6 +141,7 @@ def execute(
         base_url=resolved.base_url,
         api_key_env=resolved.api_key_env,
         reasoning_effort=resolved.reasoning_effort,
+        max_tokens=resolved.max_tokens,
         commands_allow=config.commands.allow,
         commands_deny=config.commands.deny,
     )
