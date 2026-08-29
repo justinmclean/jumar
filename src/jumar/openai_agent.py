@@ -385,6 +385,10 @@ def run_openai_agent(
             )
 
         payload: dict[str, Any] = {"model": harness.model, "messages": messages}
+        # Sent only when configured, so an endpoint that rejects unknown keys
+        # is unaffected by the default.
+        if harness.reasoning_effort:
+            payload["reasoning_effort"] = harness.reasoning_effort
         if allow_tools:
             payload["tools"] = list(_TOOLS)
 
