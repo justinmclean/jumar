@@ -178,7 +178,15 @@ _VALID_REASONING_EFFORTS: frozenset[str] = frozenset({"none", "low", "medium", "
 
 # Scalar keys valid at [harness], inside a stage table, and inside a profile.
 _HARNESS_SCALAR_KEYS: frozenset[str] = frozenset(
-    {"agent", "model", "base_url", "api_key_env", "reasoning_effort", "max_tokens"}
+    {
+        "agent",
+        "model",
+        "base_url",
+        "api_key_env",
+        "reasoning_effort",
+        "max_tokens",
+        "max_tool_steps",
+    }
 )
 
 # Sub-table under [harness] holding named alternative harnesses:
@@ -227,6 +235,12 @@ class HarnessConfig:
     context window, so one runaway response can consume an entire subtask
     deadline and take the whole attempt down with it.
 
+    ``max_tool_steps`` bounds how many tool calls one execute attempt may make
+    before the harness gives up. The default of 20 was set for report-writing
+    items; a task that has to extract, compile and then summarise runs out of
+    steps mid-way and returns no answer at all, having done most of the work.
+    Raise it for items that genuinely need a longer tool loop.
+
     ``None`` for a per-stage field means "inherit the top-level value".
 
     A ``HarnessConfig`` is always fully resolved by the time it reaches this
@@ -241,6 +255,7 @@ class HarnessConfig:
     api_key_env: str | None = None
     reasoning_effort: str | None = None
     max_tokens: int | None = None
+    max_tool_steps: int | None = None
     # Per-stage overrides — None inherits the top-level value.
     decompose_agent: str | None = None
     decompose_model: str | None = None
@@ -248,18 +263,21 @@ class HarnessConfig:
     decompose_api_key_env: str | None = None
     decompose_reasoning_effort: str | None = None
     decompose_max_tokens: int | None = None
+    decompose_max_tool_steps: int | None = None
     execute_agent: str | None = None
     execute_model: str | None = None
     execute_base_url: str | None = None
     execute_api_key_env: str | None = None
     execute_reasoning_effort: str | None = None
     execute_max_tokens: int | None = None
+    execute_max_tool_steps: int | None = None
     judge_agent: str | None = None
     judge_model: str | None = None
     judge_base_url: str | None = None
     judge_api_key_env: str | None = None
     judge_reasoning_effort: str | None = None
     judge_max_tokens: int | None = None
+    judge_max_tool_steps: int | None = None
 
     def for_stage(self, stage: str) -> HarnessConfig:
         """Return the resolved ``HarnessConfig`` for *stage*.
@@ -278,6 +296,7 @@ class HarnessConfig:
         k: str | None = getattr(self, f"{stage}_api_key_env")
         r: str | None = getattr(self, f"{stage}_reasoning_effort")
         x: int | None = getattr(self, f"{stage}_max_tokens")
+        n: int | None = getattr(self, f"{stage}_max_tool_steps")
         return HarnessConfig(
             agent=a if a is not None else self.agent,
             model=m if m is not None else self.model,
@@ -285,6 +304,7 @@ class HarnessConfig:
             api_key_env=k if k is not None else self.api_key_env,
             reasoning_effort=r if r is not None else self.reasoning_effort,
             max_tokens=x if x is not None else self.max_tokens,
+            max_tool_steps=n if n is not None else self.max_tool_steps,
         )
 
 
@@ -548,9 +568,10 @@ def load_config(
         just the selected one, so a typo in an unused profile fails the next
         load rather than the next scheduled run that happens to select it.
 
-        max_tokens arrives as a string because the layering above resolves
-        every scalar uniformly; it is coerced back to int here, which is also
-        where a non-numeric or non-positive value is rejected.
+        max_tokens and max_tool_steps arrive as strings because the layering
+        above resolves every scalar uniformly; both are coerced back to int
+        here, which is also where a non-numeric or non-positive value is
+        rejected.
         """
         stage_attrs = (f"{s}_reasoning_effort" for s in sorted(_VALID_HARNESS_STAGES))
         for attr in ("reasoning_effort", *stage_attrs):
@@ -564,24 +585,30 @@ def load_config(
 
         # Any, not int: the values land in fields the dataclass types
         # int | None, and **kwargs into dc_replace cannot be narrowed per key.
+        #
+        # Both integer keys are coerced here, not just max_tokens. A stage
+        # table's max_tool_steps reached the agent loop as the string "35" and
+        # `range("35")` raises TypeError, so the per-stage path was as broken
+        # as the top-level one, in a noisier way.
         coerced: dict[str, Any] = {}
-        token_attrs = (f"{s}_max_tokens" for s in sorted(_VALID_HARNESS_STAGES))
-        for attr in ("max_tokens", *token_attrs):
-            value = getattr(resolved, attr)
-            if value is None:
-                continue
-            where = label if attr == "max_tokens" else f"{label}.{attr.split('_')[0]}"
-            try:
-                as_int = int(str(value))
-            except ValueError:
-                raise ConfigError(
-                    f"Invalid max_tokens {value!r} under [{where}]: expected a positive integer."
-                ) from None
-            if as_int <= 0:
-                raise ConfigError(
-                    f"Invalid max_tokens {as_int} under [{where}]: expected a positive integer."
-                )
-            coerced[attr] = as_int
+        for key in ("max_tokens", "max_tool_steps"):
+            int_attrs = (f"{s}_{key}" for s in sorted(_VALID_HARNESS_STAGES))
+            for attr in (key, *int_attrs):
+                value = getattr(resolved, attr)
+                if value is None:
+                    continue
+                where = label if attr == key else f"{label}.{attr.split('_')[0]}"
+                try:
+                    as_int = int(str(value))
+                except ValueError:
+                    raise ConfigError(
+                        f"Invalid {key} {value!r} under [{where}]: expected a positive integer."
+                    ) from None
+                if as_int <= 0:
+                    raise ConfigError(
+                        f"Invalid {key} {as_int} under [{where}]: expected a positive integer."
+                    )
+                coerced[attr] = as_int
         return dc_replace(resolved, **coerced) if coerced else resolved
 
     # Resolution order, highest first:
@@ -628,6 +655,15 @@ def load_config(
             max_tokens=_first(
                 _scalar(profile_table, "max_tokens"),
                 _scalar(harness_raw, "max_tokens"),
+            ),  # type: ignore[arg-type]
+            # Same treatment as max_tokens. Omitting this line is why a
+            # top-level `max_tool_steps` was accepted by the key check above,
+            # then silently dropped: the field stayed None and the agent loop
+            # fell back to MAX_TOOL_STEPS, so a run reported a cap of 20 while
+            # the file said 35.
+            max_tool_steps=_first(
+                _scalar(profile_table, "max_tool_steps"),
+                _scalar(harness_raw, "max_tool_steps"),
             ),  # type: ignore[arg-type]
             **stage_kwargs,
         )
