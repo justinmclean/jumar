@@ -199,7 +199,6 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
-
 def _dump_rejected(journal: Any, item_id: str, attempt: int, stdout: str) -> str | None:
     """Write a rejected plan response next to the journal. Best effort."""
     path = getattr(journal, "_path", None)
@@ -213,6 +212,7 @@ def _dump_rejected(journal: Any, item_id: str, attempt: int, stdout: str) -> str
     except OSError:
         return None
     return str(out)
+
 
 # ---------------------------------------------------------------------------
 # Check + Subtask construction
