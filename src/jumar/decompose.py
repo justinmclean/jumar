@@ -180,15 +180,38 @@ def _extract_json(text: str) -> dict[str, Any] | None:
                 return result
         except json.JSONDecodeError:
             pass
+    # Last resort: decode the first object and ignore whatever follows it.
+    # `json.loads` on the whole remainder is strict about trailing content, so
+    # a model that closes its object and then adds a sentence of commentary --
+    # or an unclosed ``` fence, which defeats the regex above -- was reported
+    # as "response is not valid JSON" even though a complete object was there.
+    decoder = json.JSONDecoder()
     start = text.find("{")
-    if start >= 0:
+    while start >= 0:
         try:
-            result = json.loads(text[start:])
-            if isinstance(result, dict):
-                return result
+            result, _ = decoder.raw_decode(text[start:])
         except json.JSONDecodeError:
-            pass
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(result, dict):
+            return result
+        start = text.find("{", start + 1)
     return None
+
+
+def _dump_rejected(journal: Any, item_id: str, attempt: int, stdout: str) -> str | None:
+    """Write a rejected plan response next to the journal. Best effort."""
+    path = getattr(journal, "_path", None)
+    if path is None or not stdout:
+        return None
+    try:
+        out_dir = Path(path).parent / "artifacts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"plan-rejected-{item_id}-{attempt}.txt"
+        out.write_text(stdout, encoding="utf-8")
+    except OSError:
+        return None
+    return str(out)
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +591,13 @@ def decompose(
             journal_payload["rejection_detail"] = detail
         if result.stderr:
             journal_payload["agent_stderr_head"] = result.stderr[:500]
+        # A 500-character head is enough to see *that* a plan was rejected and
+        # useless for seeing *why*: the malformed part of a plan is almost
+        # always near its end. Write the whole response beside the journal so a
+        # rejection is diagnosable after the fact instead of only reproducible.
+        dump = _dump_rejected(journal, item.item_id, attempt_no + 1, result.stdout)
+        if dump is not None:
+            journal_payload["agent_stdout_path"] = dump
         journal.append(
             PLAN_REJECTED,
             item_id=item.item_id,
