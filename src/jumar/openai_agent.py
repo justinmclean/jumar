@@ -51,6 +51,11 @@ DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 # stops calling tools (or loops between two of them) must not hang the run —
 # it trips this cap and the subtask is recorded as a failed attempt, exactly
 # like a subprocess harness that exits non-zero.
+# Default ceiling on tool calls in one attempt. Overridable per stage with
+# `max_tool_steps` in jumar.toml: on 2026-08-29 a compile-and-report item hit
+# this cap three times, each attempt extracting all 14 snippets and running
+# cargo before running out of steps with no report written — the work was
+# done and thrown away for want of a few more turns.
 MAX_TOOL_STEPS = 20
 
 # Every request gets at least this many seconds even if the overall deadline
@@ -372,7 +377,8 @@ def run_openai_agent(
             "generation_seconds": time.monotonic() - started,
         }
 
-    for _step in range(MAX_TOOL_STEPS):
+    step_cap = getattr(harness, "max_tool_steps", None) or MAX_TOOL_STEPS
+    for _step in range(step_cap):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return AgentResult(
@@ -518,7 +524,11 @@ def run_openai_agent(
     return AgentResult(
         exit_status=1,
         stdout="\n".join(transcript),
-        stderr=f"tool-call step cap ({MAX_TOOL_STEPS}) exceeded without a final answer",
+        stderr=(
+            f"tool-call step cap ({step_cap}) exceeded without a final answer; "
+            "raise [harness] max_tool_steps, or split the subtask so each half "
+            "gets its own budget"
+        ),
         timed_out=False,
         agent_claim=None,
         **_rate(),
