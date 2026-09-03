@@ -178,8 +178,15 @@ _VALID_REASONING_EFFORTS: frozenset[str] = frozenset({"none", "low", "medium", "
 
 # Scalar keys valid at [harness], inside a stage table, and inside a profile.
 _HARNESS_SCALAR_KEYS: frozenset[str] = frozenset(
-    {"agent", "model", "base_url", "api_key_env", "reasoning_effort", "max_tokens",
-     "max_tool_steps"}
+    {
+        "agent",
+        "model",
+        "base_url",
+        "api_key_env",
+        "reasoning_effort",
+        "max_tokens",
+        "max_tool_steps",
+    }
 )
 
 # Sub-table under [harness] holding named alternative harnesses:
