@@ -48,7 +48,7 @@ from .models import (
 
 # Retriable: retry once before failing as unverifiable_plan.
 _RETRIABLE: frozenset[str] = frozenset(
-    {"missing_check", "parse_error", "timed_out", "empty_response"}
+    {"missing_check", "parse_error", "timed_out", "empty_response", "harness_error"}
 )
 
 # Non-retriable: fail immediately with the mapped FailureCode.
@@ -462,6 +462,7 @@ def decompose(
         api_key_env=resolved.api_key_env,
         reasoning_effort=resolved.reasoning_effort,
         max_tokens=resolved.max_tokens,
+        max_tool_steps=resolved.max_tool_steps,
         commands_allow=config.commands.allow,
         commands_deny=config.commands.deny,
     )
@@ -524,7 +525,32 @@ def decompose(
         rejection: str | None
         detail: str | None
         subtasks: tuple[Subtask, ...]
-        if result.timed_out:
+        # The endpoint was never reached, or refused the call. There is no
+        # response to parse, so reporting this as "response is not valid JSON"
+        # is a lie: a stopped LM Studio produced `parse_error` with
+        # prompt_tokens 0 and completion_tokens 0 and read exactly like the
+        # model failures it was being compared against, twice, on 5 and 6 Sep.
+        # `detect_harness_error` and `FailureCode.harness_error` already
+        # existed; nothing consumed them.
+        #
+        # Guarded on exit_status because `detect_harness_error` scans stdout
+        # as well as stderr, so a plan whose own text contains "connection
+        # refused" would otherwise be discarded as an outage. A call that
+        # returned a response has exit_status 0.
+        #
+        # Message only. The retry path and the FailureCode are deliberately
+        # unchanged (see test_harness_outage_journalled_as_harness_error and
+        # test_regression_run_20260812_0525_c9f7_...): an outage is still
+        # retried once and still fails as unverifiable_plan. All that changes
+        # is that the rejection now says what actually happened instead of
+        # "response is not valid JSON".
+        if harness_error is not None and result.exit_status != 0:
+            subtasks, rejection, detail = (
+                (),
+                "harness_error",
+                f"{harness_error}: {(result.stderr or result.stdout).strip()[:200]}".strip(),
+            )
+        elif result.timed_out:
             subtasks, rejection, detail = (
                 (),
                 "timed_out",
