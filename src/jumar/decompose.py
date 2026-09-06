@@ -48,14 +48,13 @@ from .models import (
 
 # Retriable: retry once before failing as unverifiable_plan.
 _RETRIABLE: frozenset[str] = frozenset(
-    {"missing_check", "parse_error", "timed_out", "empty_response"}
+    {"missing_check", "parse_error", "timed_out", "empty_response", "harness_error"}
 )
 
 # Non-retriable: fail immediately with the mapped FailureCode.
 _FAILURE_CODE: dict[str, FailureCode] = {
     "plan_too_long": FailureCode.plan_too_long,
     "invalid_plan": FailureCode.invalid_plan,
-    "harness_error": FailureCode.harness_error,
 }
 
 # Placeholder statements that are never accepted (the anti-"trust me" guard).
@@ -539,10 +538,12 @@ def decompose(
         # refused" would otherwise be discarded as an outage. A call that
         # returned a response has exit_status 0.
         #
-        # Non-retriable: a refused connection, a missing binary, an expired
-        # key and a spent usage limit are all states a second immediate
-        # attempt cannot change, and across a queue the retry only doubles
-        # the time spent failing. One attempt where there used to be two.
+        # Message only. The retry path and the FailureCode are deliberately
+        # unchanged (see test_harness_outage_journalled_as_harness_error and
+        # test_regression_run_20260812_0525_c9f7_...): an outage is still
+        # retried once and still fails as unverifiable_plan. All that changes
+        # is that the rejection now says what actually happened instead of
+        # "response is not valid JSON".
         if harness_error is not None and result.exit_status != 0:
             subtasks, rejection, detail = (
                 (),
