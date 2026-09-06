@@ -205,6 +205,12 @@ class HarnessInfo:
     api_key_env: str | None = None
     reasoning_effort: str | None = None
     max_tokens: int | None = None
+    # Read by openai_agent.run_openai_agent as the tool-calling step cap.
+    # Without this field the getattr() there always fell through to the
+    # hard-coded MAX_TOOL_STEPS of 20, so `max_tool_steps` in jumar.toml was
+    # silently inert: a run configured for 35 still reported
+    # "tool-call step cap (20) exceeded".
+    max_tool_steps: int | None = None
     commands_allow: tuple[str, ...] = ()
     commands_deny: tuple[str, ...] = ()
 

@@ -55,6 +55,7 @@ _RETRIABLE: frozenset[str] = frozenset(
 _FAILURE_CODE: dict[str, FailureCode] = {
     "plan_too_long": FailureCode.plan_too_long,
     "invalid_plan": FailureCode.invalid_plan,
+    "harness_error": FailureCode.harness_error,
 }
 
 # Placeholder statements that are never accepted (the anti-"trust me" guard).
@@ -462,6 +463,7 @@ def decompose(
         api_key_env=resolved.api_key_env,
         reasoning_effort=resolved.reasoning_effort,
         max_tokens=resolved.max_tokens,
+        max_tool_steps=resolved.max_tool_steps,
         commands_allow=config.commands.allow,
         commands_deny=config.commands.deny,
     )
@@ -524,7 +526,30 @@ def decompose(
         rejection: str | None
         detail: str | None
         subtasks: tuple[Subtask, ...]
-        if result.timed_out:
+        # The endpoint was never reached, or refused the call. There is no
+        # response to parse, so reporting this as "response is not valid JSON"
+        # is a lie: a stopped LM Studio produced `parse_error` with
+        # prompt_tokens 0 and completion_tokens 0 and read exactly like the
+        # model failures it was being compared against, twice, on 5 and 6 Sep.
+        # `detect_harness_error` and `FailureCode.harness_error` already
+        # existed; nothing consumed them.
+        #
+        # Guarded on exit_status because `detect_harness_error` scans stdout
+        # as well as stderr, so a plan whose own text contains "connection
+        # refused" would otherwise be discarded as an outage. A call that
+        # returned a response has exit_status 0.
+        #
+        # Non-retriable: a refused connection, a missing binary, an expired
+        # key and a spent usage limit are all states a second immediate
+        # attempt cannot change, and across a queue the retry only doubles
+        # the time spent failing. One attempt where there used to be two.
+        if harness_error is not None and result.exit_status != 0:
+            subtasks, rejection, detail = (
+                (),
+                "harness_error",
+                f"{harness_error}: {(result.stderr or result.stdout).strip()[:200]}".strip(),
+            )
+        elif result.timed_out:
             subtasks, rejection, detail = (
                 (),
                 "timed_out",
