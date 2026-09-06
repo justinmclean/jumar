@@ -466,6 +466,33 @@ def run_openai_agent(
         message = choices[0].get("message") or {}
         content = str(message.get("content") or "")
         tool_calls = message.get("tool_calls") or []
+
+        # Fall back to `reasoning_content` when there is nothing else.
+        #
+        # The chat-completions schema has no reasoning field, so servers that
+        # separate thinking from the answer invent one; LM Studio calls it
+        # `reasoning_content`. Reading only `content` throws that away, and a
+        # model that answers into it returns exit_status 0 carrying nothing --
+        # a successful call that said nothing, which reads downstream as an
+        # empty result and passes checks an earlier attempt already satisfied.
+        # Reproduced 6 Sep on a 16-token request: `content` empty, the whole
+        # answer in `reasoning_content`.
+        #
+        # Deliberately narrow. This is reasoning, not a composed answer, so it
+        # is used ONLY when the response is otherwise empty -- no content and
+        # no tool calls, the case the code below already reports as an empty
+        # message. A response with either is left exactly as it was, and the
+        # substitution is recorded in stderr so a caller reading the journal
+        # can tell an answer from a salvaged one.
+        reasoning_salvaged = False
+        if not content and not tool_calls:
+            reasoning = str(
+                message.get("reasoning_content") or message.get("reasoning") or ""
+            )
+            if reasoning.strip():
+                content = reasoning
+                reasoning_salvaged = True
+
         if content:
             transcript.append(content)
 
@@ -502,9 +529,16 @@ def run_openai_agent(
             # indistinguishable from one that actually said something, so a
             # caller inspecting the result (or the harness_error/decompose
             # rejection classifiers) can tell the two apart.
-            stderr = (
-                "" if stdout.strip() else "assistant returned an empty message with no tool calls"
-            )
+            if not stdout.strip():
+                stderr = "assistant returned an empty message with no tool calls"
+            elif reasoning_salvaged:
+                stderr = (
+                    "assistant returned an empty `content`; answer salvaged from "
+                    "`reasoning_content` -- treat this result as reasoning text, "
+                    "not a composed answer"
+                )
+            else:
+                stderr = ""
             return AgentResult(
                 exit_status=0,
                 stdout=stdout,
