@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from jumar.config import (
+    _DEFAULT_ALLOW,
+    _DEFAULT_DENY,
     Capability,
     CommandPolicy,
     Config,
@@ -182,6 +184,99 @@ def test_load_commands_from_jumar_toml(tmp_path: Path) -> None:
     c = load_config(tmp_path).commands
     assert c.allow == ("python3", "make")
     assert c.deny == ("curl",)
+
+
+def test_allow_also_extends_the_defaults(tmp_path: Path) -> None:
+    """`allow_also` appends to the built-in list instead of replacing it.
+
+    Without this a project needing one extra binary has to restate all of
+    _DEFAULT_ALLOW and then drifts out of step with it. On 6 Sep 2026 an item
+    failed on a check running the Flink recipe's own gradlew wrapper, which
+    the defaults do not name.
+    """
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.commands]
+        allow_also = ["gradlew"]
+    """,
+    )
+    c = load_config(tmp_path).commands
+    assert "gradlew" in c.allow
+    assert "python3" in c.allow, "the built-in defaults must survive"
+    assert c.deny == _DEFAULT_DENY
+
+
+def test_deny_also_extends_the_defaults(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.commands]
+        deny_also = ["ssh"]
+    """,
+    )
+    c = load_config(tmp_path).commands
+    assert "ssh" in c.deny
+    assert set(_DEFAULT_DENY).issubset(set(c.deny))
+    assert c.allow == _DEFAULT_ALLOW
+
+
+def test_allow_also_appends_to_an_explicit_allow_not_the_defaults(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.commands]
+        allow = ["python3"]
+        allow_also = ["gradlew"]
+    """,
+    )
+    c = load_config(tmp_path).commands
+    assert c.allow == ("python3", "gradlew")
+
+
+def test_allow_also_restating_a_default_does_not_duplicate_it(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.commands]
+        allow_also = ["grep", "gradlew"]
+    """,
+    )
+    allow = load_config(tmp_path).commands.allow
+    assert allow.count("grep") == 1
+    assert "gradlew" in allow
+
+
+def test_allow_also_makes_the_extra_binary_dispatchable(tmp_path: Path) -> None:
+    """The point of the key: is_allowed must accept what it names."""
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.commands]
+        allow_also = ["gradlew"]
+    """,
+    )
+    cfg = load_config(tmp_path)
+    assert is_allowed(["gradlew", "compileJava"], cfg)
+    assert is_allowed(["/some/where/gradlew", "compileJava"], cfg)
+    assert not is_allowed(["gradle", "compileJava"], cfg)
+
+
+def test_deny_also_still_beats_allow(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "jumar.toml",
+        """\
+        [jumar.commands]
+        allow_also = ["gradlew"]
+        deny_also = ["gradlew"]
+    """,
+    )
+    cfg = load_config(tmp_path)
+    assert not is_allowed(["gradlew", "compileJava"], cfg)
 
 
 def test_unset_fields_keep_defaults_with_jumar_toml(tmp_path: Path) -> None:

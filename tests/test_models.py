@@ -141,6 +141,32 @@ def test_check_judge_rejects_empty_rationale() -> None:
         )
 
 
+def test_check_judge_requires_non_none_path() -> None:
+    """The judge is shown check.path and nothing else, so it must be set.
+
+    verify_judge runs the judge agent with capabilities=frozenset(): no
+    read_fs, no run_commands. A judge check naming no artefact therefore
+    cannot be answered from evidence and can only return fail or
+    inconclusive, neither of which is a pass, and no repair can change that.
+    """
+    with pytest.raises(ValueError, match="kind=judge requires a non-empty path"):
+        Check(
+            kind=CheckKind.judge,
+            statement="An agent confirms the report separates the two populations",
+            rationale="Structure and emphasis cannot be checked mechanically",
+        )
+
+
+def test_check_judge_rejects_empty_path() -> None:
+    with pytest.raises(ValueError, match="kind=judge requires a non-empty path"):
+        Check(
+            kind=CheckKind.judge,
+            statement="An agent confirms correctness",
+            rationale="Not mechanically checkable",
+            path="",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Check invariants — positive cases
 # ---------------------------------------------------------------------------
@@ -180,8 +206,10 @@ def test_check_judge_valid() -> None:
         kind=CheckKind.judge,
         statement="The generated prose is coherent and on-topic",
         rationale="No deterministic executable check can verify subjective prose quality",
+        path="drafts/prose.md",
     )
     assert c.rationale
+    assert c.path == "drafts/prose.md"
 
 
 def test_check_manual_valid() -> None:

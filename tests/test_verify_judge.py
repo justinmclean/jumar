@@ -61,7 +61,24 @@ _JUDGE_CHECK = Check(
     kind=CheckKind.judge,
     statement="The output file contains valid JSON with a 'result' key.",
     rationale="File content quality cannot be checked mechanically.",
+    path="output.json",
 )
+
+
+def _without_path(check: Check) -> Check:
+    """Return *check* with path stripped, bypassing the Check invariant.
+
+    kind=judge requires a path (models.py), and dataclasses.replace re-runs
+    __post_init__, so a pathless judge Check cannot be built the normal way.
+    These tests cover the paths that still have to cope with one: a plan
+    pickled or journalled before that invariant landed, and _collect_artefacts,
+    which is exported and does not enforce it.
+    """
+    import copy
+
+    stripped = copy.copy(check)
+    object.__setattr__(stripped, "path", None)
+    return stripped
 
 
 def _ctx(
@@ -352,11 +369,48 @@ def test_artefact_not_found_message_in_prompt(tmp_path: Path) -> None:
     assert "missing_file.txt" in captured[0]
 
 
-def test_no_path_prompt_says_no_artefacts(tmp_path: Path) -> None:
+def test_collect_artefacts_says_no_artefacts_when_path_is_none(tmp_path: Path) -> None:
+    """_collect_artefacts is a pure function and still handles path=None.
+
+    kind=judge now requires a path (models.Check), so verify_judge short-
+    circuits before this branch is reached — see the test below. The branch
+    is kept, and covered here directly, because _collect_artefacts is
+    exported and does not itself enforce the Check invariant.
+    """
+    from jumar.verify.judge import _collect_artefacts
+
+    check = Check(
+        kind=CheckKind.judge,
+        statement="Something is true.",
+        rationale="Quality check.",
+        path="present.txt",
+    )
+    pathless = _without_path(check)
+    block, names = _collect_artefacts(pathless, tmp_path, 4096)
+    assert "No artefacts explicitly specified" in block
+    assert names == []
+
+
+def test_pathless_judge_check_is_inconclusive_without_a_model_call(
+    tmp_path: Path,
+) -> None:
+    """A judge check with no artefact path must not spend an agent call.
+
+    The judge runs with capabilities=frozenset() and is shown only
+    check.path, so a pathless check can never pass. On 6 Sep 2026 two items
+    burned their whole repair budget being told "fail" by a judge that had
+    been given nothing to read. Reachable only for a plan built before the
+    kind=judge path invariant landed, hence the dataclasses.replace here.
+    """
+    check = _without_path(_JUDGE_CHECK)
     runner, captured = _capturing_runner()
     ctx = _ctx(tmp_path, runner=runner)
-    verify_judge(_JUDGE_CHECK, ctx)
-    assert "No artefacts explicitly specified" in captured[0]
+
+    result = verify_judge(check, ctx)
+
+    assert captured == [], "no agent call should have been made"
+    assert result.verdict is Verdict.inconclusive
+    assert result.evidence["error"] == "no_artefact_path"
 
 
 # ---------------------------------------------------------------------------

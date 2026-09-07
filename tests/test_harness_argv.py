@@ -1022,6 +1022,7 @@ def test_judge_verifier_runner_called_without_session_id(tmp_path: Path) -> None
         kind=CheckKind.judge,
         statement="The output is correct.",
         rationale="No executable check is possible.",
+        path="out.txt",
     )
     ctx = VerifyContext(
         cwd=tmp_path,

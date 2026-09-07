@@ -934,6 +934,7 @@ def test_repair_prompt_includes_check_rationale(
         kind=CheckKind.judge,
         statement="Output quality is acceptable",
         rationale="Human-readable check — mechanical check insufficient.",
+        path="out/quality.md",
     )
     subtask = _make_subtask(check=check)
     item = _make_item()

@@ -486,9 +486,7 @@ def run_openai_agent(
         # can tell an answer from a salvaged one.
         reasoning_salvaged = False
         if not content and not tool_calls:
-            reasoning = str(
-                message.get("reasoning_content") or message.get("reasoning") or ""
-            )
+            reasoning = str(message.get("reasoning_content") or message.get("reasoning") or "")
             if reasoning.strip():
                 content = reasoning
                 reasoning_salvaged = True
