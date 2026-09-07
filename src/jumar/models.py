@@ -225,6 +225,7 @@ class Check:
     - kind=command  =>  the check is capable of failing (no vacuous argv)
     - kind=file or kind=absence  =>  path is non-empty
     - kind=judge  =>  rationale is non-empty
+    - kind=judge  =>  path is non-empty
     - statement is non-empty and is not one of the known placeholder strings
 
     The shell-wrapper rule is the load-bearing one. Without it a model writes
@@ -276,6 +277,19 @@ class Check:
             raise ValueError(f"kind={self.kind.value} requires a non-empty path")
         if self.kind is CheckKind.judge and not self.rationale:
             raise ValueError("kind=judge requires a non-empty rationale")
+        if self.kind is CheckKind.judge and not self.path:
+            # The judge runs with capabilities=frozenset() and is shown only
+            # the file named here (verify/judge.py). A judge check with no
+            # path asks it to rule on evidence it is forbidden to go and get,
+            # so it can only answer fail or inconclusive -- neither of which
+            # is a pass, and no repair can change that. Two items on 6 Sep
+            # 2026 burned their whole repair budget on exactly this.
+            raise ValueError(
+                "kind=judge requires a non-empty path naming the artefact the "
+                "judge should read. The judge cannot run commands or open "
+                "files of its own, so a judge check with no path can never "
+                "pass. Name the file the subtask leaves behind."
+            )
 
 
 @dataclass(frozen=True)

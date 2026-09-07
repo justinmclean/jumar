@@ -75,6 +75,12 @@ def verify_command(check: Check, ctx: VerifyContext) -> VerificationResult:
             cwd=ctx.cwd,
             capture_output=True,
             timeout=check.timeout_s,
+            # No stdin. A check whose argv omits its file operand -- `grep -qE
+            # PATTERN` with no path -- otherwise inherits jumar's stdin and
+            # blocks on it until the timeout. Seen 6 Sep: 3 x 300s on one
+            # subtask, then repairs_exhausted, for a command that exits
+            # immediately against a closed stdin.
+            stdin=subprocess.DEVNULL,
             shell=False,
             check=False,
         )

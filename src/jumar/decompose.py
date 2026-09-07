@@ -9,7 +9,8 @@ decompose()     – call the agent harness, validate the response, return a Plan
 Hard rules enforced here (not by the prompt):
 - A subtask with no ``check``, or with an empty/placeholder ``check``, is
   rejected and retried once, then the item fails as ``unverifiable_plan``.
-- A ``judge`` check without ``rationale`` is also retried once.
+- A ``judge`` check without ``rationale``, or without ``path``, is also
+  retried once.
 - A plan longer than ``max_subtasks`` is rejected immediately (``plan_too_long``).
 - A cyclic ``depends_on`` is rejected immediately (``invalid_plan``).
 - If the item has ``authored_subtasks``, those descriptions are used verbatim
@@ -102,7 +103,13 @@ _RULES = [
     "- `check.statement` must be specific and testable"
     " — never empty, 'n/a', 'none', 'TODO', or 'verify manually'.",
     "- Use `kind=judge` ONLY when no executable check is possible;"
-    " it MUST include a non-empty `rationale` explaining why.",
+    " it MUST include a non-empty `rationale` explaining why,"
+    " and a `path` naming the ONE file the judge should read.",
+    "- The judge cannot run commands, list directories or open files of its"
+    " own. It is shown `path` and nothing else. A `kind=judge` check whose"
+    " evidence is spread across several files, or is 'the repo history' or"
+    " 'the run notes', can NEVER pass. Either name the single file the"
+    " subtask leaves behind, or make the subtask write one and check that.",
     "- `kind=command` requires `command` (a JSON argv list, never a shell string).",
     "- `kind=command` MUST NOT be a shell wrapper:"
     ' ["bash", "-c", "..."] (or sh/zsh/dash -c) is REJECTED.'

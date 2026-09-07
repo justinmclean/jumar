@@ -518,6 +518,7 @@ _JUDGE_PLAN = json.dumps(
                     "kind": "judge",
                     "statement": "notes.md reads as a coherent summary",
                     "rationale": "no executable check can assess prose quality",
+                    "path": "notes.md",
                 },
             }
         ]

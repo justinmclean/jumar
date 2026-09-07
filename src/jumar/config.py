@@ -310,7 +310,19 @@ class HarnessConfig:
 
 @dataclass(frozen=True)
 class CommandPolicy:
-    """argv[0] allow/deny policy. deny wins over allow."""
+    """argv[0] allow/deny policy. deny wins over allow.
+
+    ``[commands] allow``/``deny`` REPLACE the built-in lists outright, so a
+    project that needs one extra binary has to restate all of the defaults and
+    then drifts out of step with them. ``allow_also``/``deny_also`` append to
+    the built-ins instead, which is what a project config almost always wants:
+
+        [jumar.commands]
+        allow_also = ["gradlew"]
+
+    Setting ``allow`` and ``allow_also`` together appends to the explicit list,
+    not to the defaults.
+    """
 
     allow: tuple[str, ...] = _DEFAULT_ALLOW
     deny: tuple[str, ...] = _DEFAULT_DENY
@@ -680,9 +692,20 @@ def load_config(
     }
 
     commands_raw: dict[str, Any] = raw.get("commands", {})
+
+    def _command_list(base_key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+        """Resolve one command list: `<key>` replaces, `<key>_also` appends.
+
+        Deduplicated, first occurrence wins, so restating a default is a
+        no-op rather than a duplicate entry.
+        """
+        base = [str(x) for x in commands_raw.get(base_key, list(default))]
+        base += [str(x) for x in commands_raw.get(f"{base_key}_also", [])]
+        return tuple(dict.fromkeys(base))
+
     commands = CommandPolicy(
-        allow=tuple(str(x) for x in commands_raw.get("allow", list(_DEFAULT_ALLOW))),
-        deny=tuple(str(x) for x in commands_raw.get("deny", list(_DEFAULT_DENY))),
+        allow=_command_list("allow", _DEFAULT_ALLOW),
+        deny=_command_list("deny", _DEFAULT_DENY),
     )
 
     raw_sched_backend = _get("schedule_backend", None)

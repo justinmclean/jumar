@@ -664,6 +664,7 @@ def test_judge_with_rationale_accepted(journal: Journal, cfg: Config, tmp_path: 
                         "kind": "judge",
                         "statement": "The output meets the spec",
                         "rationale": "No executable check exists for subjective correctness",
+                        "path": "out/report.md",
                     },
                     "capabilities": [],
                     "depends_on": [],
@@ -674,6 +675,7 @@ def test_judge_with_rationale_accepted(journal: Journal, cfg: Config, tmp_path: 
     runner = _fake_runner([response])
     plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
     assert plan.subtasks[0].check.rationale
+    assert plan.subtasks[0].check.path == "out/report.md"
     assert runner.call_count[0] == 1
 
 

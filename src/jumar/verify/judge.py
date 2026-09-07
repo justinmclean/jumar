@@ -146,6 +146,31 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
             checked_at=checked_at,
         )
 
+    if check.path is None:
+        # Defence in depth behind the kind=judge path invariant in models.py.
+        # The judge runs with no capabilities and sees only check.path, so a
+        # pathless check cannot be answered from evidence -- the model would
+        # be guessing. Say so instead of spending a call to be told "fail".
+        # Reachable only for a plan built before that invariant landed, or by
+        # a caller that bypasses Check construction.
+        return VerificationResult(
+            subtask_id=ctx.subtask_id,
+            attempt_no=ctx.attempt_no,
+            verdict=Verdict.inconclusive,
+            kind=CheckKind.judge,
+            evidence={
+                "error": "no_artefact_path",
+                "reason": (
+                    "kind=judge check names no artefact path; the judge has no "
+                    "read_fs or run_commands capability and can only be shown "
+                    "check.path, so this check can never pass"
+                ),
+            },
+            summary="judge verifier: check names no artefact path, not run",
+            evidence_path=None,
+            checked_at=checked_at,
+        )
+
     prompt, artefact_names = build_judge_prompt(check, ctx)
 
     runner = ctx.judge_run_agent if ctx.judge_run_agent is not None else _default_run_agent
