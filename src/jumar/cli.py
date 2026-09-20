@@ -912,6 +912,13 @@ def _cmd_run(
 
         until_empty = bool(getattr(args, "until_empty", False))
         failed_this_pass: set[str] = set()
+        # Items completed earlier in this pass. A recurring item stays
+        # unticked in the todo and has its @not-before advanced the moment it
+        # finishes, so re-ingesting cannot tell that it just ran: every
+        # dependent would be blocked as "deferred until <tomorrow>" for the
+        # rest of the pass. resume already passes its done set for the same
+        # reason (see _cmd_resume).
+        completed_this_pass: set[str] = set()
         seen_parked: set[tuple[str, str]] = set()
         seen_deferred: set[tuple[str, str]] = set()
         selected_item_id = ""
@@ -932,7 +939,9 @@ def _cmd_run(
                 item for item in result.items if item.item_id not in failed_this_pass
             ]
             try:
-                sel = select_next(selectable_items, now)
+                sel = select_next(
+                    selectable_items, now, done_ids=frozenset(completed_this_pass)
+                )
             except CycleError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 exit_status = 1
@@ -995,6 +1004,8 @@ def _cmd_run(
             )
 
             prog.item_finished("done" if status == 0 else "failed")
+            if status == 0:
+                completed_this_pass.add(sel.selected.item_id)
             if status != 0:
                 exit_status = 1
                 failed_this_pass.add(sel.selected.item_id)
