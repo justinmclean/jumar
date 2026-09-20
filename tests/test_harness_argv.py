@@ -1112,3 +1112,41 @@ def test_detect_harness_error_word_boundary_does_not_match_substring() -> None:
     """'login' must match as a whole word, not inside e.g. 'logins' or '4012'."""
     result = _result(stdout="Add a logins table with 4012 rows.", exit_status=0)
     assert detect_harness_error(result) is None
+
+
+def test_detect_harness_error_ignores_auth_words_on_a_successful_run() -> None:
+    """An agent writing ABOUT authentication is not a failure to authenticate.
+
+    Run 20260920-0636-90c1, subtask "Include the login flow and token
+    handling": the agent added the login-flow section of an HTTP API
+    reference, exited 0 and said so, and the word "login" in its own report
+    was classified as an auth failure, throwing the finished work away. Ten
+    earlier runs lost items the same way.
+    """
+    result = _result(
+        stdout=(
+            'I added a "Login flow and token handling" section (login/PAT-login '
+            "to JWT, bearer requirement, 401 on a bad token)."
+        ),
+        exit_status=0,
+    )
+    assert detect_harness_error(result) is None
+
+
+def test_detect_harness_error_auth_words_still_count_when_the_agent_failed() -> None:
+    """The generic words stay a safety net for a run that also exited non-zero."""
+    result = _result(stdout="Please run /login to continue.", exit_status=1)
+    assert detect_harness_error(result) == HARNESS_ERROR_AUTH_FAILURE
+
+
+def test_detect_harness_error_auth_phrase_does_not_need_a_failing_exit() -> None:
+    """The specific phrases are unambiguous, so a zero exit does not excuse them.
+
+    Every real auth failure in this workspace's journals looked like this one
+    (15 of them, all exit 1), and all matched on phrase alone.
+    """
+    result = _result(
+        stdout="Failed to authenticate: OAuth session expired and could not be refreshed",
+        exit_status=0,
+    )
+    assert detect_harness_error(result) == HARNESS_ERROR_AUTH_FAILURE

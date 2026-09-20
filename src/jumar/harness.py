@@ -144,9 +144,16 @@ class AgentResult:
 #
 # Categories, and the signatures that name them. Matched case-insensitively
 # against stdout+stderr combined. Phrase signatures are safe as substrings;
-# short/generic ones (401, login) are matched as whole words to cut down on
-# false positives from an agent legitimately discussing HTTP status codes or
-# writing a login form.
+# short/generic ones (401, login) are not, and whole-word matching does not
+# save them: an agent documenting an HTTP API writes "401" and "login"
+# because that is the subject, not because the CLI failed. Those are
+# therefore only consulted when the agent also exited non-zero. Across every
+# run journal in this workspace the split is exact: all 15 real auth
+# failures exited 1 and said "Failed to authenticate: OAuth session expired",
+# matching on phrase alone, while all 11 false positives exited 0 with a
+# successful agent claim — one of them run 20260920-0636-90c1, whose agent
+# had just written the login-flow section of an HTTP API reference and had
+# its completed work thrown away.
 
 HARNESS_ERROR_USAGE_LIMIT = "usage_limit"
 HARNESS_ERROR_AUTH_FAILURE = "auth_failure"
@@ -207,7 +214,12 @@ def detect_harness_error(result: AgentResult) -> str | None:
         return HARNESS_ERROR_TRANSPORT
     if any(phrase in haystack for phrase in _USAGE_LIMIT_PHRASES):
         return HARNESS_ERROR_USAGE_LIMIT
-    if any(phrase in haystack for phrase in _AUTH_FAILURE_PHRASES) or any(
+    if any(phrase in haystack for phrase in _AUTH_FAILURE_PHRASES):
+        return HARNESS_ERROR_AUTH_FAILURE
+    # Generic words only, and only from a run that also failed. A zero exit
+    # with these words in it is an agent writing about authentication, not a
+    # harness that could not authenticate.
+    if result.exit_status != 0 and any(
         re.search(rf"\b{re.escape(word)}\b", haystack) for word in _AUTH_FAILURE_WORDS
     ):
         return HARNESS_ERROR_AUTH_FAILURE
