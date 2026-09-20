@@ -484,6 +484,83 @@ def test_run_until_empty_skips_failed_item_without_unblocking_dependents(
     assert "- [x] Independent second" in todo_text
 
 
+def test_run_until_empty_unblocks_dependents_of_a_recurring_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recurring dependency that just ran must not block its dependents.
+
+    A recurring item stays unticked and has its @not-before advanced the
+    moment it completes, so re-ingesting it mid-pass cannot tell that it has
+    already run. Without the pass's own done set, every dependent was blocked
+    as "deferred until <tomorrow>" for the rest of the pass -- which stopped
+    a daily triage item from running for twelve days.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Recurring refresh @id=refresh @every=weekday @priority=1"
+        " @capability=write_fs\n"
+        "- [ ] Depends on the refresh @depends=refresh @priority=2"
+        " @capability=write_fs\n"
+    )
+
+    def recurring_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            if "Recurring refresh" in prompt:
+                return _result(
+                    json.dumps(
+                        {
+                            "subtasks": [
+                                {
+                                    "description": "Write refresh.txt containing FRESH",
+                                    "capabilities": ["write_fs"],
+                                    "depends_on": [],
+                                    "check": {
+                                        "kind": "file",
+                                        "statement": "refresh.txt contains FRESH",
+                                        "path": "refresh.txt",
+                                        "pattern": "FRESH",
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                )
+            return _result(
+                json.dumps(
+                    {
+                        "subtasks": [
+                            {
+                                "description": "Write dependent.txt containing AFTER",
+                                "capabilities": ["write_fs"],
+                                "depends_on": [],
+                                "check": {
+                                    "kind": "file",
+                                    "statement": "dependent.txt contains AFTER",
+                                    "path": "dependent.txt",
+                                    "pattern": "AFTER",
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        if "refresh.txt" in prompt:
+            (Path(cwd) / "refresh.txt").write_text("FRESH\n")
+            return _result("wrote refresh.txt")
+        (Path(cwd) / "dependent.txt").write_text("AFTER\n")
+        return _result("wrote dependent.txt")
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=recurring_agent)
+
+    assert rc == 0
+    assert (tmp_path / "refresh.txt").read_text().strip() == "FRESH"
+    # The dependent ran in the same pass, after the recurring item completed.
+    assert (tmp_path / "dependent.txt").read_text().strip() == "AFTER"
+    todo_text = tmp_path.joinpath("todo.md").read_text()
+    assert "- [ ] Recurring refresh" in todo_text  # recurs, so never ticked
+    assert "- [x] Depends on the refresh" in todo_text
+
+
 def _fail_then_second_agent(planned: list[str]) -> Any:
     """First item's check never passes; the second item succeeds.
 
