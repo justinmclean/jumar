@@ -120,6 +120,19 @@ _RULES = [
     ' ["bash", "-c", "..."] (or sh/zsh/dash -c) is REJECTED.'
     " Express the check as the program itself,"
     ' e.g. ["grep", "-q", "Article 50", "sources/ai-act.html"].',
+    "- Checks run on macOS, where the `grep` on PATH may be BSD grep, which"
+    " has NO `-P` and NO `-z`. A `grep -P`, `-z` or `-Pz` argv then exits 2"
+    " with 'invalid option', which reads as a FAILED check however good the"
+    " work is, and burns the whole repair budget. It is REJECTED. Write a"
+    " check that passes or fails on the work, not on which grep the machine"
+    " happens to have.",
+    "- Never assert 'this file contains these headings in this order' with"
+    " grep. Use `kind=file` with `path` and a `pattern`: the file verifier"
+    " matches the pattern against the WHOLE file with Python's `re`, so"
+    " `(?s)A:.*B:.*C:` works there, and a miss puts the file's actual"
+    " content in the evidence for the repair to reconcile against. Reach"
+    " for `kind=command` only when the check needs a program to RUN"
+    " something, not to read a file.",
     "- The check MUST be able to FAIL. An argv that exits 0 regardless of the"
     " work — `true`, `echo`, `date`, bare `ls` — is REJECTED. Ask yourself:"
     " what would make this check return non-zero? If nothing would, it is not a check.",
@@ -248,6 +261,53 @@ def _dump_rejected(journal: Any, item_id: str, attempt: int, stdout: str) -> str
 # ---------------------------------------------------------------------------
 
 
+def _bsd_grep_violation(command: tuple[str, ...]) -> str | None:
+    """Return the offending flag if *command* is a grep BSD grep cannot run.
+
+    BSD grep, which is what /usr/bin/grep is on macOS, has neither `-P`
+    (PCRE) nor `-z` (NUL-separated input). Either one exits 2 with "invalid
+    option", which the command verifier records as a failed check, so a
+    correct artefact fails and all three repair attempts are spent rewriting
+    work that was already right.
+
+    Whether a PCRE-capable grep is first on PATH is not something a plan can
+    rely on: across this workspace's runs, `grep -P` ran fine in every run up
+    to 20260916-1511-8b36 and then failed in every one from 20260917-1433-61eb
+    (35 such exits over two runs, zero real defects). A check must not depend
+    on which grep the run happens to find.
+
+    Option arguments are respected, so `grep -e -P file` is a search for the
+    literal text "-P" and is left alone, as is anything after a bare `--`.
+    """
+    if not command:
+        return None
+    if command[0].rsplit("/", 1)[-1] not in {"grep", "egrep", "fgrep", "rgrep"}:
+        return None
+    # Short options that consume a value, either glued to the cluster or as
+    # the following argv element.
+    takes_value = set("efmABCDd")
+    skip_next = False
+    for arg in command[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--":
+            break
+        if arg in {"--perl-regexp", "--null-data"}:
+            return arg
+        if arg.startswith("--") or not arg.startswith("-") or arg == "-":
+            continue
+        for i, flag in enumerate(arg[1:], start=1):
+            if flag in {"P", "z"}:
+                return f"-{flag}"
+            if flag in takes_value:
+                # The rest of the cluster is this flag's value; if the cluster
+                # ends here the value is the next argv element.
+                skip_next = i == len(arg) - 1
+                break
+    return None
+
+
 def _build_check(raw: Any) -> Check | str:
     """Construct a Check from a raw dict; return an error string if invalid.
 
@@ -281,6 +341,16 @@ def _build_check(raw: Any) -> Check | str:
         if not cmd_raw or not isinstance(cmd_raw, list):
             return "kind=command requires a non-empty command list"
         command = tuple(str(a) for a in cmd_raw)
+        bad_flag = _bsd_grep_violation(command)
+        if bad_flag is not None:
+            return (
+                f"kind=command uses `grep {bad_flag}`, which BSD grep on macOS does not"
+                " support: it exits 2 with 'invalid option' and the check can never"
+                " pass. Use kind=file with a `path` and a `pattern` instead. The file"
+                " verifier matches the pattern against the whole file with Python's"
+                " re, so an ordered multi-section pattern such as (?s)A:.*B:.*C: works"
+                " there."
+            )
 
     try:
         return Check(

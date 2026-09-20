@@ -24,7 +24,7 @@ import pytest
 
 from jumar.backoff import advance_failure_count
 from jumar.config import Config
-from jumar.decompose import DecomposeError, decompose, item_max_subtasks
+from jumar.decompose import _RULES, DecomposeError, _build_check, decompose, item_max_subtasks
 from jumar.journal import HARNESS_ERROR, ITEM_SELECTED, PLAN_CREATED, PLAN_REJECTED, Journal
 from jumar.models import (
     Capability,
@@ -1475,3 +1475,56 @@ def test_authored_list_longer_than_max_subtasks_is_rejected_without_a_model_call
     events = [e["event"] for e in journal.replay().entries]
     assert PLAN_REJECTED in events
     assert PLAN_CREATED not in events
+
+
+# --- BSD grep portability -------------------------------------------------
+#
+# Checks run wherever jumar runs, and /usr/bin/grep on macOS is BSD grep,
+# which has no -P and no -z. Runs 20260917-1433-61eb and 20260919-0905-b697
+# lost seven items to `grep: invalid option -- P`: every artefact was correct
+# and every repair attempt was spent rewriting work that was already right.
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("grep", "-Pzq", "(?s)Status:.*Evidence:.*Post:", "draft.md"),
+        ("grep", "-Pq", "^Status:.*0\\.9\\.0", "draft.md"),
+        ("grep", "-Pzo", "(?s)A.*?B", "draft.md"),
+        ("grep", "-zq", "A", "draft.md"),
+        ("/usr/bin/grep", "-P", "x", "draft.md"),
+        ("egrep", "-z", "x", "draft.md"),
+        ("grep", "--perl-regexp", "x", "draft.md"),
+        ("grep", "--null-data", "x", "draft.md"),
+        ("grep", "-A2", "-P", "x", "draft.md"),
+    ],
+)
+def test_build_check_rejects_grep_flags_bsd_grep_lacks(argv: tuple[str, ...]) -> None:
+    err = _build_check({"kind": "command", "statement": "s", "command": list(argv)})
+    assert isinstance(err, str), f"{argv} should have been rejected"
+    assert "BSD grep" in err
+    assert "kind=file" in err, "the error must point at the portable alternative"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("grep", "-q", "Article 50", "sources/ai-act.html"),
+        ("grep", "-qE", "^Status:", "draft.md"),
+        ("grep", "-e", "-P", "draft.md"),  # -P is the pattern, not a flag
+        ("grep", "-qe", "-z", "draft.md"),
+        ("grep", "--", "-Pz", "draft.md"),  # operands only after --
+        ("grep", "--regexp=-P", "draft.md"),
+        ("python3", "-c", "import sys; sys.exit(1)"),
+        ("rg", "-P", "x", "draft.md"),  # ripgrep is not grep
+    ],
+)
+def test_build_check_allows_portable_greps(argv: tuple[str, ...]) -> None:
+    got = _build_check({"kind": "command", "statement": "s", "command": list(argv)})
+    assert isinstance(got, Check), f"{argv} should have been accepted, got {got!r}"
+
+
+def test_decompose_rules_steer_ordered_section_checks_to_kind_file() -> None:
+    rules = "\n".join(_RULES)
+    assert "-P" in rules and "BSD grep" in rules
+    assert "kind=file" in rules
