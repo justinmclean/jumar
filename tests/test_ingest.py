@@ -617,3 +617,24 @@ def test_known_harness_profile_on_an_item_ingests(tmp_path: Path) -> None:
     config = Config(harness_profiles={"heavy": HarnessConfig(model="qwen")})
     result = ingest(todo, config)
     assert result.items[0].meta["harness"] == "heavy"
+
+
+# ---------------------------------------------------------------------------
+# @max-subtasks= must be a positive integer
+# ---------------------------------------------------------------------------
+
+
+def test_valid_max_subtasks_parses_without_warning(tmp_path: Path) -> None:
+    result = _todo(tmp_path, "- [ ] Big job @max-subtasks=20\n")
+    assert result.items[0].meta["max-subtasks"] == "20"
+    assert result.warnings == []
+
+
+@pytest.mark.parametrize("bad", ["lots", "0", "-1", "2.5"])
+def test_unusable_max_subtasks_is_warned(tmp_path: Path, bad: str) -> None:
+    result = _todo(tmp_path, f"- [ ] Big job @max-subtasks={bad}\n", max_subtasks=7)
+    assert len(result.items) == 1
+    assert len(result.warnings) == 1
+    msg = result.warnings[0].message
+    assert f"@max-subtasks={bad!r}" in msg
+    assert "max_subtasks=7" in msg

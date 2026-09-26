@@ -489,17 +489,6 @@ def _verifications_from_journal(
     return rebuilt
 
 
-def _item_max_subtasks(item: Any, config: Any) -> int:
-    """The plan-length cap for this item: @max-subtasks= overrides config."""
-    raw = getattr(item, "meta", {}).get("max-subtasks")
-    if raw:
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            pass
-    return int(getattr(config, "max_subtasks", 12))
-
-
 def run_item(
     item: Any,
     *,
@@ -529,7 +518,7 @@ def run_item(
     from .backoff import advance_failure_count, clear_failure_count
     from .complete import complete
     from .config import resolve_harness
-    from .decompose import DecomposeError, decompose
+    from .decompose import DecomposeError, decompose, item_max_subtasks
     from .execute import execute
     from .gate import GateDecision, GateError, GateMode, gate
     from .journal import ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
@@ -560,7 +549,7 @@ def run_item(
 
     # --- decompose (skipped when resuming with a plan already in the journal)
     if plan is None:
-        prog.planning(item.text, _item_max_subtasks(item, config))
+        prog.planning(item.text, item_max_subtasks(item, config))
         try:
             plan = decompose(
                 item,

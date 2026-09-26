@@ -295,6 +295,23 @@ def _finalize(
                 )
             )
 
+    # @max-subtasks= must be a positive integer; decompose falls back to the
+    # config cap otherwise, and this warning is what keeps that visible.
+    if "max-subtasks" in meta:
+        bad_cap = meta["max-subtasks"]
+        try:
+            cap_ok = int(bad_cap) >= 1
+        except ValueError:
+            cap_ok = False
+        if not cap_ok:
+            warnings.append(
+                ParseWarning(
+                    partial.line_no,
+                    f"Line {partial.line_no}: @max-subtasks={bad_cap!r} is not a positive "
+                    f"integer, ignored; using max_subtasks={config.max_subtasks} from config",
+                )
+            )
+
     # @depends= (comma-separated)
     depends: tuple[str, ...]
     if "depends" in meta:

@@ -11,7 +11,9 @@ Hard rules enforced here (not by the prompt):
   rejected and retried once, then the item fails as ``unverifiable_plan``.
 - A ``judge`` check without ``rationale``, or without ``path``, is also
   retried once.
-- A plan longer than ``max_subtasks`` is rejected immediately (``plan_too_long``).
+- A plan longer than the item's cap (``@max-subtasks=``, else config
+  ``max_subtasks``; see :func:`item_max_subtasks`) is rejected immediately
+  (``plan_too_long``).
 - A cyclic ``depends_on`` is rejected immediately (``invalid_plan``).
 - If the item has ``authored_subtasks``, those descriptions are used verbatim
   and the agent only supplies the checks.
@@ -137,6 +139,23 @@ _RULES = [
 ]
 
 
+def item_max_subtasks(item: TodoItem, config: Config) -> int:
+    """The plan-length cap for *item*: ``@max-subtasks=`` overrides config.
+
+    A value that is not a positive integer falls back to the config cap;
+    ingest has already warned about it, so the fallback is not silent.
+    """
+    raw = item.meta.get("max-subtasks")
+    if raw is not None:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value >= 1:
+            return value
+    return config.max_subtasks
+
+
 def _model_prompt(item: TodoItem, config: Config) -> str:
     caps = ", ".join(sorted(c.value for c in item.capabilities)) or "none"
     ctx_block = ("\n\nContext:\n" + "\n".join(item.context)) if item.context else ""
@@ -145,7 +164,7 @@ def _model_prompt(item: TodoItem, config: Config) -> str:
         f"Decompose the following todo item into an ordered sequence of subtasks.\n\n"
         f"Item: {item.text}{ctx_block}\n\n"
         f"Granted capabilities: {caps}\n"
-        f"Maximum subtasks: {config.max_subtasks}\n\n"
+        f"Maximum subtasks: {item_max_subtasks(item, config)}\n\n"
         f"Rules:\n{rules}\n\n"
         f"Schema:\n{_SCHEMA_EXAMPLE}"
     )
@@ -575,7 +594,7 @@ def decompose(
                     data,
                     item.item_id,
                     item.capabilities,
-                    config.max_subtasks,
+                    item_max_subtasks(item, config),
                     item.authored_subtasks,
                 )
 
