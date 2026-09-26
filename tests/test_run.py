@@ -484,6 +484,137 @@ def test_run_until_empty_skips_failed_item_without_unblocking_dependents(
     assert "- [x] Independent second" in todo_text
 
 
+def _fail_then_second_agent(planned: list[str]) -> Any:
+    """First item's check never passes; the second item succeeds.
+
+    ``planned`` records the text of every item the agent was asked to
+    decompose, so a test can tell whether the second item was ever selected.
+    """
+
+    def agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt):
+            if "Fails first" in prompt:
+                planned.append("Fails first")
+                return _result(_PLAN)
+            planned.append("Second succeeds")
+            return _result(
+                json.dumps(
+                    {
+                        "subtasks": [
+                            {
+                                "description": "Write second.txt containing OK",
+                                "capabilities": ["write_fs"],
+                                "depends_on": [],
+                                "check": {
+                                    "kind": "file",
+                                    "statement": "second.txt contains OK",
+                                    "path": "second.txt",
+                                    "pattern": "OK",
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        if "marker.txt" in prompt:
+            return _result("claimed marker without writing it")
+        (Path(cwd) / "second.txt").write_text("OK\n")
+        return _result("wrote second.txt")
+
+    return agent
+
+
+_TWO_ITEMS = (
+    "- [ ] Fails first @priority=1 @capability=write_fs\n"
+    "- [ ] Second succeeds @priority=2 @capability=write_fs\n"
+)
+
+
+def test_until_empty_moves_past_a_failed_item_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC7.4 default: budget exhaustion on item A still lets item B run."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(_TWO_ITEMS)
+    planned: list[str] = []
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=_fail_then_second_agent(planned))
+
+    assert rc == 1
+    assert planned == ["Fails first", "Second succeeds"]
+    assert "- [x] Second succeeds" in (tmp_path / "todo.md").read_text()
+
+
+def test_halt_on_fail_flag_stops_the_run_after_the_first_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC7.4 --halt-on-fail: item B is never selected once item A fails."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(_TWO_ITEMS)
+    planned: list[str] = []
+
+    rc = cli._cmd_run(
+        _Args(until_empty=True, halt_on_fail=True),
+        _run_agent=_fail_then_second_agent(planned),
+    )
+
+    assert rc == 1
+    assert planned == ["Fails first"]
+    assert not (tmp_path / "second.txt").exists()
+    assert (
+        "- [ ] Second succeeds @priority=2 @capability=write_fs\n"
+        in (tmp_path / "todo.md").read_text()
+    )
+    (run_dir,) = [d for d in (tmp_path / "runs").iterdir() if d.is_dir()]
+    lines = (run_dir / "journal.jsonl").read_text().splitlines()
+    entries = [json.loads(ln) for ln in lines if ln.strip()]
+    assert entries[-1]["event"] == "run_finished"
+    assert entries[-1]["payload"]["exit_status"] == 1
+
+
+def test_halt_on_fail_from_config_file_stops_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """halt_on_fail = true in jumar.toml has the same effect as the flag."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(_TWO_ITEMS)
+    (tmp_path / "jumar.toml").write_text("[jumar]\nhalt_on_fail = true\n")
+    planned: list[str] = []
+
+    rc = cli._cmd_run(_Args(until_empty=True), _run_agent=_fail_then_second_agent(planned))
+
+    assert rc == 1
+    assert planned == ["Fails first"]
+
+
+def test_halt_on_fail_does_not_stop_after_a_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag halts on failure only; a passing item lets the run continue."""
+    monkeypatch.chdir(tmp_path)
+    todo = (
+        "- [ ] Second succeeds @priority=1 @capability=write_fs\n"
+        "- [ ] Fails first @priority=2 @capability=write_fs\n"
+    )
+    (tmp_path / "todo.md").write_text(todo)
+    planned: list[str] = []
+
+    rc = cli._cmd_run(
+        _Args(until_empty=True, halt_on_fail=True),
+        _run_agent=_fail_then_second_agent(planned),
+    )
+
+    assert rc == 1
+    assert planned == ["Second succeeds", "Fails first"]
+
+
+def test_halt_on_fail_is_a_run_flag() -> None:
+    """The spec writes --halt-on-fail as a flag; argparse must accept it."""
+    args = cli.build_parser().parse_args(["run", "--until-empty", "--halt-on-fail"])
+    assert args.halt_on_fail is True
+    assert cli.build_parser().parse_args(["run"]).halt_on_fail is False
+
+
 _PINNED_TODO = (
     "- [ ] Produce the marker @capability=write_fs\n"
     "  - [ ] Write marker.txt\n"
