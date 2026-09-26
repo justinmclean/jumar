@@ -308,6 +308,10 @@ class TodoItem:
     depends: tuple[str, ...]
     capabilities: frozenset[Capability]
     schedule: Schedule | None = None
+    # Parallel to authored_subtasks: the author-written check for each
+    # subtask (a ``check:`` line under it), or None where the model is to
+    # supply one. Empty when no subtask carries a check.
+    authored_checks: tuple[Check | None, ...] = ()
 
 
 @dataclass(frozen=True)

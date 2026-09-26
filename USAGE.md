@@ -631,7 +631,33 @@ fails with `unverifiable_plan`.
 | `judge` | an independent agent returns `pass` | verdict, reason, artefacts shown |
 | `manual` | a human confirms at the prompt | response, timestamp |
 
-Rules worth knowing before you write a `@check=` by hand:
+### Writing a check yourself
+
+The model chooses each check by default. To pin one yourself, write a `check:`
+line indented under an authored subtask:
+
+```markdown
+- [ ] Triage stale PRs @capability=read_fs,write_fs,run_commands
+  - [ ] Find PRs untouched for 30 days and list them in stale.md
+    check: python3 /path/verify.py --kind=stale-pr /path/stale.md
+  - [ ] Draft a nudge comment for each one
+```
+
+The line is split like a shell would split it (quotes group words) but is never
+run through a shell. It becomes a `command` check that passes when the command
+exits 0. That check is used exactly as written: the model is never asked for one
+for that subtask and cannot replace it. If every authored subtask has a `check:`
+line, no model is called to plan the item at all. A subtask without one still
+gets a model-written check.
+
+A `check:` line jumar cannot honour stops the run at startup, before any model
+call, rather than quietly falling back to a model-chosen check. That covers a
+`check:` line with no subtask above it, a second one for the same subtask,
+unbalanced quotes, a shell wrapper, a command that cannot fail, and a program
+the command policy does not allow. An `@check=` token is not supported; it
+produces a warning and is ignored.
+
+Rules worth knowing before you write a check by hand:
 
 - A `command` check is **argv, never a shell string**. No metacharacter
   interpolation, anywhere.
