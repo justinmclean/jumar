@@ -520,20 +520,6 @@ def _fail_then_second_agent(planned: list[str]) -> Any:
             return _result("claimed marker without writing it")
         (Path(cwd) / "second.txt").write_text("OK\n")
         return _result("wrote second.txt")
-_PINNED_TODO = (
-    "- [ ] Produce the marker @capability=write_fs\n"
-    "  - [ ] Write marker.txt\n"
-    "    check: grep -q PINNED marker.txt\n"
-)
-
-
-def _pinned_agent(content: str, planned: list[str]) -> Any:
-    def agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
-        if _is_plan_request(prompt) or "subtasks are pre-defined" in prompt:
-            planned.append(prompt)
-            return _result(_PLAN)
-        (Path(cwd) / "marker.txt").write_text(content)
-        return _result("wrote marker.txt")
 
     return agent
 
@@ -627,6 +613,26 @@ def test_halt_on_fail_is_a_run_flag() -> None:
     args = cli.build_parser().parse_args(["run", "--until-empty", "--halt-on-fail"])
     assert args.halt_on_fail is True
     assert cli.build_parser().parse_args(["run"]).halt_on_fail is False
+
+
+_PINNED_TODO = (
+    "- [ ] Produce the marker @capability=write_fs\n"
+    "  - [ ] Write marker.txt\n"
+    "    check: grep -q PINNED marker.txt\n"
+)
+
+
+def _pinned_agent(content: str, planned: list[str]) -> Any:
+    def agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt) or "subtasks are pre-defined" in prompt:
+            planned.append(prompt)
+            return _result(_PLAN)
+        (Path(cwd) / "marker.txt").write_text(content)
+        return _result("wrote marker.txt")
+
+    return agent
+
+
 def test_run_honours_an_author_written_check_without_planning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
