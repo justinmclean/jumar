@@ -15,15 +15,18 @@ import contextlib
 import difflib
 import hashlib
 import re
+import shlex
 import zoneinfo
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from jumar.config import Config
+from jumar.config import Config, is_allowed
 from jumar.models import (
     Capability,
+    Check,
+    CheckKind,
     ItemStatus,
     Recurrence,
     RecurUnit,
@@ -49,6 +52,16 @@ _TASK_ATTEMPT_RE = re.compile(r"^\s*[-*+]\s+\[[^\]]{0,3}\](?!\()")
 
 # @key=value metadata token (key may contain hyphens)
 _META_RE = re.compile(r"@([\w-]+)=(\S+)")
+
+# An author-written check: a `check: <argv>` line indented under an authored
+# subtask. A line rather than an @check= token because _META_RE stops at
+# whitespace, so a token could never hold a real argv.
+_CHECK_LINE_RE = re.compile(r"^(\s*)check:\s*(.*?)\s*$")
+
+_CHECK_TOKEN_WARNING = (
+    "@check= is not supported and was ignored; write the check as a "
+    "`check: <argv>` line indented under the subtask"
+)
 
 # @every= interval+unit: "2w", "3d", "1m"
 _INTERVAL_UNIT_RE = re.compile(r"^(\d+)([dwm])$")
@@ -91,6 +104,7 @@ class _PartialItem:
     context: list[str]
     subtasks: list[str]
     subtask_mode: bool
+    checks: list[Check | None]
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +183,11 @@ def _parse_lines(
     for lineno, line in enumerate(lines, 1):
         m = _TASK_RE.match(line)
 
+        cm = _CHECK_LINE_RE.match(line) if m is None else None
+        if cm is not None and current is not None and len(cm.group(1)) > current.indent:
+            _attach_check(current, lineno, cm.group(2), config)
+            continue
+
         if m is None:
             # Non-task line: accumulates as context for the next top-level item.
             # If we were inside an item's block, this line also ends subtask mode.
@@ -205,12 +224,16 @@ def _parse_lines(
                 context=list(context),
                 subtasks=[],
                 subtask_mode=True,
+                checks=[],
             )
             context = []
         elif current.subtask_mode:
             # Indented task while in subtask mode: record as authored subtask.
-            subtask_text, _ = _parse_meta(raw_text)
+            subtask_text, sub_meta = _parse_meta(raw_text)
+            if "check" in sub_meta:
+                warnings.append(ParseWarning(lineno, f"Line {lineno}: {_CHECK_TOKEN_WARNING}"))
             current.subtasks.append(subtask_text or raw_text.strip())
+            current.checks.append(None)
         else:
             # Indented task after subtask mode ended (a non-task line intervened).
             # Treat as a new independent item.
@@ -225,11 +248,50 @@ def _parse_lines(
                 context=list(context),
                 subtasks=[],
                 subtask_mode=True,
+                checks=[],
             )
             context = []
 
     if current is not None:
         _finalize(current, tz, config, items, warnings)
+
+
+def _attach_check(current: _PartialItem, lineno: int, argv_text: str, config: Config) -> None:
+    """Pin an author-written check to the subtask directly above it.
+
+    Every refusal is a startup error, never a warning: a check the author
+    wrote and jumar dropped would silently hand the choice of proof back to
+    the model, which is the one thing a pinned check exists to prevent.
+    """
+    where = f"Line {lineno}: check: line"
+    if not current.subtask_mode or not current.subtasks:
+        raise IngestError(
+            f"{where} must sit directly under an authored subtask "
+            f"(an indented `- [ ]` line); item-level checks are not supported"
+        )
+    if current.checks[-1] is not None:
+        raise IngestError(f"{where} is a second check for {current.subtasks[-1]!r}; give one")
+    try:
+        argv = shlex.split(argv_text)
+    except ValueError as exc:
+        raise IngestError(f"{where} cannot be split into an argv: {exc}") from None
+    if not argv:
+        raise IngestError(f"{where} is empty; give the command that proves the subtask")
+    try:
+        check = Check(
+            kind=CheckKind.command,
+            statement=f"author-written check exits 0: {shlex.join(argv)}",
+            command=tuple(argv),
+        )
+    except ValueError as exc:
+        raise IngestError(f"{where} refused: {exc}") from None
+    if not is_allowed(argv, config):
+        raise IngestError(
+            f"{where} runs {argv[0]!r}, which the command policy does not allow; "
+            f"the check could never run. Add it to [commands] allow in the config "
+            f"or write a different check"
+        )
+    current.checks[-1] = check
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +342,11 @@ def _finalize(
 
     status = ItemStatus.done if partial.checked else ItemStatus.pending
     item_id = _make_item_id(clean_text, meta)
+
+    if "check" in meta:
+        warnings.append(
+            ParseWarning(partial.line_no, f"Line {partial.line_no}: {_CHECK_TOKEN_WARNING}")
+        )
 
     # @priority=
     priority: int | None = None
@@ -348,6 +415,9 @@ def _finalize(
             depends=depends,
             capabilities=capabilities,
             schedule=schedule,
+            authored_checks=(
+                tuple(partial.checks) if any(c is not None for c in partial.checks) else ()
+            ),
         )
     )
 

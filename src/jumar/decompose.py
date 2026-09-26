@@ -17,6 +17,9 @@ Hard rules enforced here (not by the prompt):
 - A cyclic ``depends_on`` is rejected immediately (``invalid_plan``).
 - If the item has ``authored_subtasks``, those descriptions are used verbatim
   and the agent only supplies the checks.
+- A subtask with an author-written check (``authored_checks``) keeps that
+  check unmodified, and the agent is never asked for one. When every
+  authored subtask carries a check, no agent call is made at all.
 - The full plan is journalled before returning (AC3.6).
 """
 
@@ -170,9 +173,9 @@ def _model_prompt(item: TodoItem, config: Config) -> str:
     )
 
 
-def _authored_prompt(item: TodoItem, config: Config) -> str:
+def _authored_prompt(item: TodoItem, texts: tuple[str, ...]) -> str:
     caps = ", ".join(sorted(c.value for c in item.capabilities)) or "none"
-    numbered = "\n".join(f"{i}. {text}" for i, text in enumerate(item.authored_subtasks))
+    numbered = "\n".join(f"{i}. {text}" for i, text in enumerate(texts))
     rules = "\n".join(_RULES)
     return (
         "The following subtasks are pre-defined. "
@@ -415,12 +418,60 @@ def _parse_and_validate(
     return tuple(subtasks), None, None
 
 
+def _pinned_indices(item: TodoItem) -> tuple[int, ...]:
+    """Indices of authored subtasks that carry an author-written check."""
+    return tuple(i for i, c in enumerate(item.authored_checks) if c is not None)
+
+
+def _merge_pinned(item: TodoItem, model_subtasks: tuple[Subtask, ...]) -> tuple[Subtask, ...]:
+    """Interleave author-checked subtasks with the ones the model checked.
+
+    ``model_subtasks`` covers only the subtasks without a pinned check, in
+    order, with ``depends_on`` indices relative to that subset; they are
+    mapped back onto positions in the full authored list.
+    """
+    pinned = set(_pinned_indices(item))
+    unpinned = [i for i in range(len(item.authored_subtasks)) if i not in pinned]
+    from_model = iter(model_subtasks)
+    merged: list[Subtask] = []
+    for i, text in enumerate(item.authored_subtasks):
+        check = item.authored_checks[i] if i in pinned else None
+        if check is not None:
+            merged.append(
+                Subtask(
+                    subtask_id=f"{item.item_id}#{i}",
+                    index=i,
+                    description=text,
+                    check=check,
+                    capabilities=item.capabilities,
+                    depends_on=(),
+                    status=SubtaskStatus.pending,
+                    attempts=(),
+                )
+            )
+            continue
+        st = next(from_model)
+        merged.append(
+            Subtask(
+                subtask_id=f"{item.item_id}#{i}",
+                index=i,
+                description=st.description,
+                check=st.check,
+                capabilities=st.capabilities,
+                depends_on=tuple(unpinned[d] for d in st.depends_on if d < len(unpinned)),
+                status=SubtaskStatus.pending,
+                attempts=(),
+            )
+        )
+    return tuple(merged)
+
+
 # ---------------------------------------------------------------------------
 # Journal serialisation helper
 # ---------------------------------------------------------------------------
 
 
-def _plan_payload(plan: Plan) -> dict[str, Any]:
+def _plan_payload(plan: Plan, pinned: tuple[int, ...] = ()) -> dict[str, Any]:
     return {
         "source": plan.source,
         "created_at": plan.created_at,
@@ -443,6 +494,7 @@ def _plan_payload(plan: Plan) -> dict[str, Any]:
                 },
                 "capabilities": sorted(c.value for c in s.capabilities),
                 "depends_on": list(s.depends_on),
+                "check_source": "author" if s.index in pinned else "model",
             }
             for s in plan.subtasks
         ],
@@ -494,8 +546,61 @@ def decompose(
     )
 
     authored = bool(item.authored_subtasks)
-    base_prompt = _authored_prompt(item, config) if authored else _model_prompt(item, config)
     source = "authored" if authored else "model"
+    pinned = _pinned_indices(item) if authored else ()
+    # Only the subtasks without an author-written check go to the model; a
+    # pinned check is never offered up for the model to replace.
+    to_check: tuple[str, ...] = tuple(
+        t for i, t in enumerate(item.authored_subtasks) if i not in pinned
+    )
+
+    def _accept(subtasks: tuple[Subtask, ...], result: AgentResult | None) -> Plan:
+        """Journal the full plan before returning it (AC3.6)."""
+        session_id = make_session_id()
+        plan = Plan(
+            item_id=item.item_id,
+            subtasks=subtasks,
+            source=source,
+            created_at=stamp(),
+            harness=harness_info,
+            session_id=session_id,
+        )
+        payload = _plan_payload(plan, pinned)
+        payload["session_id"] = session_id
+        # Usage for the accepted plan only. A rejected attempt's tokens are
+        # still spent, but they are journalled on its own plan_rejected
+        # event rather than folded into the accepted plan's total.
+        payload["completion_tokens"] = getattr(result, "completion_tokens", None)
+        payload["prompt_tokens"] = getattr(result, "prompt_tokens", None)
+        journal.append(PLAN_CREATED, item_id=item.item_id, payload=payload)
+        return plan
+
+    max_subtasks = item_max_subtasks(item, config)
+
+    if authored and len(item.authored_subtasks) > max_subtasks:
+        journal.append(
+            PLAN_REJECTED,
+            item_id=item.item_id,
+            payload={
+                "attempt": 1,
+                "reason": "plan_too_long",
+                "rejection_detail": (
+                    f"item has {len(item.authored_subtasks)} authored subtasks; "
+                    f"maximum is {max_subtasks}"
+                ),
+            },
+        )
+        raise DecomposeError(
+            FailureCode.plan_too_long,
+            f"Decomposition of {item.item_id!r} failed: plan_too_long",
+        )
+
+    if authored and not to_check:
+        # Every step and every proof was written by the author: nothing for a
+        # model to decide, so no model is asked.
+        return _accept(_merge_pinned(item, ()), None)
+
+    base_prompt = _authored_prompt(item, to_check) if authored else _model_prompt(item, config)
 
     last_rejection: str = "parse_error"
     last_rejection_detail: str | None = None
@@ -594,35 +699,14 @@ def decompose(
                     data,
                     item.item_id,
                     item.capabilities,
-                    item_max_subtasks(item, config),
-                    item.authored_subtasks,
+                    max_subtasks,
+                    to_check,
                 )
 
         if rejection is None:
-            # Success — journal the full plan before returning (AC3.6).
-            created_at = stamp()
-            session_id = make_session_id()
-            plan = Plan(
-                item_id=item.item_id,
-                subtasks=subtasks,
-                source=source,
-                created_at=created_at,
-                harness=harness_info,
-                session_id=session_id,
-            )
-            payload = _plan_payload(plan)
-            payload["session_id"] = session_id
-            # Usage for the accepted plan only. A rejected attempt's tokens are
-            # still spent, but they are journalled on its own plan_rejected
-            # event rather than folded into the accepted plan's total.
-            payload["completion_tokens"] = getattr(result, "completion_tokens", None)
-            payload["prompt_tokens"] = getattr(result, "prompt_tokens", None)
-            journal.append(
-                PLAN_CREATED,
-                item_id=item.item_id,
-                payload=payload,
-            )
-            return plan
+            if pinned:
+                subtasks = _merge_pinned(item, subtasks)
+            return _accept(subtasks, result)
 
         last_rejection = rejection
         last_rejection_detail = detail
