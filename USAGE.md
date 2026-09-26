@@ -33,7 +33,7 @@ to the agent as background — they are never treated as work.
       - [ ] Rewrite the install steps for the new flag
       - [ ] Check every command in the README actually runs
 - [ ] Rotate the backup logs @every=weekday
-- [ ] Draft the quarterly summary @not-before=2026-09-01 @due=2026-09-05
+- [ ] Draft the quarterly summary @not-before=2027-01-04 @due=2027-01-08
 - [x] This one is already done and will be skipped
 ```
 
@@ -46,16 +46,16 @@ gates, and prints the decision. **No agent is called and nothing is executed.**
 
 ```console
 $ jumar plan --dry-run
-Run:   20260811-0748-5dc9
+Run:   20260926-0146-2ce6
 Todo:  todo.md  (4 pending)
-Now:   2026-08-11T07:48:43.028260+00:00
+Now:   2026-09-26T01:46:28.505353+00:00
 
 Selected:  Add a --json flag to the export script
   id:           export-json
   capabilities: network, read_fs, run_commands, write_fs
 
 Deferred (1):
-  - 'Draft the quarterly summary'  [eligible at 2026-08-31T14:00:00+00:00]
+  - 'Draft the quarterly summary'  [eligible at 2027-01-04T00:00:00+00:00]
 
 Blocked (1):
   - 'Update the README install section'  [depends on unfinished export-json]
@@ -87,9 +87,9 @@ wrong instinct for unattended work:
 ```console
 $ jumar plan --dry-run --todo bad.md
 warning: Line 1: bad schedule token: @due='next': Cannot parse date/datetime: 'next'
-Run:   20260811-0748-7d5d
+Run:   20260926-0146-a2de
 Todo:  bad.md  (1 pending)
-Now:   2026-08-11T07:48:46.890802+00:00
+Now:   2026-09-26T01:46:28.578935+00:00
 
 Selected:  Fine item
   id:           fine-item-334aeee7
@@ -423,7 +423,7 @@ Expressed in the todo line, honoured by `select`:
 
 ```markdown
 - [ ] Rotate the backup logs @every=weekday
-- [ ] Draft the quarterly summary @not-before=2026-09-01 @due=2026-09-05
+- [ ] Draft the quarterly summary @not-before=2027-01-04 @due=2027-01-08
 - [ ] Reconcile invoices @every=2w @priority=1
 ```
 
