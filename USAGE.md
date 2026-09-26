@@ -139,6 +139,8 @@ Modes (`specs/02-functional-spec.md` §Stage 4):
 | `--dry-run` | Print the plan and its checks, journal it, execute nothing. |
 | `--approve` | Print the plan and wait for `y/n` before executing. |
 | `--non-interactive` | Never block on a prompt. Required for scheduled runs; makes `manual` checks resolve `inconclusive` rather than hanging. |
+| `--until-empty` | Keep selecting eligible items until none remain. |
+| `--halt-on-fail` | With `--until-empty`, stop at the first failed item. Overrides `halt_on_fail` in config. |
 | `--verbose` | Echo the agent's captured output after each attempt (stderr). |
 | `--json` | Machine-readable stdout; progress suppressed. |
 
@@ -254,8 +256,9 @@ repairs exhausted — pattern '--json' not found in README.md
 ```
 
 `max_repairs` from config controls the budget (default 2). On exhaustion the
-item fails at that subtask. If `halt_on_fail = true`, the entire run stops;
-otherwise the next eligible item is selected.
+item fails at that subtask. Under `--until-empty`, the next eligible item is
+selected; with `--halt-on-fail` (or `halt_on_fail = true` in config) the run
+stops there instead. Without `--until-empty` a run handles one item anyway.
 
 ### Status — item-centric view across all runs
 
@@ -370,7 +373,8 @@ for the whole pass, re-ingests the todo file after each completed item, and only
 starts the next item after the previous one has finished. If an item fails, that
 item is skipped for the rest of the pass so independent work can continue; its
 dependents remain blocked because the failed item is not treated as complete.
-The command exits `1` if any attempted item failed.
+Add `--halt-on-fail` to stop the pass at the first failed item instead. The
+command exits `1` if any attempted item failed.
 
 ```bash
 jumar report <run-id> --runs-dir /path/to/runs   # non-default runs directory
@@ -706,7 +710,7 @@ and uuid-era run directories without an index row still resolve by prefix.
 ```
 jumar [--version] [--help]
 jumar plan   [--dry-run] [--todo PATH] [--json]
-jumar run    [--dry-run | --approve] [--non-interactive] [--until-empty] [--verbose] [--json] [--todo PATH]
+jumar run    [--dry-run | --approve] [--non-interactive] [--until-empty [--halt-on-fail]] [--verbose] [--json] [--todo PATH]
 jumar resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
 jumar report RUN_ID [--runs-dir DIR] [--json]             # ditto
 jumar status [--todo PATH] [--runs-dir DIR] [--json]

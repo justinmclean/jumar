@@ -103,6 +103,8 @@ path is incomplete.
 - Trailer `Generated-by: <agent> (<model>)`, where `<agent>` and `<model>` are
   the actual agent and model running (e.g. `Claude (Sonnet 4.5)`). Do not
   hardcode either, and never add a `Co-Authored-By:` trailer for an agent.
+- No `Claude-Session:` or other session-link trailers. They point at a private
+  chat no reader of the history can open.
 - One commit per build iteration.
 
 ## Spec files are read-only for build iterations
