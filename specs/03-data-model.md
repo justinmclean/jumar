@@ -44,6 +44,7 @@ Produced by stage 1 (ingest).
 | `status` | ItemStatus | `done` if the source line was `- [x]` |
 | `context` | list[str] | preceding prose/headings, in order |
 | `authored_subtasks` | list[str] | from an indented task list; may be empty |
+| `authored_checks` | list[Check \| None] | parallel to `authored_subtasks`: the `check:` line under each, or None; empty when no subtask has one |
 | `meta` | dict[str, str] | parsed `@key=value` tokens, unknown keys kept |
 | `priority` | int \| None | from `@priority` |
 | `depends` | list[str] | item_ids from `@depends` (comma-separated) |
@@ -138,6 +139,7 @@ Invariants (enforced in `models.py`, tested):
 | `source` | str | `authored` \| `model` |
 | `created_at` | str | ISO-8601 UTC |
 | `harness` | HarnessInfo | agent/model that produced it |
+| `session_id` | str \| None | UUID4 execution session reused across one item's subtasks and repairs; verifiers never share it |
 
 ## Attempt
 
@@ -182,18 +184,18 @@ Evidence by kind:
 | `run_id` | str | `<YYYYMMDD>-<HHMM>-<4 hex chars>`, e.g. `20260809-1543-a3f9` |
 | `todo_path` | str | |
 | `mode` | str | `auto` \| `dry-run` \| `approve` |
-| `interactive` | bool | false for scheduled runs |
-| `trigger` | str | `human` \| `schedule:<schedule-id>` |
-| `now` | str | the single eligibility instant for the whole run (ISO-8601 UTC) |
-| `tz` | str | resolved local zone, recorded so a report is interpretable later |
 | `config` | dict | resolved effective config, for reproducibility |
 | `started_at` / `finished_at` | str | |
 | `items` | list[ItemResult] | |
 | `warnings` | list[str] | ingest parse warnings etc. |
 
+The run's eligibility context is not on the `Run` shape; it is journalled on
+`run_started`: `now` (the single eligibility instant, ISO-8601 UTC), `tz`,
+`mode`, `todo_path`, `interactive` (false for scheduled runs) and `trigger`.
+
 `ItemResult` = `{item_id, status, plan, failure_code, failed_subtask_index,
-verifications, eligible_at, was_overdue, next_occurrence}` — `eligible_at` is
-set on a `deferred` item, `next_occurrence` on a completed recurring one.
+verifications}`. A deferred item's `eligible_at` is carried on its
+`item_deferred` journal event and in the report, not on `ItemResult`.
 
 **Run-id format and resolution** (`clock.make_run_id`, `cli._resolve_run_id`):
 
@@ -216,19 +218,23 @@ Jumar owns the record; the scheduler owns the firing.
 | field | type | notes |
 |---|---|---|
 | `schedule_id` | str | short slug; also the marker used to delimit the owned block |
-| `cron` | str | 5-field expression, interpreted in `tz` |
-| `tz` | str | resolved IANA zone, recorded at install time |
-| `backend` | ScheduleBackend | |
+| `cron_expr` | str | 5-field expression, interpreted in `timezone` |
 | `todo_path` | str | absolute |
+| `jumar_path` | str | absolute path of the `jumar` executable installed |
 | `config_path` | str \| None | absolute |
-| `command` | list[str] | the exact argv installed, absolute `jumar`, always including `--non-interactive` |
-| `log_path` | str | where the entry redirects stdout/stderr |
-| `installed_at` | str | ISO-8601 UTC |
+| `timezone` | str | resolved IANA zone, recorded at install time |
+| `harness_profile` | str \| None | `--harness-profile` the entry runs with |
+| `work_dir` | str | directory the entry runs from: the config file's, else the todo file's |
+| `log_path` | str | where the entry redirects stdout/stderr: `<todo dir>/runs/schedule-<id>.log` |
+
+The backend is a property of where the entry is installed, not a field on it.
+The installed argv is derived from the entry: `jumar_path run --todo
+<todo_path> --non-interactive`, plus `--config` and `--harness-profile` when set.
 
 Invariants:
 
-- `command[0]` is absolute; `todo_path` and `config_path` are absolute.
-- `--non-interactive` is present in `command`; `--approve` is absent.
+- `jumar_path`, `todo_path` and `config_path` are absolute.
+- `--non-interactive` is present in the installed argv; `--approve` is absent.
 - `schedule_id` matches `[a-z0-9-]{1,32}` — it lands in a crontab comment marker
   and must not be able to break out of it.
 
@@ -236,14 +242,20 @@ Invariants:
 
 Single-flight guard for a todo path (AC10.5, AC10.6).
 
-`{todo_path, run_id, pid, hostname, acquired_at}` — written to
-`runs/.lock-<hash of todo_path>`. A lock whose `pid` is not live is **stale** and
-may be reclaimed, with the reclaim journalled.
+`{pid, run_id, todo}` (`todo` is the absolute todo path) — written to
+`.jumar.lock` in the todo file's directory. A lock whose `pid` is not live is
+**stale** and may be reclaimed, with the reclaim journalled.
 
 ## HarnessInfo
 
 `{agent, model, harness, invoked_as}` — recorded on every plan, attempt, and
-judge verdict so a journal is reproducible and attributable.
+judge verdict so a journal is reproducible and attributable. Only `agent` and
+`model` are journalled.
+
+The in-memory shape also carries the resolved per-stage harness settings, which
+only an in-process harness (`agent = "openai"`) reads: `base_url`,
+`api_key_env`, `reasoning_effort`, `max_tokens`, `max_tool_steps`, and the
+command policy as `commands_allow` / `commands_deny`.
 
 ## Journal record
 
@@ -304,17 +316,16 @@ model = "opus"            # valid stage tables: decompose, execute, judge
 [jumar.harness.profiles.heavy]   # named alternative harness; same shape as
 execute = { model = "opus" }     # [jumar.harness]. Select with --harness-profile heavy
 
-[jumar.schedule]
-backend    = "auto"        # auto | cron | launchd | systemd
-log_dir    = "runs/logs"
-lock_dir   = "runs"
+schedule_backend = "cron"   # optional; cron | launchd | systemd. Unset = platform default
 
 [jumar.commands]
 allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]  # argv[0] allow-list (fetchers allowed)
 deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]  # send vectors
+allow_also = ["jq"]          # appended to allow instead of replacing it
 ```
 
-`deny` wins over `allow`. An argv[0] outside `allow` is refused at execution
+`deny` wins over `allow`. `allow` / `deny` replace the defaults; `allow_also` /
+`deny_also` extend them. An argv[0] outside `allow` is refused at execution
 time with `capability_denied`, before the process is spawned. The deny list
 holds the **send** vectors: the enforced boundary is outbound transmission,
 not outbound reading — `network` is a default capability and `curl`/`wget`

@@ -41,10 +41,21 @@ Markdown task list items into `TodoItem` records.
 - Nesting: an indented task list under an item is read as **author-supplied
   subtasks** and short-circuits stage 3 for that item (the human's breakdown
   wins over the model's).
+- A `check: <argv>` line indented under an authored subtask is an
+  **author-written check** for that subtask: split into an argv the way a shell
+  splits words (never run through a shell), it becomes a `kind=command` check
+  expecting exit 0. A `check:` line jumar cannot honour is a startup error, not
+  a warning: no authored subtask directly above it, a second check for one
+  subtask, unbalanced quotes, an empty argv, a check refused by the `Check`
+  invariants (shell wrapper, cannot fail), or an argv[0] the command policy
+  denies. Falling back to a model-chosen check would silently discard the
+  author's proof.
 - Inline metadata in trailing `@key=value` tokens is parsed into the item's
-  `meta` map: `@id=`, `@priority=`, `@depends=`, `@check=`, `@capability=`,
-  `@max-subtasks=`, and the schedule tokens `@not-before=`, `@due=`, `@every=`.
-  Unknown keys are preserved and ignored, never an error.
+  `meta` map: `@id=`, `@priority=`, `@depends=`, `@capability=`,
+  `@max-subtasks=`, `@harness=`, and the schedule tokens `@not-before=`,
+  `@due=`, `@every=`. Unknown keys are preserved and ignored, never an error.
+  `@check=` is the exception: a token cannot hold an argv, so it produces a
+  parse warning pointing at the `check:` line and is otherwise ignored.
 - **Schedule tokens** parse into the item's `schedule` (`Schedule` in
   `03-data-model.md`):
   - `@not-before=2026-08-11` / `@not-before=2026-08-11T09:00` — the item is not
@@ -69,7 +80,11 @@ Markdown task list items into `TodoItem` records.
 - AC1.1 A file of `N` unchecked items yields exactly `N` pending `TodoItem`s.
 - AC1.2 `- [x]` items are parsed but marked `done` and never selected.
 - AC1.3 An indented task list under an item populates `item.authored_subtasks`
-  in file order, and the item is flagged `decomposition=authored`.
+  in file order; the item's decomposition is then `authored` (derived from
+  `authored_subtasks` being non-empty, not stored as a field).
+- AC1.11 A `check: <argv>` line under an authored subtask populates the
+  matching entry of `item.authored_checks`; every refusal listed above is an
+  `IngestError` naming the line, and `@check=` yields a parse warning.
 - AC1.4 `@priority=1 @depends=abc` parses into `meta` with the raw values kept.
 - AC1.5 `item_id` is stable across a re-run when the item's text is unchanged,
   and changes when the text changes.
@@ -208,7 +223,10 @@ Hard rules enforced by the code, not by the prompt:
 - Subtasks are ordered; `depends_on` between subtasks is allowed but must form a
   DAG within the item.
 - If the item has `authored_subtasks` (AC1.3), those become the plan verbatim,
-  and the agent is asked only to supply a `check` for any that lack one.
+  and the agent is asked only to supply a `check` for any that lack one. A
+  subtask with an author-written check keeps it unmodified and is never shown
+  to the agent; if every authored subtask has one, no agent call is made. The
+  journalled plan records each subtask's `check_source` (`author` or `model`).
 
 **Acceptance criteria**
 
@@ -217,7 +235,8 @@ Hard rules enforced by the code, not by the prompt:
 - AC3.2 A plan longer than `max_subtasks` is rejected with `plan_too_long` and
   no subtask is executed.
 - AC3.3 Authored subtasks are used verbatim, in file order, with the model only
-  filling in missing checks.
+  filling in missing checks. An author-written check reaches the `Plan`
+  unmodified, and the model is never asked to supply one for that subtask.
 - AC3.4 A `judge` check without `rationale` is rejected.
 - AC3.5 A cyclic `depends_on` within a plan is rejected as `invalid_plan`.
 - AC3.6 The full plan (subtasks + checks) is journalled before any execution.
@@ -389,8 +408,10 @@ its evidence, and is told explicitly what did not pass. After each repair the
 **same check** is re-run — a repair may never rewrite its own acceptance check.
 
 If the budget is exhausted, the item stops with `failed_at_subtask=<n>`.
-Remaining subtasks are not attempted, the todo file is left untouched, and the
-run moves to the next eligible item (or halts entirely under `--halt-on-fail`).
+Remaining subtasks are not attempted and the item's checkbox is left unticked.
+A plain `jumar run` handles one item per invocation, so it ends there. Under
+`jumar run --until-empty` the run moves to the next eligible item, or halts
+entirely under `--halt-on-fail` (or `halt_on_fail = true` in config).
 
 **Acceptance criteria**
 
@@ -399,8 +420,8 @@ run moves to the next eligible item (or halts entirely under `--halt-on-fail`).
 - AC7.3 A repair attempt that modifies the subtask's `check` is rejected and the
   original check is re-run.
 - AC7.4 On budget exhaustion the item is `failed`, later subtasks are not run,
-  and the next eligible item is selected (default) or the run halts
-  (`--halt-on-fail`).
+  and under `--until-empty` the next eligible item is selected (default) or the
+  run halts (`--halt-on-fail`).
 
 ---
 

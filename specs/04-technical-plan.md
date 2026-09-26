@@ -169,7 +169,8 @@ invariant — it would be reformulated per dependency chain, not dropped.
 - **Phase 1 — read-only path.** `ingest.py`, `select.py`, `jumar plan --dry-run`
   printing the parsed items. No agent calls yet.
 - **Phase 2 — decompose + gate.** `harness.py`, `decompose.py`, `gate.py`;
-  `jumar plan` produces and journals a validated plan. Still executes nothing.
+  `jumar run --dry-run` produces and journals a validated plan. Still executes
+  nothing. (`jumar plan --dry-run` stays the read-only ingest + select preview.)
 - **Phase 3 — the inner loop.** `execute.py`, `verify/command.py`,
   `verify/file.py`, `repair.py`. This is the first phase that can do work, and
   the first that can be trusted, because verification lands with execution —
