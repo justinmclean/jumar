@@ -121,8 +121,11 @@ like; 02 says what a test can check.
   failure. Never carry a broken subtask forward hoping later work fixes it.
 - **Resumable by construction.** Every state transition is journalled before the
   next one starts, so the durable record is always ahead of the side effects.
-- **Least authority.** Default to a sandboxed, no-network, no-push execution
-  context; capability is granted per-item, explicitly, in config.
+- **Least authority.** Default to a no-push, no-send execution context:
+  fetching is allowed (`network` is a default capability), transmitting is not
+  (`git push`, `gh`, mail and remote-copy tools are denied). Anything beyond the
+  defaults is granted per-item, explicitly, in config. The allow list is defence
+  in depth, not a sandbox; running jumar in a container is the real control.
 - **Time is an eligibility gate, not a trigger to hurry.** A due date changes
   what is *selected*; it never relaxes a check, shortens a plan, or licenses
   skipping verification. Nothing about being late makes unproven work
