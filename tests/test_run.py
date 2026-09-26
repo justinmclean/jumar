@@ -484,6 +484,54 @@ def test_run_until_empty_skips_failed_item_without_unblocking_dependents(
     assert "- [x] Independent second" in todo_text
 
 
+_PINNED_TODO = (
+    "- [ ] Produce the marker @capability=write_fs\n"
+    "  - [ ] Write marker.txt\n"
+    "    check: grep -q PINNED marker.txt\n"
+)
+
+
+def _pinned_agent(content: str, planned: list[str]) -> Any:
+    def agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+        if _is_plan_request(prompt) or "subtasks are pre-defined" in prompt:
+            planned.append(prompt)
+            return _result(_PLAN)
+        (Path(cwd) / "marker.txt").write_text(content)
+        return _result("wrote marker.txt")
+
+    return agent
+
+
+def test_run_honours_an_author_written_check_without_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W10: a `check:` line is the proof; the model is never asked to plan or pick one."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(_PINNED_TODO)
+    planned: list[str] = []
+
+    rc = cli._cmd_run(_Args(), _run_agent=_pinned_agent("PINNED\n", planned))
+
+    assert rc == 0
+    assert planned == []
+    assert "- [x] Produce the marker" in (tmp_path / "todo.md").read_text()
+
+
+def test_run_fails_when_the_author_written_check_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Output that would satisfy a model-chosen check does not satisfy the author's."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(_PINNED_TODO)
+    planned: list[str] = []
+
+    rc = cli._cmd_run(_Args(), _run_agent=_pinned_agent("OK\n", planned))
+
+    assert rc == 1
+    assert planned == []
+    assert "- [ ] Produce the marker" in (tmp_path / "todo.md").read_text()
+
+
 # ---------------------------------------------------------------------------
 # run / resume share one orchestration
 # ---------------------------------------------------------------------------
