@@ -50,9 +50,11 @@ item stops re-spending its budget every firing instead of failing nightly
 forever. Recurrence is delegated to cron or launchd; there is no daemon and no
 resident watcher.
 
-**A plan before any agent runs.** `jumar plan --dry-run` decomposes the next
-eligible item and prints the subtasks and their checks without executing
-anything. On a vague item that breakdown is useful on its own, and it is cheap.
+**A plan before any agent runs.** `jumar plan --dry-run` shows which item would
+be picked, and why, without calling an agent. `jumar run --dry-run` goes one step
+further: it decomposes that item and prints the subtasks and their checks
+without executing anything. On a vague item that breakdown is useful on its own,
+and it is cheap.
 
 **Pressure on you to define "done" first.** An item the system will accept has
 to say what proof looks like. A subtask with no executable acceptance check is
@@ -99,7 +101,7 @@ Everything below is built, tested and merged.
 
 | Command | What it does |
 |---|---|
-| `jumar plan` | Ingest, select, decompose, print. `--dry-run` stops before execution. |
+| `jumar plan --dry-run` | Ingest, select, print the choice. No agent is called. Plain `jumar plan` exits 2. |
 | `jumar run` | The full pipeline for the next eligible item. Add `--until-empty` to keep going sequentially. |
 | `jumar resume <run-id>` | Replay the journal and continue from the first unverified subtask. |
 | `jumar report <run-id>` | Render a run report. Exit 1 if anything failed. |
@@ -133,6 +135,7 @@ jumar --version
 cp todo.example.md todo.md      # todo.md is git-ignored by default
 $EDITOR todo.md
 jumar plan --dry-run              # see what it would pick, and why
+jumar run --dry-run               # decompose it and print the subtasks and checks
 jumar run --approve               # confirm each subtask before it runs
 jumar status                      # where everything stands
 ```
