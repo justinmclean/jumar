@@ -9,7 +9,7 @@ import pytest
 
 from jumar.config import Config, HarnessConfig
 from jumar.ingest import IngestError, IngestResult, ingest
-from jumar.models import ItemStatus, RecurUnit
+from jumar.models import CheckKind, ItemStatus, RecurUnit
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -617,3 +617,144 @@ def test_known_harness_profile_on_an_item_ingests(tmp_path: Path) -> None:
     config = Config(harness_profiles={"heavy": HarnessConfig(model="qwen")})
     result = ingest(todo, config)
     assert result.items[0].meta["harness"] == "heavy"
+
+
+# ---------------------------------------------------------------------------
+# @max-subtasks= must be a positive integer
+# ---------------------------------------------------------------------------
+
+
+def test_valid_max_subtasks_parses_without_warning(tmp_path: Path) -> None:
+    result = _todo(tmp_path, "- [ ] Big job @max-subtasks=20\n")
+    assert result.items[0].meta["max-subtasks"] == "20"
+    assert result.warnings == []
+
+
+@pytest.mark.parametrize("bad", ["lots", "0", "-1", "2.5"])
+def test_unusable_max_subtasks_is_warned(tmp_path: Path, bad: str) -> None:
+    result = _todo(tmp_path, f"- [ ] Big job @max-subtasks={bad}\n", max_subtasks=7)
+    assert len(result.items) == 1
+    assert len(result.warnings) == 1
+    msg = result.warnings[0].message
+    assert f"@max-subtasks={bad!r}" in msg
+    assert "max_subtasks=7" in msg
+
+
+# ---------------------------------------------------------------------------
+# W10 — author-written checks (`check:` line under an authored subtask)
+# ---------------------------------------------------------------------------
+
+
+def test_check_line_pins_a_command_check_on_its_subtask(tmp_path: Path) -> None:
+    result = _todo(
+        tmp_path,
+        "- [ ] Main\n  - [ ] Fetch the data\n    check: test -s data.json\n  - [ ] Summarise it\n",
+    )
+    item = result.items[0]
+    assert item.authored_subtasks == ("Fetch the data", "Summarise it")
+    pinned, unpinned = item.authored_checks
+    assert pinned is not None
+    assert pinned.kind is CheckKind.command
+    assert pinned.command == ("test", "-s", "data.json")
+    assert pinned.expect_status == 0
+    assert unpinned is None
+    assert result.warnings == []
+
+
+def test_check_line_keeps_quoted_arguments_and_flags_intact(tmp_path: Path) -> None:
+    result = _todo(
+        tmp_path,
+        "- [ ] Main\n"
+        "  - [ ] Review the PRs\n"
+        "    check: python3 /path/verify.py --kind=stale-pr '/path/my file.md'\n",
+    )
+    (check,) = result.items[0].authored_checks
+    assert check is not None
+    assert check.command == (
+        "python3",
+        "/path/verify.py",
+        "--kind=stale-pr",
+        "/path/my file.md",
+    )
+
+
+def test_no_check_lines_means_empty_authored_checks(tmp_path: Path) -> None:
+    result = _todo(tmp_path, "- [ ] Main\n  - [ ] Sub\n")
+    assert result.items[0].authored_checks == ()
+
+
+def test_check_line_does_not_end_the_subtask_list(tmp_path: Path) -> None:
+    result = _todo(
+        tmp_path,
+        "- [ ] Main\n  - [ ] A\n    check: test -f a\n  - [ ] B\n    check: test -f b\n",
+    )
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.authored_subtasks == ("A", "B")
+    assert [c.command for c in item.authored_checks if c is not None] == [
+        ("test", "-f", "a"),
+        ("test", "-f", "b"),
+    ]
+
+
+def test_check_token_on_subtask_is_warned_not_silently_dropped(tmp_path: Path) -> None:
+    result = _todo(tmp_path, "- [ ] Main\n  - [ ] Sub @check=command\n")
+    item = result.items[0]
+    assert item.authored_checks == ()
+    assert len(result.warnings) == 1
+    assert result.warnings[0].line_no == 2
+    assert "@check= is not supported" in result.warnings[0].message
+    assert "check:" in result.warnings[0].message
+
+
+def test_check_token_on_item_is_warned(tmp_path: Path) -> None:
+    result = _todo(tmp_path, "- [ ] Main @check=test\n")
+    assert len(result.warnings) == 1
+    assert result.warnings[0].line_no == 1
+    assert "@check= is not supported" in result.warnings[0].message
+
+
+@pytest.mark.parametrize(
+    ("check_line", "expected"),
+    [
+        ("check: bash -c 'test -f a'", "shell wrapper"),
+        ("check: true", "cannot fail"),
+        ("check: ls", "cannot fail"),
+        ("check: test -f 'unterminated", "cannot be split"),
+        ("check:", "is empty"),
+        ("check: ssh host test -f a", "command policy does not allow"),
+    ],
+)
+def test_bad_check_line_is_a_startup_error(tmp_path: Path, check_line: str, expected: str) -> None:
+    """An authored check jumar cannot honour must stop ingest, not fall back to the model."""
+    with pytest.raises(IngestError) as exc_info:
+        _todo(tmp_path, f"- [ ] Main\n  - [ ] Sub\n    {check_line}\n")
+    assert "Line 3" in str(exc_info.value)
+    assert expected in str(exc_info.value)
+
+
+def test_check_line_without_a_subtask_is_a_startup_error(tmp_path: Path) -> None:
+    with pytest.raises(IngestError, match="directly under an authored subtask"):
+        _todo(tmp_path, "- [ ] Main\n  check: test -f a\n")
+
+
+def test_check_line_after_prose_is_a_startup_error(tmp_path: Path) -> None:
+    """Prose ends the subtask list, so a later check: has no subtask to attach to."""
+    with pytest.raises(IngestError, match="directly under an authored subtask"):
+        _todo(tmp_path, "- [ ] Main\n  - [ ] Sub\n  some notes\n    check: test -f a\n")
+
+
+def test_second_check_for_one_subtask_is_a_startup_error(tmp_path: Path) -> None:
+    with pytest.raises(IngestError, match="second check"):
+        _todo(
+            tmp_path,
+            "- [ ] Main\n  - [ ] Sub\n    check: test -f a\n    check: test -f b\n",
+        )
+
+
+def test_unindented_check_line_is_ordinary_context(tmp_path: Path) -> None:
+    """A check: line at column 0 is prose for the next item, not a pinned check."""
+    result = _todo(tmp_path, "check: the docs first\n- [ ] Main\n")
+    item = result.items[0]
+    assert item.authored_checks == ()
+    assert item.context == ("check: the docs first",)

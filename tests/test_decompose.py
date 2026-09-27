@@ -16,7 +16,7 @@ All tests inject a fake runner so no live agent is invoked.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +24,12 @@ import pytest
 
 from jumar.backoff import advance_failure_count
 from jumar.config import Config
-from jumar.decompose import DecomposeError, decompose
+from jumar.decompose import DecomposeError, decompose, item_max_subtasks
 from jumar.journal import HARNESS_ERROR, ITEM_SELECTED, PLAN_CREATED, PLAN_REJECTED, Journal
 from jumar.models import (
     Capability,
+    Check,
+    CheckKind,
     FailureCode,
     HarnessInfo,
     ItemStatus,
@@ -1242,3 +1244,234 @@ def test_session_id_is_unique_across_plans(tmp_path: Path, cfg: Config) -> None:
         plan = _decompose(_make_item(), runner, j, cfg, tmp_path)
         assert plan.session_id not in ids
         ids.add(plan.session_id)
+
+
+# ---------------------------------------------------------------------------
+# @max-subtasks= — the per-item cap overrides config.max_subtasks
+# ---------------------------------------------------------------------------
+
+
+def _capped(cap: str, **kw: Any) -> TodoItem:
+    return replace(_make_item(**kw), meta={"max-subtasks": cap})
+
+
+def _recording_runner(responses: list[str], prompts: list[str]) -> Any:
+    it = iter(responses)
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        prompts.append(prompt)
+        return _FakeResult(exit_status=0, stdout=next(it))
+
+    return runner
+
+
+def test_item_cap_below_config_rejects_a_longer_plan(journal: Journal, tmp_path: Path) -> None:
+    runner = _fake_runner([_valid_response(3)])
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            _capped("2"),
+            config=Config(max_subtasks=12),
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=runner,
+        )
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+    assert runner.call_count[0] == 1  # not retriable
+    rejected = [e for e in journal.replay().entries if e["event"] == PLAN_REJECTED]
+    assert "maximum is 2" in rejected[0]["payload"]["rejection_detail"]
+
+
+def test_item_cap_above_config_accepts_a_longer_plan(journal: Journal, tmp_path: Path) -> None:
+    plan = decompose(
+        _capped("20"),
+        config=Config(max_subtasks=12),
+        journal=journal,
+        cwd=tmp_path,
+        _run_agent=_fake_runner([_valid_response(13)]),
+    )
+    assert len(plan.subtasks) == 13
+
+
+def test_prompt_shows_the_item_cap(journal: Journal, tmp_path: Path) -> None:
+    prompts: list[str] = []
+    decompose(
+        _capped("5"),
+        config=Config(max_subtasks=12),
+        journal=journal,
+        cwd=tmp_path,
+        _run_agent=_recording_runner([_valid_response(1)], prompts),
+    )
+    assert "Maximum subtasks: 5" in prompts[0]
+    assert "Maximum subtasks: 12" not in prompts[0]
+
+
+def test_item_cap_applies_to_an_authored_list(journal: Journal, tmp_path: Path) -> None:
+    item = _capped("1", authored_subtasks=("First", "Second"))
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            item,
+            config=Config(max_subtasks=12),
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=_fake_runner([_valid_response(2)]),
+        )
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+
+
+@pytest.mark.parametrize("bad", ["lots", "0", "-3", "2.5"])
+def test_unusable_item_cap_falls_back_to_config(journal: Journal, tmp_path: Path, bad: str) -> None:
+    """Ingest warns about these; decompose must not treat them as a cap."""
+    item = _capped(bad)
+    cfg = Config(max_subtasks=2)
+    assert item_max_subtasks(item, cfg) == 2
+    prompts: list[str] = []
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            item,
+            config=cfg,
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=_recording_runner([_valid_response(3)], prompts),
+        )
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+    assert "Maximum subtasks: 2" in prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# W10 — author-written checks are pinned, never model-chosen
+# ---------------------------------------------------------------------------
+
+
+def _pinned(argv: tuple[str, ...]) -> Check:
+    return Check(kind=CheckKind.command, statement="author check", command=argv)
+
+
+def _pinned_item(
+    subtasks: tuple[str, ...], checks: tuple[Check | None, ...], **kw: Any
+) -> TodoItem:
+    return replace(_make_item(authored_subtasks=subtasks, **kw), authored_checks=checks)
+
+
+def _refusing_runner(*_a: Any, **_kw: Any) -> Any:
+    raise AssertionError("the model was asked to plan an item whose checks are all authored")
+
+
+def test_all_checks_authored_means_no_model_call(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    a, b = _pinned(("test", "-f", "a")), _pinned(("test", "-f", "b"))
+    item = _pinned_item(("Make a", "Make b"), (a, b))
+
+    plan = _decompose(item, _refusing_runner, journal, cfg, tmp_path)
+
+    assert plan.source == "authored"
+    assert [s.description for s in plan.subtasks] == ["Make a", "Make b"]
+    assert plan.subtasks[0].check is a
+    assert plan.subtasks[1].check is b
+    assert [s.subtask_id for s in plan.subtasks] == ["test-item#0", "test-item#1"]
+    assert all(s.capabilities == item.capabilities for s in plan.subtasks)
+
+    created = [e for e in journal.replay().entries if e["event"] == PLAN_CREATED]
+    assert len(created) == 1
+    journalled = created[0]["payload"]["subtasks"]
+    assert [s["check_source"] for s in journalled] == ["author", "author"]
+    assert journalled[0]["check"]["command"] == ["test", "-f", "a"]
+
+
+def test_model_is_asked_only_for_the_unpinned_subtasks(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    pinned = _pinned(("test", "-s", "data.json"))
+    item = _pinned_item(
+        ("Fetch the data", "Summarise it", "File the summary"), (pinned, None, None)
+    )
+    prompts: list[str] = []
+    response = json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "x",
+                    "check": {
+                        "kind": "file",
+                        "statement": "summary written",
+                        "path": "summary.md",
+                        "pattern": "Summary",
+                    },
+                    "depends_on": [],
+                },
+                {
+                    "description": "y",
+                    "check": {
+                        "kind": "file",
+                        "statement": "summary filed",
+                        "path": "filed/summary.md",
+                    },
+                    "depends_on": [0],
+                },
+            ]
+        }
+    )
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        prompts.append(prompt)
+        return _FakeResult(exit_status=0, stdout=response)
+
+    plan = _decompose(item, runner, journal, cfg, tmp_path)
+
+    assert len(prompts) == 1
+    assert "Fetch the data" not in prompts[0]
+    assert "0. Summarise it" in prompts[0]
+    assert "1. File the summary" in prompts[0]
+    assert [s.description for s in plan.subtasks] == [
+        "Fetch the data",
+        "Summarise it",
+        "File the summary",
+    ]
+    assert plan.subtasks[0].check is pinned
+    assert plan.subtasks[1].check.path == "summary.md"
+    assert plan.subtasks[2].check.path == "filed/summary.md"
+    # depends_on from the model is relative to the subset; mapped back to the full list.
+    assert plan.subtasks[2].depends_on == (1,)
+    assert [s.index for s in plan.subtasks] == [0, 1, 2]
+    created = next(e for e in journal.replay().entries if e["event"] == PLAN_CREATED)
+    assert [s["check_source"] for s in created["payload"]["subtasks"]] == [
+        "author",
+        "model",
+        "model",
+    ]
+
+
+def test_model_answering_for_a_pinned_subtask_is_rejected(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    """A response sized for the full list (i.e. re-checking the pinned step) is not accepted."""
+    item = _pinned_item(("Pinned", "Open"), (_pinned(("test", "-f", "a")), None))
+    runner = _fake_runner([_valid_response(2), _valid_response(2)])
+
+    with pytest.raises(DecomposeError) as exc_info:
+        _decompose(item, runner, journal, cfg, tmp_path)
+
+    assert exc_info.value.failure_code == FailureCode.unverifiable_plan
+    rejected = [e for e in journal.replay().entries if e["event"] == PLAN_REJECTED]
+    assert "expected 1 subtasks" in rejected[0]["payload"]["rejection_detail"]
+
+
+def test_authored_list_longer_than_max_subtasks_is_rejected_without_a_model_call(
+    journal: Journal, tmp_path: Path
+) -> None:
+    checks = tuple(_pinned(("test", "-f", str(i))) for i in range(3))
+    item = _pinned_item(("a", "b", "c"), checks)
+
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            item,
+            config=Config(max_subtasks=2),
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=_refusing_runner,
+        )
+
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+    events = [e["event"] for e in journal.replay().entries]
+    assert PLAN_REJECTED in events
+    assert PLAN_CREATED not in events

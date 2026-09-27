@@ -189,6 +189,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_p.add_argument(
+        "--halt-on-fail",
+        action="store_true",
+        help=(
+            "Stop the run at the first failed item instead of moving on to the "
+            "next eligible one. Overrides halt_on_fail in jumar.toml; only "
+            "changes anything with --until-empty."
+        ),
+    )
+    run_p.add_argument(
         "--verbose",
         action="store_true",
         help="Echo the agent's captured output after each attempt (progress to stderr).",
@@ -489,17 +498,6 @@ def _verifications_from_journal(
     return rebuilt
 
 
-def _item_max_subtasks(item: Any, config: Any) -> int:
-    """The plan-length cap for this item: @max-subtasks= overrides config."""
-    raw = getattr(item, "meta", {}).get("max-subtasks")
-    if raw:
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            pass
-    return int(getattr(config, "max_subtasks", 12))
-
-
 def run_item(
     item: Any,
     *,
@@ -529,7 +527,7 @@ def run_item(
     from .backoff import advance_failure_count, clear_failure_count
     from .complete import complete
     from .config import resolve_harness
-    from .decompose import DecomposeError, decompose
+    from .decompose import DecomposeError, decompose, item_max_subtasks
     from .execute import execute
     from .gate import GateDecision, GateError, GateMode, gate
     from .journal import ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
@@ -560,7 +558,7 @@ def run_item(
 
     # --- decompose (skipped when resuming with a plan already in the journal)
     if plan is None:
-        prog.planning(item.text, _item_max_subtasks(item, config))
+        prog.planning(item.text, item_max_subtasks(item, config))
         try:
             plan = decompose(
                 item,
@@ -828,6 +826,8 @@ def _cmd_run(
     cli_overrides: dict[str, object] = {}
     if getattr(args, "todo", None):
         cli_overrides["todo_path"] = args.todo
+    if getattr(args, "halt_on_fail", False):
+        cli_overrides["halt_on_fail"] = True
     config_path = Path(args.config) if getattr(args, "config", None) else None
     try:
         config = load_config(
