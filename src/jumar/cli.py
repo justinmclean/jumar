@@ -939,9 +939,7 @@ def _cmd_run(
                 item for item in result.items if item.item_id not in failed_this_pass
             ]
             try:
-                sel = select_next(
-                    selectable_items, now, done_ids=frozenset(completed_this_pass)
-                )
+                sel = select_next(selectable_items, now, done_ids=frozenset(completed_this_pass))
             except CycleError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 exit_status = 1
