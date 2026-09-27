@@ -24,7 +24,7 @@ import pytest
 
 from jumar.backoff import advance_failure_count
 from jumar.config import Config
-from jumar.decompose import DecomposeError, decompose
+from jumar.decompose import DecomposeError, decompose, item_max_subtasks
 from jumar.journal import HARNESS_ERROR, ITEM_SELECTED, PLAN_CREATED, PLAN_REJECTED, Journal
 from jumar.models import (
     Capability,
@@ -1244,6 +1244,97 @@ def test_session_id_is_unique_across_plans(tmp_path: Path, cfg: Config) -> None:
         plan = _decompose(_make_item(), runner, j, cfg, tmp_path)
         assert plan.session_id not in ids
         ids.add(plan.session_id)
+
+
+# ---------------------------------------------------------------------------
+# @max-subtasks= — the per-item cap overrides config.max_subtasks
+# ---------------------------------------------------------------------------
+
+
+def _capped(cap: str, **kw: Any) -> TodoItem:
+    return replace(_make_item(**kw), meta={"max-subtasks": cap})
+
+
+def _recording_runner(responses: list[str], prompts: list[str]) -> Any:
+    it = iter(responses)
+
+    def runner(prompt: str, **_: Any) -> _FakeResult:
+        prompts.append(prompt)
+        return _FakeResult(exit_status=0, stdout=next(it))
+
+    return runner
+
+
+def test_item_cap_below_config_rejects_a_longer_plan(journal: Journal, tmp_path: Path) -> None:
+    runner = _fake_runner([_valid_response(3)])
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            _capped("2"),
+            config=Config(max_subtasks=12),
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=runner,
+        )
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+    assert runner.call_count[0] == 1  # not retriable
+    rejected = [e for e in journal.replay().entries if e["event"] == PLAN_REJECTED]
+    assert "maximum is 2" in rejected[0]["payload"]["rejection_detail"]
+
+
+def test_item_cap_above_config_accepts_a_longer_plan(journal: Journal, tmp_path: Path) -> None:
+    plan = decompose(
+        _capped("20"),
+        config=Config(max_subtasks=12),
+        journal=journal,
+        cwd=tmp_path,
+        _run_agent=_fake_runner([_valid_response(13)]),
+    )
+    assert len(plan.subtasks) == 13
+
+
+def test_prompt_shows_the_item_cap(journal: Journal, tmp_path: Path) -> None:
+    prompts: list[str] = []
+    decompose(
+        _capped("5"),
+        config=Config(max_subtasks=12),
+        journal=journal,
+        cwd=tmp_path,
+        _run_agent=_recording_runner([_valid_response(1)], prompts),
+    )
+    assert "Maximum subtasks: 5" in prompts[0]
+    assert "Maximum subtasks: 12" not in prompts[0]
+
+
+def test_item_cap_applies_to_an_authored_list(journal: Journal, tmp_path: Path) -> None:
+    item = _capped("1", authored_subtasks=("First", "Second"))
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            item,
+            config=Config(max_subtasks=12),
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=_fake_runner([_valid_response(2)]),
+        )
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+
+
+@pytest.mark.parametrize("bad", ["lots", "0", "-3", "2.5"])
+def test_unusable_item_cap_falls_back_to_config(journal: Journal, tmp_path: Path, bad: str) -> None:
+    """Ingest warns about these; decompose must not treat them as a cap."""
+    item = _capped(bad)
+    cfg = Config(max_subtasks=2)
+    assert item_max_subtasks(item, cfg) == 2
+    prompts: list[str] = []
+    with pytest.raises(DecomposeError) as exc_info:
+        decompose(
+            item,
+            config=cfg,
+            journal=journal,
+            cwd=tmp_path,
+            _run_agent=_recording_runner([_valid_response(3)], prompts),
+        )
+    assert exc_info.value.failure_code == FailureCode.plan_too_long
+    assert "Maximum subtasks: 2" in prompts[0]
 
 
 # ---------------------------------------------------------------------------
