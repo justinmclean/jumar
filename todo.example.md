@@ -9,7 +9,7 @@ to the agent as background — they are never treated as work.
       - [ ] Rewrite the install steps for the new flag
       - [ ] Check every command in the README actually runs
 - [ ] Rotate the backup logs @every=weekday
-- [ ] Draft the quarterly summary @not-before=2026-09-01 @due=2026-09-05
+- [ ] Draft the quarterly summary @not-before=2027-01-04 @due=2027-01-08
 - [x] This one is already done and will be skipped
 
 Schedule tokens:
