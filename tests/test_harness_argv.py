@@ -1083,7 +1083,9 @@ def test_detect_harness_error_rate_limit_in_stderr() -> None:
 
 
 def test_detect_harness_error_auth_failure_phrase() -> None:
-    result = _result(stdout="Failed to authenticate. API Error: 401 API key is invalid.")
+    result = _result(
+        stdout="Failed to authenticate. API Error: 401 API key is invalid.", exit_status=1
+    )
     assert detect_harness_error(result) == HARNESS_ERROR_AUTH_FAILURE
 
 
@@ -1110,5 +1112,15 @@ def test_detect_harness_error_openai_transport_timeout() -> None:
 
 def test_detect_harness_error_word_boundary_does_not_match_substring() -> None:
     """'login' must match as a whole word, not inside e.g. 'logins' or '4012'."""
-    result = _result(stdout="Add a logins table with 4012 rows.", exit_status=0)
+    result = _result(stdout="Add a logins table with 4012 rows.", exit_status=1)
+    assert detect_harness_error(result) is None
+
+
+def test_detect_harness_error_none_for_clean_exit() -> None:
+    """Run 20261020-2019-c54e: a report that exited 0 and said 'readable
+    without a login' was journalled as auth_failure and failed its item."""
+    result = _result(
+        stdout="I rewrote latest.md from the sources readable without a login.",
+        exit_status=0,
+    )
     assert detect_harness_error(result) is None
