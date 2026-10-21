@@ -198,7 +198,10 @@ def detect_harness_error(result: AgentResult) -> str | None:
     what to do with the classification (journal it, skip a retry, exclude it
     from @failed= accounting); this function only detects and names it.
     """
-    if result.timed_out:
+    # A call that exited 0 returned a response, so the harness ran the prompt.
+    # The phrase checks scan stdout, so without this guard a report that says
+    # "read without a login" or "timed out" was journalled as an outage.
+    if result.timed_out or result.exit_status == 0:
         return None
     haystack = f"{result.stdout}\n{result.stderr}".lower()
     if any(phrase in haystack for phrase in _BINARY_MISSING_PHRASES):
