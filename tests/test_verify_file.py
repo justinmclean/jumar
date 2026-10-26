@@ -216,6 +216,41 @@ class TestVerifyAbsence:
 
         assert "stray.log" in result.summary
 
+    def test_pattern_absent_from_existing_file_passes(self, tmp_path: Path) -> None:
+        (tmp_path / "draft.md").write_text("Plain prose, no dashes.\n")
+        check = Check(kind=CheckKind.absence, statement="No em dash", path="draft.md", pattern="—")
+
+        result = verify_absence(check, _ctx(tmp_path))
+
+        assert result.verdict == Verdict.passed
+        assert result.evidence["pattern_hits"] == []
+
+    def test_pattern_present_fails_with_line(self, tmp_path: Path) -> None:
+        (tmp_path / "draft.md").write_text("Fine line.\nBad — line.\n")
+        check = Check(kind=CheckKind.absence, statement="No em dash", path="draft.md", pattern="—")
+
+        result = verify_absence(check, _ctx(tmp_path))
+
+        assert result.verdict == Verdict.failed
+        assert result.evidence["pattern_hits"][0]["line"] == "Bad — line."
+
+    def test_pattern_with_missing_path_passes(self, tmp_path: Path) -> None:
+        check = Check(kind=CheckKind.absence, statement="No em dash", path="draft.md", pattern="—")
+
+        result = verify_absence(check, _ctx(tmp_path))
+
+        assert result.verdict == Verdict.passed
+
+    def test_pattern_checks_every_glob_match(self, tmp_path: Path) -> None:
+        (tmp_path / "a.md").write_text("clean")
+        (tmp_path / "b.md").write_text("TODO left")
+        check = Check(kind=CheckKind.absence, statement="No TODO", path="*.md", pattern="TODO")
+
+        result = verify_absence(check, _ctx(tmp_path))
+
+        assert result.verdict == Verdict.failed
+        assert result.evidence["pattern_hits"][0]["path"].endswith("b.md")
+
 
 # ---------------------------------------------------------------------------
 # Tests — registry integration

@@ -134,6 +134,8 @@ _RULES = [
     "- Check the OUTCOME, not the artefact of your own effort. `grep -q draft"
     " notes.md` proves you typed a word; it does not prove the work is right.",
     "- `kind=file` or `kind=absence` requires `path`.",
+    "- `kind=absence` without `pattern` asserts the PATH does not exist. To"
+    " assert a file does not CONTAIN something, give `pattern` as well.",
     "- `depends_on` must list 0-based subtask indices and must form a DAG (no cycles).",
     "- `capabilities` must be a subset of the granted capabilities.",
     "- Do NOT use tools, read files, run commands, or browse. Answer from this"

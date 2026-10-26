@@ -8,7 +8,8 @@ excerpt (truncated to 200 chars).
 
 ``verify_absence``: passes when the named path or glob resolves to zero
 matches.  Evidence records the raw path, the resolved glob pattern, and the
-list of any unexpected matches (up to 20 entries).
+list of any unexpected matches (up to 20 entries).  With ``check.pattern`` set
+it instead passes when no file the path or glob names contains that regex.
 
 Rules:
 - A missing file yields ``failed`` for kind=file (AC6.2).
@@ -156,6 +157,9 @@ def verify_absence(check: Check, ctx: VerifyContext) -> VerificationResult:
         "matches": matches[:20],
     }
 
+    if check.pattern is not None:
+        return _verify_pattern_absent(check, ctx, matches, evidence, checked_at)
+
     if matches:
         return VerificationResult(
             subtask_id=ctx.subtask_id,
@@ -175,6 +179,73 @@ def verify_absence(check: Check, ctx: VerifyContext) -> VerificationResult:
         kind=CheckKind.absence,
         evidence=evidence,
         summary=f"Path is absent as expected: {raw_path}",
+        evidence_path=None,
+        checked_at=checked_at,
+    )
+
+
+def _verify_pattern_absent(
+    check: Check,
+    ctx: VerifyContext,
+    matches: list[str],
+    evidence: dict[str, object],
+    checked_at: str,
+) -> VerificationResult:
+    """kind=absence with a pattern: no matched file may contain the pattern.
+
+    Planners write ``{"kind": "absence", "path": "draft.md", "pattern": "—"}``
+    to mean "the draft has no em dash". Judged on the path alone, that check
+    fails on every draft that exists and no repair can pass it; observed on
+    26 Oct 2026, three repairs of a clean draft. A missing path passes, since
+    it holds no match either.
+    """
+    assert check.pattern is not None
+    evidence["pattern"] = check.pattern
+    hits: list[dict[str, str]] = []
+    for match_path in matches:
+        path = Path(match_path)
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_bytes().decode(errors="replace")
+        except OSError as exc:
+            return VerificationResult(
+                subtask_id=ctx.subtask_id,
+                attempt_no=ctx.attempt_no,
+                verdict=Verdict.inconclusive,
+                kind=CheckKind.absence,
+                evidence={**evidence, "error": str(exc)},
+                summary=f"Could not read file: {path}: {exc}",
+                evidence_path=None,
+                checked_at=checked_at,
+            )
+        found = re.search(check.pattern, text)
+        if found is not None:
+            line_start = text.rfind("\n", 0, found.start()) + 1
+            line_end = text.find("\n", found.end())
+            line = text[line_start : line_end if line_end != -1 else len(text)]
+            hits.append({"path": str(path), "line": line[:200]})
+    evidence["pattern_hits"] = hits[:20]
+
+    if hits:
+        return VerificationResult(
+            subtask_id=ctx.subtask_id,
+            attempt_no=ctx.attempt_no,
+            verdict=Verdict.failed,
+            kind=CheckKind.absence,
+            evidence=evidence,
+            summary=f"Pattern {check.pattern!r} should be absent but found in {hits[0]['path']}",
+            evidence_path=None,
+            checked_at=checked_at,
+        )
+
+    return VerificationResult(
+        subtask_id=ctx.subtask_id,
+        attempt_no=ctx.attempt_no,
+        verdict=Verdict.passed,
+        kind=CheckKind.absence,
+        evidence=evidence,
+        summary=f"Pattern {check.pattern!r} is absent from {check.path}",
         evidence_path=None,
         checked_at=checked_at,
     )
