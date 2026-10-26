@@ -627,7 +627,7 @@ fails with `unverifiable_plan`.
 |---|---|---|
 | `command` | argv exits with the expected status (default 0) | argv, exit code, captured stdout/stderr |
 | `file` | path exists and matches the required pattern | path, size, sha256, matched excerpt |
-| `absence` | path or glob is gone | path, resolved glob |
+| `absence` | path or glob is gone; with `pattern`, no file it names contains the pattern | path, resolved glob, matching lines |
 | `judge` | an independent agent returns `pass` | verdict, reason, artefacts shown |
 | `manual` | a human confirms at the prompt | response, timestamp |
 
