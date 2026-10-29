@@ -10,28 +10,11 @@ never weaken a check to get green.
 
 ## What's been built
 
-**Current state (2026-08-27):** `main` HEAD is `5e76c23` (PR #17). Phases
-1–17 are complete and merged except W10/W11, which need a product/documentation
-decision, and W5 (halt-on-fail), which remains decision-gated — see Work items
-below.
-
-Known doc drift, not work items (spec prose is stale, not the code — a
-human/`update`-beat fix, no `src/jumar/` change implied):
-- `specs/01-product-spec.md` still describes a "sandboxed, no-network"
-  default; `network` has been a default capability since 2026-08-08 (see
-  guardrails below) and `specs/04`/`USAGE.md` already say so correctly.
-- `specs/03-data-model.md`'s `Run`/`ItemResult`/`RunLock`/`ScheduleEntry`
-  shapes list field/file names (`interactive`, `trigger`, `eligible_at`,
-  `runs/.lock-<hash>`, `cron`, `tz`, etc.) that don't match the real code
-  (`models.py`, `lock.py`'s `.jumar.lock`, `schedule.py`'s `cron_expr`/
-  `timezone`); code also carries undocumented fields (`Plan.session_id`,
-  `HarnessInfo.base_url`/`api_key_env`/`commands_allow`/`commands_deny`).
-  AC1.3 similarly says items are "flagged `decomposition=authored`"; there is
-  no such field — `decompose.py` infers it from
-  `bool(item.authored_subtasks)`, so the behaviour is correct and only the
-  AC's prose is stale.
-- `USAGE.md` §2/§4 transcripts still show uuid-era run ids from before F1;
-  regenerate against current output (see Manual follow-ups).
+**Current state (2026-10-29):** `main` HEAD is `2318b06` (PR #43). Every
+planned phase is merged, including the three decision-gated items the previous
+plan carried (W5, W10, W11). Spec sync branch `sync-specs-20261029-121419` (not yet merged)
+documents `jumar-gh`, absence checks with `pattern`, the exit-0 harness
+error rule and the `@max-subtasks=` warning.
 
 ### Completed items (merged to main unless noted)
 
@@ -93,120 +76,61 @@ human/`update`-beat fix, no `src/jumar/` change implied):
 - **decompose-failure-mode-distinction** — W9 (Phase 17). Distinct timeout/empty/unparseable decompose rejection reasons and empty OpenAI-compatible harness response reporting. Merged PR #17.
 - **doctor-config-file-presence** — W12 (Phase 17). `doctor` reports config source and warns when using built-in defaults because no config file was found. Merged PR #17.
 - **versioned-python-command-policy** — follow-up from PR #17. `python3.N` executables such as `python3.12` match the default `python3` command policy while still respecting `python3` deny rules.
+- **resolve-halt-on-fail-semantics**: W5. `jumar run --until-empty` loops over eligible items; `--halt-on-fail` / `halt_on_fail` stops it after the first failure (AC7.4). Merged PR #35.
+- **authored-check-pinning**: W10. A `check: <argv>` line under an authored subtask becomes that subtask's check; refusals are startup errors and `@check=` is a parse warning (AC1.11). Merged PR #34.
+- **plan-dry-run-decompose-contract**: W11. Resolved in the docs: the README points at `jumar run --dry-run` for decompose-and-print; `plan --dry-run` stays ingest, select and print. Merged PR #36.
+- **honour-max-subtasks-override**: `@max-subtasks=` reaches the decompose prompt and length check via `decompose.item_max_subtasks()`; a non-positive value is a parse warning. Merged PR #37.
+- **regenerate-usage-transcripts**: `USAGE.md` §2/§4 transcripts regenerated with friendly run ids. Merged PR #39.
+- **clean-exit-not-harness-error**: `detect_harness_error()` never classifies an attempt that exited 0. Merged PR #41.
+- **absence-pattern**: `kind=absence` with `pattern` asserts no named file contains the regex. Merged PR #42.
+- **jumar-gh-readonly**: `gh_readonly.py` + `jumar-gh` console script: read-only GitHub through a parsed allow list, `gh` itself still hard-denied. Merged PR #43.
 
 ---
 
+## In flight (do not build)
+
+- **reject-non-portable-grep-checks**: open PR #44 (`fix/reject-non-portable-grep-checks`).
+- **human-pause and recurring dependents**: uncommitted in the main checkout,
+  sitting on `feat/jumar-gh-readonly`, which PR #43 already merged. Adds
+  `@paused=human` (never selected, reported as "With a person" rather than
+  parked) and lets a recurring item that completes in an `--until-empty` pass
+  unblock its dependents in the same pass. Needs its own branch off `main`
+  before it can be committed. Once merged, an `update` beat must add both to
+  `specs/02-functional-spec.md` (Parking, AC2.11, Stage 2 dependency gate) and
+  `specs/03-data-model.md`.
+
 ## Work items (priority order)
 
-Phases 15–17 are **done** except the two decision-shaped Phase 17 follow-ups
-below: W10 (`@check=` semantics) and W11 (`plan --dry-run` documentation/code
-contract). W5 (halt-on-fail) remains decision-gated and stays last, same
-convention as before.
+W13. **cite-ac-ids-in-tests**: `tests/` names no test for AC1.11, AC2.11,
+   AC3.7, AC3.8, AC6.8, AC6.9, AC8.8, AC11.2, AC11.3 or AC11.4. The behaviour is
+   probably covered under other names (W4 closed the last round of this), so
+   the work is to find each covering test and cite the AC id in its docstring,
+   and to add an asserting test, refusal path included, wherever none exists.
+   Tests only, no `src/jumar/` change.
+   *Validation:* `make check`, then every AC id in
+   `specs/02-functional-spec.md` appears in `tests/`:
+   `for ac in $(grep -oE '^- AC[-A-Z0-9.]+' specs/02-functional-spec.md | sed 's/- //' | sort -u); do grep -rqE "\b$ac\b" tests/ || echo "$ac"; done`
+   prints nothing.
+   *Closes:* the AC ids above.
+   *Branch slug:* `cite-ac-ids-in-tests`
 
-### Phase 17 — remaining decisions
+W14. **spec-loop-single-flight-lock**: `specs/05-operator-tooling.md` Known
+   gaps: an overlapping scheduled `loop.sh` invocation duplicates work. Add a
+   lock to `tools/spec-loop/lib.sh` with the product's semantics (PID-stamped,
+   live lock exits 0 with `already_running`, stale lock reclaimed).
+   *Validation:* `bash -n tools/spec-loop/loop.sh tools/spec-loop/lib.sh` +
+   `bash tools/spec-loop/tests/test_runner_fixtures.sh` extended with a live
+   lock refusing a second run and a stale lock being reclaimed.
+   *Closes:* 05's second Known gap.
+   *Branch slug:* `spec-loop-single-flight-lock`
 
-W10. **authored-check-pinning (`@check=`)** — `specs/02-functional-spec.md:45`
-   lists `@check=` among the tokens parsed into an item's `meta` map, and
-   `USAGE.md:589` says "Rules worth knowing before you write a `@check=` by
-   hand". Neither is true: nothing in `ingest.py` consumes it and nothing
-   constructs a `Check` from it. `tests/test_ingest.py:121` pins the current
-   behaviour — `- [ ] Sub @check=command` yields `authored_subtasks ==
-   ("Sub",)` — so the token is parsed, stripped from the subtask text, and
-   discarded. It fails silently: the token vanishes from the printed plan
-   exactly as it would if it had been honoured, while decompose still asks
-   the model for a check.
-
-   This matters beyond tidiness. `decompose` asks the model to author checks
-   even when the breakdown is authored (`_authored_prompt`, `decompose.py:145`
-   — "Supply a `check` for each"), so the check — the system's whole unit of
-   trust — is always model-chosen. A user-written check is what makes a
-   weaker or local execute model safe to use.
-
-   Design note before any code: `_META_RE` is `@([\w-]+)=(\S+)`
-   (`ingest.py:51`), which stops at whitespace, so a token can never hold an
-   argv like `python3 /path/verify.py --kind=stale-pr /path/file.md`. The
-   honest shape is probably a `check:` line under the subtask rather than a
-   trailing token; that makes `authored_subtasks: list[str]`
-   (`report.py:546`, `models.py`) a record of text plus optional check, which
-   ripples into `PlanResult`, `format_plan_text`, `_authored_prompt` and
-   `_parse_and_validate`. One seam, real work.
-
-   Shape: honour an author-written check for a subtask, or reject the token
-   at ingest with a warning. Silently accepting it is the one option to rule
-   out. Which of the two, and the syntax if the first — human decision.
-
-   *Validation (once decided):* `make check` + `pytest tests/test_ingest.py
-   tests/test_decompose.py -q`, extended with: an authored check reaching
-   `Plan` unmodified and the model never asked to supply one for that
-   subtask; the same check rejected at planning time if it violates the
-   existing check rules (no shell wrapper, must be able to fail).
-   *Closes:* `specs/02-functional-spec.md:45`'s token list and USAGE §9's
-   by-hand claim — or corrects both, if rejection is chosen.
-   *Branch slug:* `authored-check-pinning`
-
-W11. **plan-dry-run-decompose-contract** — README's Status table says
-   "`jumar plan` | Ingest, select, decompose, print. `--dry-run` stops before
-   execution", and §Quick start says it "decomposes the next eligible item
-   and prints the subtasks and their checks". Neither holds. The only
-   `decompose()` call site in `cli.py` is line 499, inside the run pipeline;
-   `_cmd_plan` does ingest → select → print and returns (`cli.py:296` — plain
-   `jumar plan` prints "full pipeline not yet implemented" and exits 2).
-   Checks cannot be printed regardless: `PlanResult.authored_subtasks` is
-   `list[str]` (`report.py:546`), so `format_plan_text` and
-   `format_plan_json` have no check data to render. The documented behaviour
-   already exists as `jumar run --dry-run`, which decomposes, journals
-   `plan_created`, and stops at `GateDecision.dry_run`.
-
-   Shape: most likely the docs are the stale artefact and should point at
-   `run --dry-run`; the alternative is making `plan --dry-run` decompose and
-   carrying checks on `PlanResult`. Do not guess which — same convention as
-   W5.
-
-   *Validation (once decided):* if docs are corrected — no `src/jumar/`
-   change. If `plan` is changed — `make check` + `pytest tests/test_cli.py -q`
-   with `plan --dry-run` asserted to journal `plan_created` and render each
-   subtask's check in both text and `--json`.
-   *Closes:* README's Status table row and Quick start claim.
-   *Branch slug:* `plan-dry-run-decompose-contract` (only if the code route
-   is chosen)
-
-W5. **NEEDS A HUMAN DECISION before any code — halt-on-fail / run-level item
-   loop.** Stage 7's prose says budget exhaustion means "the run moves to the
-   next eligible item (or halts entirely under `--halt-on-fail`)" and AC7.4
-   requires the same choice. But confirmed by reading `cli.py`'s `_cmd_run`
-   and `_cmd_resume` in full: **a single `jumar run`/`jumar resume` invocation
-   only ever selects and processes one item, then returns** — there is no
-   loop over multiple eligible items within one process for `--halt-on-fail`
-   to interrupt. `USAGE.md` itself documents this as intentional ("one item
-   per invocation, under the single-flight lock"), matching the scheduler
-   design (cron/launchd re-invoke `jumar run` per tick) and the single-flight
-   lock. `config.halt_on_fail` and `RepairExhausted.halt` are wired correctly
-   as far as they go (`repair.py` sets `.halt` from config, tested in
-   `tests/test_repair.py`) but `.halt` is never read anywhere in `cli.py` —
-   confirmed by grep — so it has no effect regardless of value, and there is
-   also no `--halt-on-fail` CLI flag in `cli.py`'s argparse despite the spec
-   writing it as one.
-
-   This is not a small bug fix: closing it "as written" means adding a
-   multi-item loop to a single `jumar run` invocation, which is a real
-   architecture change to something `USAGE.md` currently documents as
-   one-item-per-invocation by design. The alternative is that AC7.4/Stage 7's
-   prose is the stale artefact (written before or independent of the
-   one-item-per-invocation decision) and should be corrected to match the
-   shipped design, with `config.halt_on_fail` and `RepairExhausted.halt` either
-   removed as vestigial or repurposed for a future multi-item mode. Do not
-   guess which; that's exactly the kind of premise P2 was closed over.
-
-   *Validation (once decided):* if a run-level loop is chosen — `make check` +
-   `pytest tests/test_run.py -q` with a fixture todo file with two eligible
-   items: default behaviour exhausts item A's repair budget and still attempts
-   item B; `--halt-on-fail` stops after A fails and B is never selected. If the
-   spec is corrected instead — no `src/jumar/` change; a human/`update`-beat
-   edit to `specs/02-functional-spec.md` Stage 7, and this item closes without
-   a branch.
-   *Closes:* AC7.4, once the premise is resolved.
-   *Branch slug:* `resolve-halt-on-fail-semantics` (only if the multi-item
-   route is chosen).
+W15. **spec-loop-verify-mode**: `specs/05-operator-tooling.md` Known gaps:
+   the runner trusts the beat to have run its Validation command.
+   `SPEC_LOOP_VERIFY=1` re-runs `make check` after a build iteration commits
+   and reports a red result instead of treating the iteration as done.
+   *Validation:* as W14, with fixtures for a green and a red `make check`.
+   *Closes:* 05's first Known gap.
+   *Branch slug:* `spec-loop-verify-mode`
 
 ---
 
@@ -271,7 +195,8 @@ P2. **parallel-independent-subtasks** — **CLOSED 2026-08-22 by the human.**
 - **The enforced boundary is *send*, not *fetch*** (decided 2026-08-08).
   `network` IS a default capability and `curl`/`wget` are allowed. `mail`,
   `mailx`, `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`, `rsync` are
-  denied, and `git push` / `gh` stay hard-denied in every dispatched argv. Do
+  denied, and `git push` / `gh` stay hard-denied in every dispatched argv
+  (read-only GitHub goes through `jumar-gh`, never a relaxed `gh`). Do
   not plan a work item that relaxes the send boundary, nor one that claims the
   allow list is a sandbox: with `python3` allowed and the network reachable
   it is defence in depth, and the container is the control.
@@ -289,14 +214,13 @@ P2. **parallel-independent-subtasks** — **CLOSED 2026-08-22 by the human.**
   condition is written up in P2 and requires an enforced per-subtask
   filesystem sandbox, not just wall-clock pain.
 - **The product pointing at its own plan** is a milestone, not a dependency —
-  nothing in `src/getstuffdone/` may assume it is being run against this repo.
+  nothing in `src/jumar/` may assume it is being run against this repo.
 
 ## Manual follow-ups (USER-side; not loop work items — do not build these)
 
 - **Register `jumar.dev`** (or chosen domain) if wanted — nice-to-have, not a gate.
 - Confirm which agent CLI is on PATH before the first loop run
   (`SPEC_LOOP_AGENT`, default `claude`); run in a sandbox with no push credentials.
-- Regenerate the `USAGE.md` §2/§4 transcripts (still show uuid-era run ids).
 - **README: quote the wall-clock price** (from P2's closure) — a subtask is a
   full agentic session of eight to ten model round trips, serial because each
   is verified before the next starts, so fifteen subtasks is about an hour
