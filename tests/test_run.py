@@ -335,6 +335,43 @@ def test_run_exits_zero_when_nothing_is_eligible(
     assert "Nothing eligible" in out
 
 
+def test_run_counts_human_paused_items_apart_from_parked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """@paused=human items are counted as with a person, not listed as parked."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text(
+        "- [ ] Broken task @failed=3 @paused=auto-failures\n"
+        "- [ ] Record the video @paused=human\n"
+        "- [ ] Edit the video @paused=human\n"
+    )
+
+    rc = cli._cmd_run(_Args(), _run_agent=honest_agent)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Parked (1):" in out
+    assert "Broken task" in out
+    assert "With a person: 2" in out
+    assert "Record the video" not in out
+    assert "Edit the video" not in out
+
+
+def test_run_prints_no_parked_list_when_every_paused_item_is_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A person's work alone is not stuck, so no Parked heading is printed."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "todo.md").write_text("- [ ] Record the video @paused=human\n")
+
+    rc = cli._cmd_run(_Args(), _run_agent=honest_agent)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Parked" not in out
+    assert "With a person: 1" in out
+
+
 def test_run_journals_item_deferred_for_a_not_before_gated_item(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

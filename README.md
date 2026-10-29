@@ -188,6 +188,7 @@ never treated as work.
 | `@every=` | Recurrence: `weekday`, `1d`, `2w`, `mon,thu`. |
 | `@failed=` | Consecutive failure count. Written by the system, cleared on success. |
 | `@paused=` | Parked; never selected. Written by the system at the failure threshold. |
+| `@paused=human` | A person's work; never selected, and reported as with a person rather than parked. |
 
 An indented task list under an item is **your** breakdown and is used verbatim;
 the model is only asked to supply acceptance checks for steps that lack one.

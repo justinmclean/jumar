@@ -17,6 +17,11 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
+# ``@paused=human`` marks an item a person is doing. Jumar never selects it,
+# like any parked item, but reports it as a person's work rather than as stuck.
+HUMAN_PAUSE_REASON = "human"
+
+
 class ItemStatus(enum.StrEnum):
     pending = "pending"
     in_progress = "in_progress"

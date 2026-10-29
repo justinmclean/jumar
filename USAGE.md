@@ -289,6 +289,7 @@ current todo file. One row per item.
 | `NEVER-ATTEMPTED` | Eligible, but no journal has ever touched this item. |
 | `DEFERRED` | `@not-before=` is in the future; next eligibility instant shown. |
 | `BLOCKED` | Unsatisfied `@depends=` edge. |
+| `HUMAN` | `@paused=human`: a person's work. Never selected, and not counted as parked. |
 | `PARKED` | `@paused=` token present; the item is skipped until you remove it. |
 | `DONE` | Checkbox checked in the file. |
 

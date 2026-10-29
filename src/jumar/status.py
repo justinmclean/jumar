@@ -11,7 +11,8 @@ format_status() – human-readable one-line-per-item summary.
 States
 ------
 done            – checkbox is checked in the todo file.
-parked          – item carries a @paused= token; ineligible until removed by hand.
+human           – item carries @paused=human: a person's work, never selected.
+parked          – item carries any other @paused= token; ineligible until removed by hand.
 deferred        – not_before is in the future; next eligibility included.
 blocked         – unmet @depends= dependency.
 eligible        – pending, no gate.
@@ -28,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .models import HUMAN_PAUSE_REASON
+
 # ---------------------------------------------------------------------------
 # Data shapes
 # ---------------------------------------------------------------------------
@@ -39,8 +42,8 @@ class ItemStatusLine:
 
     item_id: str
     text: str
-    state: str  # done | parked | deferred | blocked | eligible | never-attempted
-    paused_reason: str | None = None  # non-None when state=parked
+    state: str  # done | human | parked | deferred | blocked | eligible | never-attempted
+    paused_reason: str | None = None  # non-None when state=human or parked
     failure_count: int = 0  # @failed=N count from the todo line
     last_run_id: str | None = None
     last_run_at: str | None = None  # ISO-8601 UTC of run_started
@@ -272,10 +275,13 @@ def build_status(
         # --- derive state ---
         paused_reason: str | None = item.meta.get("paused") or None
 
-        if paused_reason is not None:
-            state = "parked"
-        elif item.status.value == "done":
+        # A ticked box wins over a leftover @paused= token, as it does in select.
+        if item.status.value == "done":
             state = "done"
+        elif paused_reason == HUMAN_PAUSE_REASON:
+            state = "human"
+        elif paused_reason is not None:
+            state = "parked"
         elif item.item_id in deferred_ids:
             state = "deferred"
         elif item.item_id in blocked_ids:
