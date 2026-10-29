@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .models import HUMAN_PAUSE_REASON
+
 # ---------------------------------------------------------------------------
 # Data shapes
 # ---------------------------------------------------------------------------
@@ -293,7 +295,7 @@ def build_report(run_dir: Path) -> RunReport:
                 ReportItem(
                     item_id=iid,
                     text=text,
-                    status="parked",
+                    status="human" if reason == HUMAN_PAUSE_REASON else "parked",
                     blocked_reason=reason,
                 )
             )
@@ -332,6 +334,7 @@ def format_summary(report: RunReport) -> str:
     deferred = [i for i in report.items if i.status == "deferred"]
     blocked = [i for i in report.items if i.status == "blocked"]
     parked = [i for i in report.items if i.status == "parked"]
+    human = [i for i in report.items if i.status == "human"]
     in_progress = [i for i in report.items if i.status == "in_progress"]
     overdue_done = [i for i in done if i.is_overdue]
 
@@ -351,6 +354,8 @@ def format_summary(report: RunReport) -> str:
         parts.append(f"{len(blocked)} blocked")
     if parked:
         parts.append(f"{len(parked)} parked")
+    if human:
+        parts.append(f"{len(human)} with a person")
     if in_progress:
         parts.append(f"{len(in_progress)} in progress (interrupted)")
 
@@ -415,6 +420,7 @@ def format_markdown(report: RunReport) -> str:
     deferred = [i for i in report.items if i.status == "deferred"]
     blocked = [i for i in report.items if i.status == "blocked"]
     parked = [i for i in report.items if i.status == "parked"]
+    human = [i for i in report.items if i.status == "human"]
     skipped = [i for i in report.items if i.status == "skipped_by_human"]
     overdue_done = [i for i in done if i.is_overdue]
 
@@ -432,6 +438,8 @@ def format_markdown(report: RunReport) -> str:
         lines.append(f"| Blocked | {len(blocked)} |")
     if parked:
         lines.append(f"| Parked | {len(parked)} |")
+    if human:
+        lines.append(f"| With a person | {len(human)} |")
     if skipped:
         lines.append(f"| Skipped by human | {len(skipped)} |")
     if overdue_done:
@@ -467,6 +475,14 @@ def format_markdown(report: RunReport) -> str:
         for item in parked:
             reason = item.blocked_reason or "auto-failures"
             lines.append(f"- **{item.text}**: {reason}")
+        lines.append("")
+
+    # A person's work (@paused=human) — not stuck, just not Jumar's to do.
+    if human:
+        lines.append("## With a Person")
+        lines.append("")
+        for item in human:
+            lines.append(f"- **{item.text}**")
         lines.append("")
 
     # Failed items — AC9.1.

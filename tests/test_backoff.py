@@ -612,6 +612,37 @@ def test_report_shows_parked_items(tmp_path: Path) -> None:
     assert "parked" in summary
 
 
+def test_report_lists_human_paused_items_apart_from_parked(tmp_path: Path) -> None:
+    """@paused=human items are a person's work, not counted as parked."""
+    run_dir = _make_run_dir(tmp_path)
+    journal = Journal(run_dir / "journal.jsonl", run_dir.name)
+
+    journal.append(RUN_STARTED, payload=_RUN_STARTED_PAYLOAD)
+    journal.append(
+        ITEM_PARKED,
+        item_id="item-1",
+        payload={"text": "Broken task", "reason": "auto-failures"},
+    )
+    journal.append(
+        ITEM_PARKED,
+        item_id="item-2",
+        payload={"text": "Record the video", "reason": "human"},
+    )
+    journal.append(RUN_FINISHED, payload={"exit_status": 0})
+
+    report = build_report(run_dir)
+    md = format_markdown(report)
+    summary = format_summary(report)
+
+    assert "| Parked | 1 |" in md
+    assert "| With a Person |" not in md
+    assert "| With a person | 1 |" in md
+    assert "## With a Person\n\n- **Record the video**" in md
+    assert "1 parked" in summary
+    assert "1 with a person" in summary
+    assert report_exit_status(report) == 0
+
+
 def test_parked_item_does_not_affect_exit_status(tmp_path: Path) -> None:
     """A run with only parked items exits 0 (parked ≠ failed)."""
     run_dir = _make_run_dir(tmp_path)

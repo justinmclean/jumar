@@ -127,6 +127,24 @@ def test_parked_item_shows_reason(tmp_path: Path) -> None:
     assert line.paused_reason == "auto-failures"
 
 
+def test_human_paused_item_is_a_persons_work_not_parked(tmp_path: Path) -> None:
+    todo = tmp_path / "todo.md"
+    _write_todo(
+        todo,
+        "- [ ] Record the video @id=item1 @paused=human\n"
+        "- [x] Write the outline @id=item2 @paused=human\n",
+    )
+    config = _make_config(tmp_path, str(todo))
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+
+    report = build_status(todo, runs_dir, config, _now())
+
+    states = {line.item_id: line.state for line in report.items}
+    assert states == {"item1": "human", "item2": "done"}
+    assert "[HUMAN" in format_status(report)
+
+
 def test_failure_count_from_failed_token(tmp_path: Path) -> None:
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Flaky task @id=item1 @failed=2\n")

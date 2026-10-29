@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .models import HarnessInfo
+from .models import HUMAN_PAUSE_REASON, HarnessInfo
 
 SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
 
@@ -982,10 +982,14 @@ def _cmd_run(
                     print("No more eligible work.")
                 if sel.next_eligible_at:
                     print(f"Next eligible: {sel.next_eligible_at}")
-                if sel.parked:
-                    print(f"Parked ({len(sel.parked)}):")
-                    for p_item, p_reason in sel.parked:
+                stuck = [(i, r) for i, r in sel.parked if r != HUMAN_PAUSE_REASON]
+                with_person = len(sel.parked) - len(stuck)
+                if stuck:
+                    print(f"Parked ({len(stuck)}):")
+                    for p_item, p_reason in stuck:
                         print(f"  - {p_item.text!r}  [paused: {p_reason}]")
+                if with_person:
+                    print(f"With a person: {with_person}")
                 break
 
             selected_item_id = sel.selected.item_id
