@@ -22,7 +22,7 @@ from .config import Config, resolve_harness
 from .harness import AgentResult, detect_harness_error
 from .harness import run_agent as _default_run_agent
 from .journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, HARNESS_ERROR, Journal
-from .models import Attempt, HarnessInfo, Subtask, TodoItem, VerificationResult
+from .models import Attempt, Capability, HarnessInfo, Subtask, TodoItem, VerificationResult
 
 # ---------------------------------------------------------------------------
 # Prompt construction
@@ -50,12 +50,18 @@ def _build_prompt(
 ) -> str:
     ctx_block = ("\nContext:\n" + "\n".join(item.context)) if item.context else ""
     evidence_block = _prior_evidence_block(prior_evidence)
+    gh_block = (
+        "\n\n`gh` is refused. For GitHub data run `jumar-gh` with the same"
+        " arguments; it allows read-only commands only."
+        if Capability.network in subtask.capabilities
+        else ""
+    )
     return (
         "You are executing exactly one subtask of a larger todo item.\n\n"
         f"Todo item: {item.text}{ctx_block}\n\n"
         f"Subtask {subtask.index + 1}: {subtask.description}\n\n"
         "Execute ONLY this subtask. Do not proceed to subsequent subtasks."
-        f"{evidence_block}\n\n"
+        f"{gh_block}{evidence_block}\n\n"
         "When done, summarise what you did in one sentence."
     )
 

@@ -24,6 +24,8 @@ from enum import StrEnum
 from pathlib import Path, PurePath
 from typing import Any, cast
 
+from .gh_readonly import is_read_only as is_read_only_gh
+
 # ---------------------------------------------------------------------------
 # Enumerations
 # ---------------------------------------------------------------------------
@@ -127,6 +129,8 @@ _DEFAULT_ALLOW: tuple[str, ...] = (
     # fetchers — network is a default capability
     "curl",
     "wget",
+    # read-only GitHub; `gh` itself is hard-denied below
+    "jumar-gh",
 )
 
 # Deny wins over allow. These are the *send* vectors: the boundary is outbound
@@ -746,9 +750,10 @@ def is_allowed(argv: list[str], config: Config) -> bool:
     Rules applied in order (first match wins):
     1. Empty argv → denied.
     2. Matches a hard-deny prefix (git push, gh) → denied unconditionally.
-    3. argv[0] in the deny list → denied.
-    4. argv[0] not in the allow list → denied.
-    5. Otherwise → allowed.
+    3. jumar-gh with arguments that are not read-only → denied.
+    4. argv[0] in the deny list → denied.
+    5. argv[0] not in the allow list → denied.
+    6. Otherwise → allowed.
     """
     if not argv:
         return False
@@ -770,6 +775,11 @@ def is_allowed(argv: list[str], config: Config) -> bool:
     # simple prefix check above. Scan the full argv for "push" as a token;
     # no legitimate git flag value is the string "push", so this is safe.
     if cmd == "git" and "push" in normalised[1:]:
+        return False
+
+    # jumar-gh refuses writes itself; checking here too gives the agent the
+    # policy's capability_denied instead of a gh error.
+    if cmd == "jumar-gh" and not is_read_only_gh(normalised[1:]):
         return False
 
     if cmd in config.commands.deny:

@@ -53,10 +53,12 @@ UNRESTRICTED_HARNESSES: frozenset[str] = frozenset(
 
 # Hard-deny tool patterns embedded in every claude invocation.
 # These mirror the spec-loop's --disallowedTools defence in depth.
+# Read-only GitHub goes through `jumar-gh` (gh_readonly.py), which a prefix
+# pattern here does not match.
 _CLAUDE_HARD_DENY_TOOLS: tuple[str, ...] = ("Bash(git push:*)", "Bash(gh:*)")
 
 # claude tool names to disable when network capability is not granted.
-_CLAUDE_NO_NETWORK_TOOLS: tuple[str, ...] = ("WebSearch", "WebFetch")
+_CLAUDE_NO_NETWORK_TOOLS: tuple[str, ...] = ("WebSearch", "WebFetch", "Bash(jumar-gh:*)")
 
 # Every tool claude exposes. Disabled wholesale for PLANNING calls.
 #
