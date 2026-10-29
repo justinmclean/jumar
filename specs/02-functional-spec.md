@@ -56,6 +56,8 @@ Markdown task list items into `TodoItem` records.
   `@due=`, `@every=`. Unknown keys are preserved and ignored, never an error.
   `@check=` is the exception: a token cannot hold an argv, so it produces a
   parse warning pointing at the `check:` line and is otherwise ignored.
+  `@max-subtasks=` must be a positive integer; any other value produces a parse
+  warning naming the config `max_subtasks` that applies instead.
 - **Schedule tokens** parse into the item's `schedule` (`Schedule` in
   `03-data-model.md`):
   - `@not-before=2026-08-11` / `@not-before=2026-08-11T09:00` — the item is not
@@ -217,8 +219,9 @@ Hard rules enforced by the code, not by the prompt:
   any reason connected to the work (`true`, `echo`, `date`, `ls` with no
   operands, …) is rejected at construction. A check that always passes is
   "trust me" with extra steps.
-- The plan is capped at `max_subtasks` (config, default 12; `@max-subtasks=`
-  overrides). A longer plan is rejected and the item is flagged for the human to
+- The plan is capped at `max_subtasks` (config, default 12; a valid
+  `@max-subtasks=` overrides it, and the overriding cap is the one the
+  decomposition prompt states and the one the length check enforces). A longer plan is rejected and the item is flagged for the human to
   split — a 40-step item is a mis-sized todo, not a long run.
 - Subtasks are ordered; `depends_on` between subtasks is allowed but must form a
   DAG within the item.
@@ -311,6 +314,28 @@ The executor never marks a subtask successful. It records an `Attempt`
 touched) and hands straight to stage 6. The agent's own "I'm done" is stored as
 a *claim* on the attempt, never as the outcome.
 
+**GitHub access.** `gh` stays hard-denied (AC8.4) because an argv prefix cannot
+tell `gh pr view` from `gh pr merge`. Read-only GitHub goes through the
+`jumar-gh` console script (`gh_readonly.py`), which parses the arguments and
+execs `gh` only for reads: `api` GETs with no method, field or input flags,
+`api graphql` queries carrying no `mutation`, `issue`/`pr`
+view/list/status (plus `pr` diff/checks), `search`, `run`/`release`/`workflow`
+view/list, `repo view` and `label list`. Anything it does not recognise is
+refused. `jumar-gh` is on the default allow list, `is_allowed()` applies the
+same read-only test so a write is `capability_denied` rather than a `gh` error,
+and it is unavailable to the Claude harness when `network` is not granted. The
+decomposition rules, and the execute prompt of any subtask granted `network`,
+tell the agent to use it in place of `gh`.
+
+**Harness errors.** An attempt whose agent exited **non-zero** with output
+carrying the signature of a usage limit, an authentication failure, a missing
+agent binary or a transport failure is a harness error: the harness never ran
+the prompt. The item fails with `harness_error` at once, with no repair, and
+the failure does not advance `@failed=` (stage 8). An attempt that exited 0
+returned a response and is never classified as a harness error, whatever its
+output says; a report that mentions "timed out" or a login is the agent's work,
+not an outage.
+
 **Progress output.** A run emits one human-facing line per stage transition on
 **stderr only** (`progress.py`); `--verbose` additionally echoes the agent's
 captured output after each attempt. Progress is suppressed under `--json` and
@@ -352,7 +377,7 @@ Check kinds:
 |---|---|---|
 | `command` | the command exits 0 (configurable expected status) | argv, exit code, captured stdout/stderr (truncated) |
 | `file` | the named path exists and matches the required pattern/predicate | path, size, hash, matched excerpt |
-| `absence` | the named path/pattern is gone | path, resolved glob |
+| `absence` | the named path or glob matches nothing; with `pattern`, no file it names contains that regex | path, resolved glob, matches; with `pattern`, the offending lines |
 | `judge` | an independent agent, given only the artefacts and the acceptance statement, returns `pass` | verdict, one-line reason, artefact list |
 | `manual` | the human confirms at the prompt | who, when, response |
 
@@ -368,6 +393,11 @@ Rules:
   evidence, before any pattern matching runs — a fetch that produced an empty
   file must not pass on "the path exists". On a pattern miss, the evidence
   includes a `content_head` excerpt so the report shows what was actually there.
+- An `absence` check **with** `pattern` asserts content, not existence: it
+  passes when no file the path or glob names contains the regex, including when
+  the path does not exist, and fails with each hit's path and line. A file it
+  cannot read is `inconclusive`. Without `pattern`, an existing file would fail
+  the check however clean it is, and no repair could pass it.
 - The `command` verifier consults the argv allow/deny policy (`is_allowed()`)
   **before** spawning: a denied argv is `inconclusive` with `capability_denied`
   evidence and no process is ever started.
@@ -459,7 +489,8 @@ byte-preserving outside that line. When the count reaches
 appended **once** — the item is parked (AC2.11) so an unattended schedule stops
 burning attempts on it. A later success removes `@failed=` but leaves
 `@paused=` in place: resuming a parked item is a deliberate human act (delete
-the token), never an automatic one.
+the token), never an automatic one. A `harness_error` failure (stage 5) does
+not advance the count: an outage is not evidence the item is broken.
 
 **Acceptance criteria**
 
