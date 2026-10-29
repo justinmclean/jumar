@@ -103,7 +103,7 @@ The executable proof a subtask worked. Produced by stage 3, consumed by stage 6.
 | `expect_status` | int | default 0 |
 | `expect_stdout` | str \| None | optional regex the output must match |
 | `path` | str \| None | for `file` / `absence`; repo-relative |
-| `pattern` | str \| None | regex the file's contents must match (`file`) |
+| `pattern` | str \| None | regex the file's contents must match (`file`), or that no named file may contain (`absence`) |
 | `rationale` | str \| None | **required** when `kind=judge`: why no executable check is possible |
 | `timeout_s` | int | default 300 |
 
@@ -319,7 +319,7 @@ execute = { model = "opus" }     # [jumar.harness]. Select with --harness-profil
 schedule_backend = "cron"   # optional; cron | launchd | systemd. Unset = platform default
 
 [jumar.commands]
-allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget"]  # argv[0] allow-list (fetchers allowed)
+allow = ["python3", "pytest", "ruff", "git", "make", "curl", "wget", "jumar-gh"]  # argv[0] allow-list (fetchers allowed)
 deny  = ["mail", "mailx", "sendmail", "ssmtp", "msmtp", "ssh", "scp", "sftp", "rsync"]  # send vectors
 allow_also = ["jq"]          # appended to allow instead of replacing it
 ```
@@ -330,7 +330,9 @@ time with `capability_denied`, before the process is spawned. The deny list
 holds the **send** vectors: the enforced boundary is outbound transmission,
 not outbound reading — `network` is a default capability and `curl`/`wget`
 are allowed, because an agent that cannot fetch a primary source fabricates it
-instead. `git push` and `gh` are hard-denied regardless of these lists. An
+instead. `git push` and `gh` are hard-denied regardless of these lists;
+`jumar-gh` is the read-only route to GitHub, and a `jumar-gh` argv that is not
+a read is refused even when `jumar-gh` is allowed. An
 unknown key under `[jumar.harness]` or a stage table other than
 `decompose`/`execute`/`judge` is a startup error, not a silent no-op.
 
