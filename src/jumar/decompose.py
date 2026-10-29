@@ -138,6 +138,10 @@ _RULES = [
     " assert a file does not CONTAIN something, give `pattern` as well.",
     "- `depends_on` must list 0-based subtask indices and must form a DAG (no cycles).",
     "- `capabilities` must be a subset of the granted capabilities.",
+    "- `gh` is always refused, in subtasks and in checks. For GitHub data use"
+    " `jumar-gh` with the same arguments: it runs read-only gh commands"
+    " (`api` GETs, `api graphql` queries, `issue`/`pr` view, list, diff and"
+    " checks, `search`) and refuses everything else. It needs `network`.",
     "- Do NOT use tools, read files, run commands, or browse. Answer from this"
     " prompt alone. You are writing a plan, not doing the work.",
     "- Return ONLY valid JSON — no prose, no markdown fences.",
