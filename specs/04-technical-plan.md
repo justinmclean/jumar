@@ -43,6 +43,7 @@ src/jumar/
   lock.py           # single-flight run lock, stale-lock reclaim
   journal.py        # append-only journal + replay/resume
   harness.py        # agent CLI abstraction (see below)
+  gh_readonly.py    # `jumar-gh` console script: read-only gh, refuses writes
 tests/              # one module per stage, plus fixtures/ and golden/
 ```
 
@@ -92,6 +93,10 @@ never a partial accept.
   container/VM with restricted egress and no push credentials.
 - `git push` and `gh` are **hard-denied** in every dispatched argv, mirroring the
   spec loop's `--disallowedTools` defence in depth. AC8.4 tests this.
+  Read-only GitHub goes through `jumar-gh` (`gh_readonly.py`), which a `gh`
+  prefix pattern does not match; it parses its arguments and execs `gh` only
+  for reads, `is_allowed()` repeats that test, and the Claude harness disables
+  `Bash(jumar-gh:*)` when `network` is not granted.
 - Command checks use `subprocess.run` with an argv list, `shell=False`, a
   timeout, and captured output. No shell string interpolation, anywhere.
 
