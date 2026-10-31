@@ -64,7 +64,7 @@ def _ctx(tmp_path: Path, **kw: object) -> VerifyContext:
     ],
 )
 def test_shell_wrapper_is_refused_at_construction(argv: tuple[str, ...]) -> None:
-    """``bash -c`` defeats shell=False and the allow list in one argv element."""
+    """``bash -c`` defeats shell=False and the allow list in one argv element (AC3.7)."""
     with pytest.raises(ValueError, match="shell wrapper"):
         Check(kind=CheckKind.command, statement="s", command=argv)
 
@@ -80,7 +80,7 @@ def test_shell_wrapper_is_refused_at_construction(argv: tuple[str, ...]) -> None
     ],
 )
 def test_a_real_argv_is_still_accepted(argv: tuple[str, ...]) -> None:
-    """The rule targets inline shell strings, not every use of an interpreter."""
+    """The rule targets inline shell strings, not every use of an interpreter (AC3.7)."""
     check = Check(kind=CheckKind.command, statement="s", command=argv)
     assert check.command == argv
 
@@ -104,7 +104,7 @@ def test_a_real_argv_is_still_accepted(argv: tuple[str, ...]) -> None:
     ],
 )
 def test_a_check_that_cannot_fail_is_refused(argv: tuple[str, ...]) -> None:
-    """An argv whose exit status is unrelated to the work proves nothing."""
+    """An argv whose exit status is unrelated to the work proves nothing (AC3.8)."""
     with pytest.raises(ValueError, match="cannot fail"):
         Check(kind=CheckKind.command, statement="s", command=argv)
 
@@ -118,6 +118,7 @@ def test_a_check_that_cannot_fail_is_refused(argv: tuple[str, ...]) -> None:
     ],
 )
 def test_a_falsifiable_check_is_accepted(argv: tuple[str, ...]) -> None:
+    """AC3.8: an argv with operands can fail, so it is accepted."""
     assert Check(kind=CheckKind.command, statement="s", command=argv).command == argv
 
 
@@ -127,7 +128,7 @@ def test_a_falsifiable_check_is_accepted(argv: tuple[str, ...]) -> None:
 
 
 def test_zero_byte_file_fails_the_check(tmp_path: Path) -> None:
-    """The exact shape of the real failure: HTTP 202, 0 bytes written, `test -f` passes."""
+    """AC6.8: the real failure shape: HTTP 202, 0 bytes written, `test -f` passes."""
     (tmp_path / "ai-act.html").write_bytes(b"")
     check = Check(
         kind=CheckKind.file,
@@ -141,6 +142,23 @@ def test_zero_byte_file_fails_the_check(tmp_path: Path) -> None:
     assert result.evidence["size_bytes"] == 0
     assert result.evidence["error"] == "file_is_empty"
     assert "empty" in result.summary.lower()
+
+
+def test_zero_byte_file_fails_even_when_a_pattern_is_given(tmp_path: Path) -> None:
+    """AC6.8: emptiness is decided before any pattern; the evidence says ``file_is_empty``."""
+    (tmp_path / "ai-act.html").write_bytes(b"")
+    check = Check(
+        kind=CheckKind.file,
+        statement="the AI Act text was fetched",
+        path="ai-act.html",
+        pattern="Article",
+    )
+
+    result = verify_file(check, ctx=_ctx(tmp_path))
+
+    assert result.verdict is Verdict.failed
+    assert result.evidence["error"] == "file_is_empty"
+    assert result.evidence["size_bytes"] == 0
 
 
 def test_non_empty_file_still_passes(tmp_path: Path) -> None:
@@ -166,7 +184,7 @@ def test_missing_file_still_fails(tmp_path: Path) -> None:
 def test_a_denied_argv_is_inconclusive_and_spawns_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Denied is `inconclusive`, never `failed` and never `passed` (S1)."""
+    """Denied is `inconclusive`, never `failed` and never `passed` (S1) (AC6.9)."""
     import subprocess
 
     def explode(*_a: object, **_kw: object) -> object:
@@ -183,6 +201,7 @@ def test_a_denied_argv_is_inconclusive_and_spawns_nothing(
 
 
 def test_an_allowed_argv_still_runs(tmp_path: Path) -> None:
+    """AC6.9: an argv the policy allows is spawned and judged on its exit status."""
     (tmp_path / "out.txt").write_text("OK\n")
     check = Check(
         kind=CheckKind.command,

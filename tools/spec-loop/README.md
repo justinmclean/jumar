@@ -81,6 +81,10 @@ time until you trust it.
 ## Stop / configure
 
 - Stop: `Ctrl+C`, or `touch STOP` (exits after the current iteration).
+- Single flight: the loop holds a PID-stamped lock (`.spec-loop.lock` at the
+  repo root, override with `SPEC_LOOP_LOCK`). A second `loop.sh` while one is
+  running exits 0 with `already_running`, so an overlapping scheduled
+  invocation never duplicates work; a lock left by a dead run is reclaimed.
 - `SPEC_LOOP_BASE` — branch to fork work items from (default `main`).
 - `SPEC_LOOP_AGENT` — headless agent CLI (default `claude`).
 - `SPEC_LOOP_HARNESS` — override the invocation convention when the CLI name
@@ -91,6 +95,14 @@ time until you trust it.
   before building (default `500`).
 - `SPEC_LOOP_OUTPUT_FORMAT` — `text` (default) or `stream-json` to watch live
   tool-call events when debugging.
+- `SPEC_LOOP_VERIFY=1` — do not trust the beat's claim that it ran its
+  Validation command: after a build/update iteration commits, the runner
+  re-runs the gate (`SPEC_LOOP_VERIFY_CMD`, default `make check`) on the
+  work-item branch. Green is reported and the loop continues. Red is reported
+  with the gate's output, the iteration is **not** treated as done, the branch
+  and commit are kept for review, and the loop stops with exit 1. The
+  runner-side equivalent of the product's stage 6. The command is split on
+  whitespace, so keep it a plain command line (no quoting or shell syntax).
 
 ## Security
 

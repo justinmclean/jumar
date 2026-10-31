@@ -12,6 +12,7 @@ dist/
 build/
 .env
 STOP
+.spec-loop.lock
 
 # Personal working state — the human's own list and run journals
 todo.md
