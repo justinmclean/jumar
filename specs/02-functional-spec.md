@@ -327,6 +327,20 @@ The executor never marks a subtask successful. It records an `Attempt`
 touched) and hands straight to stage 6. The agent's own "I'm done" is stored as
 a *claim* on the attempt, never as the outcome.
 
+**How the run ended.** Before stage 6 looks at anything, the attempt records
+its `termination`: `clean`, `step_cap` (out of tool-call steps without a final
+answer), `timed_out`, `truncated` (the generation hit `max_tokens`),
+`denied_tool` (the final answer came straight after a batch of refused tool
+calls), `harness_outage`, or `abnormal_exit` (a non-zero exit for any other
+reason). A harness that knows first-hand reports it — the in-process `openai`
+harness counts its steps and reads `finish_reason` — and otherwise it is
+derived, in this order: an outage, then a timeout, then what the harness
+reported, then a non-zero exit (`step_cap` when the output says the
+`--max-turns` limit was reached, else `abnormal_exit`), else `clean`. The
+Claude CLI in print mode exposes only its exit status, so for it `denied_tool`
+and `truncated` are not detected. `termination` is journalled on
+`attempt_finished`.
+
 **GitHub access.** `gh` stays hard-denied (AC8.4) because an argv prefix cannot
 tell `gh pr view` from `gh pr merge`. Read-only GitHub goes through the
 `jumar-gh` console script (`gh_readonly.py`), which parses the arguments and
@@ -381,7 +395,10 @@ is never contaminated by progress.
 - AC5.1 Exactly one subtask is dispatched per execute call; subtask `n+1` is
   never dispatched before subtask `n` has a verification verdict.
 - AC5.2 An attempt exceeding the timeout is terminated and recorded as
-  `timed_out`, and the item does not advance.
+  `timed_out`, and the item does not advance — even when what it left behind
+  would pass its check. The same holds for every termination but `clean`: a
+  step-capped run whose artefact satisfies a `file` + `pattern` check still
+  fails, with `unclean_termination`.
 - AC5.3 The evidence from verified prior subtasks is present in the prompt for
   the current subtask.
 - AC5.4 A subtask's attempt is journalled before its verification runs.
@@ -422,6 +439,16 @@ Rules:
   **not** a pass. It routes to repair like a failure, and if unresolved the item
   ends as `inconclusive`, distinct from `failed`.
 - A `manual` check in a non-interactive run is `inconclusive`, never auto-passed.
+- **Only a cleanly ended attempt is checked.** When the attempt's
+  `termination` (stage 5) is anything but `clean`, the check is not run: an
+  artefact a cut-off agent half wrote, or one an earlier attempt left, could
+  satisfy it for work that never finished. The verdict is `failed` with
+  `{error: "unclean_termination", termination, check_run: false}` evidence and
+  carries the termination class, journalled like any verdict. Repair still
+  runs (stage 7), so a clean repair can finish the work; an item whose last
+  attempt was cut off fails with `unclean_termination` rather than
+  `repairs_exhausted` or `check_failed`, and that failure advances `@failed=`
+  (it is not an outage).
 - A `file` check on a **zero-byte** path is `failed` with `file_is_empty`
   evidence, before any pattern matching runs — a fetch that produced an empty
   file must not pass on "the path exists". On a pattern miss, the evidence
