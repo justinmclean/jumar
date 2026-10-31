@@ -47,6 +47,9 @@
 #   SPEC_LOOP_PLAN_MAX plan line count that triggers ONE consolidation round
 #                      before building (default: 500)
 #   SPEC_LOOP_OUTPUT_FORMAT  text (default) | stream-json (live tool events)
+#   SPEC_LOOP_LOCK     single-flight lock file (default: <repo>/.spec-loop.lock).
+#                      A second loop.sh while one runs exits 0 with
+#                      `already_running`; a lock left by a dead run is reclaimed.
 
 set -uo pipefail
 
@@ -138,6 +141,26 @@ if ! [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
 fi
 
 [ -f "$PROMPT_FILE" ] || { echo "Error: $PROMPT_FILE not found" >&2; exit 1; }
+
+# Single flight: an overlapping scheduled invocation must not duplicate work.
+# Same semantics as the product's run lock — live holder wins and the newcomer
+# exits 0 with `already_running`; a dead holder's lock is reclaimed.
+LOCK_FILE="${SPEC_LOOP_LOCK:-$ROOT/.spec-loop.lock}"
+LOOP_PID=$BASHPID   # captured here: inside $(...) BASHPID would be the subshell's
+if ! lock_out="$(spec_loop_lock_acquire "$LOCK_FILE" "$LOOP_PID")"; then
+    echo "$lock_out — another spec-loop holds $LOCK_FILE; exiting."
+    exit 0
+fi
+[ -n "$lock_out" ] && echo "[ lock ] $lock_out"
+# Release on every exit path, but only from the top-level shell: the spinner
+# subshell inherits this trap and must never drop the lock from under the
+# running loop. (A child killed by signal before its exec evaluates the trap
+# unreliably; the loop never kills a just-forked job, so that path is unused.)
+release_lock_on_exit() {
+    if [ "$BASHPID" != "$LOOP_PID" ]; then return 0; fi
+    spec_loop_lock_release "$LOCK_FILE" "$LOOP_PID"
+}
+trap release_lock_on_exit EXIT
 
 if ! command -v "$AGENT" >/dev/null 2>&1; then
     echo "Error: agent CLI '$AGENT' not found on PATH." >&2
