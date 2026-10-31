@@ -97,6 +97,11 @@ never a partial accept.
   prefix pattern does not match; it parses its arguments and execs `gh` only
   for reads, `is_allowed()` repeats that test, and the Claude harness disables
   `Bash(jumar-gh:*)` when `network` is not granted.
+- The Claude harness also installs `shell_guard.py` as a fail-closed
+  `PreToolUse` hook on its Bash tool via `--settings`, because the patterns
+  above match command text. The guard is stdlib-only and runs isolated
+  (`python3 -I`); its hook command ends in `|| exit 2` because Claude treats
+  only exit 2 as a block. See stage 5 in `02-functional-spec.md`.
 - Command checks use `subprocess.run` with an argv list, `shell=False`, a
   timeout, and captured output. No shell string interpolation, anywhere.
 
