@@ -17,9 +17,12 @@ detect_harness_error() – classify a result as a harness-level infrastructure
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,6 +59,30 @@ UNRESTRICTED_HARNESSES: frozenset[str] = frozenset(
 # Read-only GitHub goes through `jumar-gh` (gh_readonly.py), which a prefix
 # pattern here does not match.
 _CLAUDE_HARD_DENY_TOOLS: tuple[str, ...] = ("Bash(git push:*)", "Bash(gh:*)")
+
+# The claude harness's Bash tool is also guarded by a PreToolUse hook that
+# reads each command line the way bash does (shell_guard.py). The patterns
+# above match command TEXT, which the agent writes: `echo hi;git push`,
+# `env git push` or `g'i't push` all get past them. The hook fails closed.
+_SHELL_GUARD = Path(__file__).resolve().with_name("shell_guard.py")
+
+
+def claude_guard_settings(*, network: bool) -> str:
+    """The ``--settings`` JSON that installs the shell guard as a PreToolUse hook.
+
+    The guard runs under ``python3 -I`` (isolated: no PYTHONPATH, no user
+    site, no script directory on sys.path) with the interpreter running jumar,
+    so it needs nothing installed and nothing from the agent's working tree.
+    Claude treats only exit status 2 as a block; ``|| exit 2`` turns every
+    other failure (a crash, a missing interpreter) into a block too.
+    """
+    guard = [sys.executable, "-I", str(_SHELL_GUARD)]
+    if not network:
+        guard.append("--no-network")
+    hook = {"type": "command", "command": shlex.join(guard) + " || exit 2", "timeout": 30}
+    settings = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [hook]}]}}
+    return json.dumps(settings, separators=(",", ":"))
+
 
 # claude tool names to disable when network capability is not granted.
 _CLAUDE_NO_NETWORK_TOOLS: tuple[str, ...] = ("WebSearch", "WebFetch", "Bash(jumar-gh:*)")
@@ -305,6 +332,7 @@ def build_argv(
         ]
         for tool in disallowed:
             argv += ["--disallowedTools", tool]
+        argv += ["--settings", claude_guard_settings(network=has_network)]
         argv += model_args
         if session_id is not None:
             argv += ["--session-id" if session_is_new else "--resume", session_id]
