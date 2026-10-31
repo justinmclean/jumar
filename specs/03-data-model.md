@@ -58,7 +58,11 @@ Two `meta` tokens are **written by the tool** as well as read (stage 8,
 `backoff.py`): `@failed=N` — consecutive-failure count, cleared on success —
 and `@paused=<reason>` — parks the item (AC2.11); `auto-failures` is the
 reason stage 8 writes at the threshold, and the human unparks by deleting the
-token.
+token. The reason `human` is reserved and only ever written by a person:
+`@paused=human` means the item is a person's work. It is excluded from
+selection like any parked item but surfaces as `human` / "with a person" in
+`status`, `run` and `report` rather than as parked. A checked checkbox takes
+precedence over any `@paused=` token.
 
 ## Schedule
 
