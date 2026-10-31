@@ -15,16 +15,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../lib.sh"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/spec-loop-test.XXXXXX")"
-# Only the top-level shell may clean up: subshells inherit this trap. Note the
-# guard cannot be relied on in a child killed by signal before its exec (bash
-# evaluates the trap unreliably there), so this file never kills a job it has
-# only just forked; see the lock tests below.
-TEST_PID=$BASHPID
-cleanup() {
-    if [ "$BASHPID" != "$TEST_PID" ]; then return 0; fi
-    rm -rf "$TMP"
-}
-trap cleanup EXIT
+# Clean up on interrupt and at the end of the script. Not an EXIT trap: bash
+# runs an inherited EXIT trap inside a forked child that dies before its exec,
+# which would delete $TMP from under the still-running test.
+trap 'rm -rf "$TMP"; exit 130' INT TERM
 
 PASS=0
 FAIL=0
@@ -109,8 +103,7 @@ LOCK="$TMP/spec-loop.lock"
 
 # A live holder: a background sleep we control.
 sleep 300 & LIVE_PID=$!
-# A dead holder: a child that has already exited and been reaped. It exits on
-# its own; killing a just-forked job races its exec and is not deterministic.
+# A dead holder: a child that has already exited and been reaped.
 ( exit 0 ) & DEAD_PID=$!
 wait "$DEAD_PID" 2>/dev/null
 
@@ -158,4 +151,5 @@ spec_loop_lock_release "$LOCK" "$$"
 echo ""
 echo "──────────────────────────────"
 echo "PASS: $PASS   FAIL: $FAIL"
+rm -rf "$TMP"
 [ "$FAIL" -eq 0 ]

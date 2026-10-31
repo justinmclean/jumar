@@ -152,15 +152,14 @@ if ! lock_out="$(spec_loop_lock_acquire "$LOCK_FILE" "$LOOP_PID")"; then
     exit 0
 fi
 [ -n "$lock_out" ] && echo "[ lock ] $lock_out"
-# Release on every exit path, but only from the top-level shell: the spinner
-# subshell inherits this trap and must never drop the lock from under the
-# running loop. (A child killed by signal before its exec evaluates the trap
-# unreliably; the loop never kills a just-forked job, so that path is unused.)
-release_lock_on_exit() {
-    if [ "$BASHPID" != "$LOOP_PID" ]; then return 0; fi
-    spec_loop_lock_release "$LOCK_FILE" "$LOOP_PID"
-}
-trap release_lock_on_exit EXIT
+# Release on Ctrl+C / TERM and at the end of the script. Deliberately NOT an
+# EXIT trap: bash runs an inherited EXIT trap inside a forked child that dies
+# before its exec, which would drop the lock from under the running loop.
+# Signal traps are reset in children, so this one only ever runs here. An
+# abnormal exit (set -u, a failed mktemp) leaves a lock stamped with a dead
+# pid, which the next run reclaims — the same contract as the product (AC10.6).
+release_lock() { spec_loop_lock_release "$LOCK_FILE" "$LOOP_PID"; }
+trap 'echo -e "\nStopping loop..."; release_lock; exit 0' INT TERM
 
 if ! command -v "$AGENT" >/dev/null 2>&1; then
     echo "Error: agent CLI '$AGENT' not found on PATH." >&2
@@ -399,3 +398,5 @@ while true; do
     fi
     echo ""
 done
+
+release_lock
