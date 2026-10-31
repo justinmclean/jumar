@@ -98,3 +98,25 @@ spec_loop_launch_agent() {
     fi
     SPEC_LOOP_AGENT_PID=$!
 }
+
+# ---- post-commit verification ------------------------------------------
+# The runner-side equivalent of the product's stage 6: do not trust the beat's
+# claim that its Validation command ran. Re-run the gate on the committed
+# branch and report the result. Kept deterministic (the command is an argument)
+# so the fixture tests can drive a green and a red gate without a real
+# `make check`.
+#   $1 log_file  where the gate's combined output is written
+#   $2.. cmd     the gate command and its arguments
+# Prints one verdict line to stdout and returns the gate's exit status.
+spec_loop_verify_iteration() {
+    local log_file=$1; shift
+    local rc
+    "$@" > "$log_file" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        printf '[ verify ] green: %s\n' "$*"
+    else
+        printf '[ verify ] RED (exit %s): %s — output in %s\n' "$rc" "$*" "$log_file"
+    fi
+    return "$rc"
+}
