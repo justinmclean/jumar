@@ -646,6 +646,7 @@ def test_unusable_max_subtasks_is_warned(tmp_path: Path, bad: str) -> None:
 
 
 def test_check_line_pins_a_command_check_on_its_subtask(tmp_path: Path) -> None:
+    """AC1.11: a check: line populates the matching authored_checks slot as a command check."""
     result = _todo(
         tmp_path,
         "- [ ] Main\n  - [ ] Fetch the data\n    check: test -s data.json\n  - [ ] Summarise it\n",
@@ -698,6 +699,7 @@ def test_check_line_does_not_end_the_subtask_list(tmp_path: Path) -> None:
 
 
 def test_check_token_on_subtask_is_warned_not_silently_dropped(tmp_path: Path) -> None:
+    """AC1.11: @check= on a subtask is a parse warning pointing at check:, not a silent drop."""
     result = _todo(tmp_path, "- [ ] Main\n  - [ ] Sub @check=command\n")
     item = result.items[0]
     assert item.authored_checks == ()
@@ -708,6 +710,7 @@ def test_check_token_on_subtask_is_warned_not_silently_dropped(tmp_path: Path) -
 
 
 def test_check_token_on_item_is_warned(tmp_path: Path) -> None:
+    """AC1.11: @check= on an item line is a parse warning, never an error."""
     result = _todo(tmp_path, "- [ ] Main @check=test\n")
     assert len(result.warnings) == 1
     assert result.warnings[0].line_no == 1
@@ -726,7 +729,7 @@ def test_check_token_on_item_is_warned(tmp_path: Path) -> None:
     ],
 )
 def test_bad_check_line_is_a_startup_error(tmp_path: Path, check_line: str, expected: str) -> None:
-    """An authored check jumar cannot honour must stop ingest, not fall back to the model."""
+    """AC1.11: an authored check jumar cannot honour is an IngestError naming the line."""
     with pytest.raises(IngestError) as exc_info:
         _todo(tmp_path, f"- [ ] Main\n  - [ ] Sub\n    {check_line}\n")
     assert "Line 3" in str(exc_info.value)
@@ -734,6 +737,7 @@ def test_bad_check_line_is_a_startup_error(tmp_path: Path, check_line: str, expe
 
 
 def test_check_line_without_a_subtask_is_a_startup_error(tmp_path: Path) -> None:
+    """AC1.11: a check: line with no authored subtask above it is refused at ingest."""
     with pytest.raises(IngestError, match="directly under an authored subtask"):
         _todo(tmp_path, "- [ ] Main\n  check: test -f a\n")
 
@@ -745,6 +749,7 @@ def test_check_line_after_prose_is_a_startup_error(tmp_path: Path) -> None:
 
 
 def test_second_check_for_one_subtask_is_a_startup_error(tmp_path: Path) -> None:
+    """AC1.11: two check: lines for one subtask are refused at ingest."""
     with pytest.raises(IngestError, match="second check"):
         _todo(
             tmp_path,
