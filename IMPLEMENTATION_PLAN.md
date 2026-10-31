@@ -10,11 +10,12 @@ never weaken a check to get green.
 
 ## What's been built
 
-**Current state (2026-10-29):** `main` HEAD is `2318b06` (PR #43). Every
+**Current state (2026-10-31):** `main` HEAD is `97d6e50` (PR #49). Every
 planned phase is merged, including the three decision-gated items the previous
-plan carried (W5, W10, W11). Spec sync branch `sync-specs-20261029-121419` (not yet merged)
-documents `jumar-gh`, absence checks with `pattern`, the exit-0 harness
-error rule and the `@max-subtasks=` warning.
+plan carried (W5, W10, W11). The 2026-10-29 spec sync (PR #45) and the
+2026-10-31 spec sync for `@paused=human` and same-pass recurring dependents
+(PR #49) are both merged, so `specs/` matches `main`. W13–W15 are built and in
+review (see In flight); W16–W24 are proposed in PR #50.
 
 ### Completed items (merged to main unless noted)
 
@@ -84,20 +85,28 @@ error rule and the `@max-subtasks=` warning.
 - **clean-exit-not-harness-error**: `detect_harness_error()` never classifies an attempt that exited 0. Merged PR #41.
 - **absence-pattern**: `kind=absence` with `pattern` asserts no named file contains the regex. Merged PR #42.
 - **jumar-gh-readonly**: `gh_readonly.py` + `jumar-gh` console script: read-only GitHub through a parsed allow list, `gh` itself still hard-denied. Merged PR #43.
+- **reject-non-portable-grep-checks**: grep checks BSD grep cannot run are refused at construction. Merged PR #44.
+- **human-pause-and-recurring-dependents**: `@paused=human` is never selected and is reported as with a person, not parked; a ticked box beats a leftover `@paused=`; a recurring item completed in an `--until-empty` pass unblocks its dependants in that pass. Merged PR #47; specs synced in PR #49.
+- **doctor-missing-crontab-is-warn**: a missing scheduler binary is a doctor WARN naming launchd and `systemd --user` timers, not a FAIL; other read failures still FAIL. Merged PR #48.
 
 ---
 
 ## In flight (do not build)
 
-- **reject-non-portable-grep-checks**: open PR #44 (`fix/reject-non-portable-grep-checks`).
-- **human-pause and recurring dependents**: uncommitted in the main checkout,
-  sitting on `feat/jumar-gh-readonly`, which PR #43 already merged. Adds
-  `@paused=human` (never selected, reported as "With a person" rather than
-  parked) and lets a recurring item that completes in an `--until-empty` pass
-  unblock its dependents in the same pass. Needs its own branch off `main`
-  before it can be committed. Once merged, an `update` beat must add both to
-  `specs/02-functional-spec.md` (Parking, AC2.11, Stage 2 dependency gate) and
-  `specs/03-data-model.md`.
+- **W13 cite-ac-ids-in-tests**: open PR #51 (`cite-ac-ids-in-tests`). Tests
+  only; the validation loop prints nothing on that branch.
+- **W14 spec-loop-single-flight-lock**: open PR #52
+  (`spec-loop-single-flight-lock`).
+- **W15 spec-loop-verify-mode**: open PR #53 (`spec-loop-verify-mode`).
+  Touches the same two files as #52 in different regions; whichever merges
+  second may need a rebase.
+- **W16–W24 plan additions**: open PR #50 (`docs/plan-magpie-practices`).
+- **Pending `update` beat**: once #52 and #53 are merged, a spec sync must
+  remove both Known gaps from `specs/05-operator-tooling.md` and describe the
+  lock (`SPEC_LOOP_LOCK`) and verify mode (`SPEC_LOOP_VERIFY`,
+  `SPEC_LOOP_VERIFY_CMD`). Not before: the update beat documents `main`.
+- When #51–#53 merge, move W13–W15 to Completed items and delete their
+  Work items entries.
 
 ## Work items (priority order)
 
