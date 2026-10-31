@@ -98,3 +98,57 @@ spec_loop_launch_agent() {
     fi
     SPEC_LOOP_AGENT_PID=$!
 }
+
+# ---- single-flight lock ------------------------------------------------
+# The product's lock semantics (src/jumar/lock.py, AC10.5 / AC10.6), ported to
+# the runner: a PID-stamped lock file, a live lock refuses the second run with
+# `already_running`, a stale lock (dead PID or unreadable file) is reclaimed.
+# Kept free of exits so the fixture tests can drive it directly; the caller
+# decides what a refused acquire means (loop.sh exits 0).
+
+# Return 0 if $1 names a running process.
+spec_loop_pid_alive() {
+    local pid=$1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+# Acquire the lock, or report why not.
+#   $1 lock_file
+#   $2 pid         PID to stamp (default: this shell)
+# Returns 0 when the lock is held by $2 on return, printing `reclaimed stale
+# lock (pid=N)` to stdout when a dead holder was swept aside. Returns 1 when a
+# live holder exists, printing `already_running (pid=N)`; the lock file is
+# left untouched in that case.
+spec_loop_lock_acquire() {
+    local lock_file=$1 pid=${2:-$$}
+    local attempt existing
+    for attempt in 1 2; do
+        # noclobber makes the create atomic: exactly one writer wins.
+        if ( set -C; printf 'pid=%s\n' "$pid" > "$lock_file" ) 2>/dev/null; then
+            return 0
+        fi
+        existing="$(sed -n 's/^pid=\([0-9][0-9]*\)$/\1/p' "$lock_file" 2>/dev/null | head -n1)"
+        if [ -n "$existing" ] && spec_loop_pid_alive "$existing"; then
+            printf 'already_running (pid=%s)\n' "$existing"
+            return 1
+        fi
+        # Dead holder, or a file we cannot parse: stale either way.
+        printf 'reclaimed stale lock (pid=%s)\n' "${existing:-unknown}"
+        rm -f "$lock_file"
+    done
+    # Lost the race twice to a holder that then vanished; refuse rather than loop.
+    printf 'already_running (pid=unknown)\n'
+    return 1
+}
+
+# Release the lock, but only if it is still ours: never remove another run's.
+#   $1 lock_file
+#   $2 pid         PID stamped at acquire (default: this shell)
+spec_loop_lock_release() {
+    local lock_file=$1 pid=${2:-$$}
+    [ -f "$lock_file" ] || return 0
+    if [ "$(sed -n 's/^pid=\([0-9][0-9]*\)$/\1/p' "$lock_file" 2>/dev/null | head -n1)" = "$pid" ]; then
+        rm -f "$lock_file"
+    fi
+}
