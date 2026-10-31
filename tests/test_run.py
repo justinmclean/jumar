@@ -338,7 +338,7 @@ def test_run_exits_zero_when_nothing_is_eligible(
 def test_run_counts_human_paused_items_apart_from_parked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """@paused=human items are counted as with a person, not listed as parked."""
+    """@paused=human items are counted as with a person, not listed as parked (AC2.11)."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "todo.md").write_text(
         "- [ ] Broken task @failed=3 @paused=auto-failures\n"
@@ -524,7 +524,7 @@ def test_run_until_empty_skips_failed_item_without_unblocking_dependents(
 def test_run_until_empty_unblocks_dependents_of_a_recurring_item(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A recurring dependency that just ran must not block its dependents.
+    """A recurring dependency that just ran must not block its dependents (AC2.11).
 
     A recurring item stays unticked and has its @not-before advanced the
     moment it completes, so re-ingesting it mid-pass cannot tell that it has

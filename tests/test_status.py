@@ -65,6 +65,7 @@ def _run_started_payload(now_str: str, todo_path: str) -> dict:
 
 
 def test_never_attempted_eligible_item(tmp_path: Path) -> None:
+    """AC11.4: an item absent from every journal is never-attempted, not an error."""
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Do something @id=item1\n")
     config = _make_config(tmp_path, str(todo))
@@ -95,6 +96,7 @@ def test_done_item(tmp_path: Path) -> None:
 
 
 def test_deferred_item_shows_eligibility_instant(tmp_path: Path) -> None:
+    """AC11.3: a deferred item shows its next eligibility instant."""
     future = "2030-01-01T09:00:00+00:00"
     todo = tmp_path / "todo.md"
     _write_todo(todo, f"- [ ] Future task @id=item1 @not-before={future}\n")
@@ -113,6 +115,7 @@ def test_deferred_item_shows_eligibility_instant(tmp_path: Path) -> None:
 
 
 def test_parked_item_shows_reason(tmp_path: Path) -> None:
+    """AC11.3: a parked item shows its @paused= reason."""
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Broken task @id=item1 @paused=auto-failures\n")
     config = _make_config(tmp_path, str(todo))
@@ -128,6 +131,7 @@ def test_parked_item_shows_reason(tmp_path: Path) -> None:
 
 
 def test_human_paused_item_is_a_persons_work_not_parked(tmp_path: Path) -> None:
+    """AC11.3: @paused=human is `human`, and a checked box is `done` despite the token."""
     todo = tmp_path / "todo.md"
     _write_todo(
         todo,
@@ -146,6 +150,7 @@ def test_human_paused_item_is_a_persons_work_not_parked(tmp_path: Path) -> None:
 
 
 def test_failure_count_from_failed_token(tmp_path: Path) -> None:
+    """AC11.3: the @failed= count on the line is reported."""
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Flaky task @id=item1 @failed=2\n")
     config = _make_config(tmp_path, str(todo))
@@ -177,7 +182,7 @@ def test_blocked_item(tmp_path: Path) -> None:
 
 
 def test_latest_run_wins_when_multiple_runs(tmp_path: Path) -> None:
-    """Aggregation across multiple runs picks the latest attempt per item."""
+    """Aggregation across multiple runs picks the latest attempt per item (AC11.4)."""
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Task A @id=item1\n")
     config = _make_config(tmp_path, str(todo))
@@ -448,7 +453,7 @@ def test_format_status_includes_all_states(tmp_path: Path) -> None:
 
 
 def test_multiple_items_eligible_and_done(tmp_path: Path) -> None:
-    """Verify all items appear in the status report, with correct states."""
+    """Verify all items appear in the status report, with correct states (AC11.2)."""
     todo = tmp_path / "todo.md"
     _write_todo(
         todo,
@@ -517,10 +522,45 @@ def test_status_json_stdout_is_valid_json(
     assert "todo_path" in doc
 
 
+def test_every_item_once_with_a_state_from_the_fixed_vocabulary(tmp_path: Path) -> None:
+    """AC11.2: one row per item, state drawn from the seven documented states only."""
+    future = "2030-01-01T09:00:00+00:00"
+    todo = tmp_path / "todo.md"
+    _write_todo(
+        todo,
+        "- [x] Done @id=d1\n"
+        "- [ ] With a person @id=h1 @paused=human\n"
+        "- [ ] Parked @id=p1 @paused=auto-failures\n"
+        f"- [ ] Deferred @id=f1 @not-before={future}\n"
+        "- [ ] Blocked @id=b1 @depends=f1\n"
+        "- [ ] Never touched @id=n1\n",
+    )
+    config = _make_config(tmp_path, str(todo))
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+
+    report = build_status(todo, runs_dir, config, _now())
+
+    ids = [line.item_id for line in report.items]
+    assert sorted(ids) == ["b1", "d1", "f1", "h1", "n1", "p1"]
+    assert len(ids) == len(set(ids))
+    allowed = {"done", "human", "parked", "deferred", "blocked", "eligible", "never-attempted"}
+    states = {line.item_id: line.state for line in report.items}
+    assert set(states.values()) <= allowed
+    assert states == {
+        "d1": "done",
+        "h1": "human",
+        "p1": "parked",
+        "f1": "deferred",
+        "b1": "blocked",
+        "n1": "never-attempted",
+    }
+
+
 def test_status_json_all_items_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every todo item appears exactly once in the JSON output."""
+    """Every todo item appears exactly once in the JSON output (AC11.2)."""
     monkeypatch.chdir(tmp_path)
     todo = tmp_path / "todo.md"
     _write_todo(todo, "- [ ] Alpha @id=alpha\n- [x] Beta @id=beta\n- [ ] Gamma @id=gamma\n")

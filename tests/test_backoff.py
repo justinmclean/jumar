@@ -134,7 +134,7 @@ def test_advance_increments_existing_failed_token(tmp_path: Path) -> None:
 
 
 def test_advance_byte_preserving_exactly_one_line_changed(tmp_path: Path) -> None:
-    """The whole-file diff is exactly one line — everything else is byte-identical."""
+    """AC8.8: the whole-file diff is exactly one line; everything else is byte-identical."""
     todo = tmp_path / "todo.md"
     todo.write_text("# My work\n\n- [ ] First task\n- [ ] Target task\n- [ ] Third task\n")
     before = todo.read_bytes().splitlines(keepends=True)
@@ -312,7 +312,7 @@ def test_harness_error_does_not_trigger_auto_park(tmp_path: Path) -> None:
 
 
 def test_advance_parks_at_threshold(tmp_path: Path) -> None:
-    """When new count == max_consecutive_failures, @paused=auto-failures is appended."""
+    """AC8.8: when new count == max_consecutive_failures, @paused=auto-failures is appended."""
     todo = tmp_path / "todo.md"
     todo.write_text("- [ ] My task @failed=2\n")
 
@@ -327,7 +327,7 @@ def test_advance_parks_at_threshold(tmp_path: Path) -> None:
 
 
 def test_advance_parks_exactly_at_threshold(tmp_path: Path) -> None:
-    """Parking occurs at the threshold, not before it."""
+    """Parking occurs at the threshold, not before it (AC8.8)."""
     todo = tmp_path / "todo.md"
     todo.write_text("- [ ] My task @failed=1\n")
 
@@ -343,7 +343,7 @@ def test_advance_parks_exactly_at_threshold(tmp_path: Path) -> None:
 
 
 def test_advance_does_not_duplicate_paused_token(tmp_path: Path) -> None:
-    """If @paused= is already on the line, a second @paused= is never appended."""
+    """If @paused= is already on the line, a second @paused= is never appended (AC8.8)."""
     todo = tmp_path / "todo.md"
     # Already parked from a previous run; somehow being advanced again.
     todo.write_text("- [ ] My task @failed=3 @paused=auto-failures\n")
@@ -362,7 +362,7 @@ def test_advance_does_not_duplicate_paused_token(tmp_path: Path) -> None:
 
 
 def test_advance_threshold_journalled(tmp_path: Path) -> None:
-    """The FAILURE_COUNT_ADVANCED event records parked=True when threshold is reached."""
+    """AC8.8: FAILURE_COUNT_ADVANCED records parked=True when the threshold is reached."""
     import json
 
     todo = tmp_path / "todo.md"
@@ -386,7 +386,7 @@ def test_advance_threshold_journalled(tmp_path: Path) -> None:
 
 
 def test_clear_removes_failed_token(tmp_path: Path) -> None:
-    """After a successful completion, @failed= is removed from the line."""
+    """After a successful completion, @failed= is removed from the line (AC8.8)."""
     todo = tmp_path / "todo.md"
     todo.write_text("- [ ] My task @failed=2\n")
 
@@ -434,7 +434,7 @@ def test_clear_noop_when_no_failed_token(tmp_path: Path) -> None:
 
 
 def test_clear_does_not_remove_paused_token(tmp_path: Path) -> None:
-    """Success clears @failed= but never touches @paused= (human removes that)."""
+    """Success clears @failed= but never touches @paused= (human removes that) (AC8.8)."""
     todo = tmp_path / "todo.md"
     todo.write_text("- [ ] My task @failed=3 @paused=auto-failures\n")
 
@@ -529,7 +529,7 @@ def test_clear_dry_run_leaves_file_unchanged(tmp_path: Path) -> None:
 
 
 def test_select_excludes_paused_item(tmp_path: Path) -> None:
-    """A @paused= item is never selected, regardless of other eligibility."""
+    """A @paused= item is never selected, regardless of other eligibility (AC2.11)."""
     paused = _make_item("paused-item", meta={"paused": "auto-failures"})
     normal = _make_item("normal-item", line_no=2)
 
@@ -540,7 +540,7 @@ def test_select_excludes_paused_item(tmp_path: Path) -> None:
 
 
 def test_select_parked_list_contains_reason(tmp_path: Path) -> None:
-    """Parked items appear in SelectResult.parked with the @paused= reason."""
+    """Parked items appear in SelectResult.parked with the @paused= reason (AC2.11)."""
     paused = _make_item("paused-item", meta={"paused": "auto-failures"})
 
     result = select_next([paused], NOW)
@@ -575,7 +575,7 @@ def test_select_all_parked_returns_no_selected(tmp_path: Path) -> None:
 
 
 def test_select_done_item_with_paused_not_counted_as_parked(tmp_path: Path) -> None:
-    """A done item with @paused= is skipped as done, not added to parked."""
+    """A done item with @paused= is skipped as done, not added to parked (AC2.11)."""
     done_item = _make_item("done-item", status=ItemStatus.done, meta={"paused": "auto-failures"})
 
     result = select_next([done_item], NOW)
@@ -613,7 +613,7 @@ def test_report_shows_parked_items(tmp_path: Path) -> None:
 
 
 def test_report_lists_human_paused_items_apart_from_parked(tmp_path: Path) -> None:
-    """@paused=human items are a person's work, not counted as parked."""
+    """@paused=human items are a person's work, not counted as parked (AC2.11)."""
     run_dir = _make_run_dir(tmp_path)
     journal = Journal(run_dir / "journal.jsonl", run_dir.name)
 
