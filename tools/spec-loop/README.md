@@ -81,6 +81,10 @@ time until you trust it.
 ## Stop / configure
 
 - Stop: `Ctrl+C`, or `touch STOP` (exits after the current iteration).
+- Single flight: the loop holds a PID-stamped lock (`.spec-loop.lock` at the
+  repo root, override with `SPEC_LOOP_LOCK`). A second `loop.sh` while one is
+  running exits 0 with `already_running`, so an overlapping scheduled
+  invocation never duplicates work; a lock left by a dead run is reclaimed.
 - `SPEC_LOOP_BASE` — branch to fork work items from (default `main`).
 - `SPEC_LOOP_AGENT` — headless agent CLI (default `claude`).
 - `SPEC_LOOP_HARNESS` — override the invocation convention when the CLI name
