@@ -94,8 +94,12 @@ path is incomplete.
   `shell=False`. No `shell=True`, ever.
 - **No secrets in the repo.** API keys come from environment variables or a
   git-ignored `.env`, never committed. Never commit a real `todo.md` or `runs/`.
-- **Least authority by default.** `network` is not a default capability, and
-  `git push` / `gh` are hard-denied in every argv the product dispatches.
+- **Least authority by default: the boundary is send, not fetch.** `network`
+  *is* a default capability, because an agent that cannot read a primary
+  source fabricates it instead (`specs/01-product-spec.md`, `config.py`
+  `_DEFAULT_CAPABILITIES`). What is withheld is transmission: the mail and
+  remote-copy tools are on the deny list, and `git push` / `gh` are
+  hard-denied in every argv the product dispatches.
 
 ## Commits
 
