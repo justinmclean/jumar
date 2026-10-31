@@ -29,6 +29,12 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Fixed since then: a subtask whose agent hit its step cap, timed out or was
+truncated was still verified, so an artefact it half wrote, or one an earlier
+attempt left behind, could pass the check and tick the box. Each attempt now
+records how it ended (`termination`), only a clean ending is checked, and an
+item whose last attempt was cut off fails with `unclean_termination`.
+
 Fixed since then: `doctor` reported a missing `crontab` binary as FAIL and
 exited non-zero on machines that simply have no cron (containers, cloud VMs).
 It is now a WARN that names launchd agents and `systemd --user` timers as

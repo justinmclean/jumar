@@ -76,6 +76,26 @@ class FailureCode(enum.StrEnum):
     dependency_blocked = "dependency_blocked"
     bad_schedule = "bad_schedule"
     already_running = "already_running"
+    # The agent's run ended non-clean (step cap, timeout, truncation, a denied
+    # tool, an abnormal exit), so what it left behind was not trusted.
+    unclean_termination = "unclean_termination"
+
+
+class Termination(enum.StrEnum):
+    """How an agent run ended, decided before anything it left is trusted.
+
+    Only ``clean`` lets a check vouch for the work. Every other class means
+    the run was cut off or gave up, and an artefact on disk may be a partial
+    one, or one left by an earlier attempt, that happens to satisfy the check.
+    """
+
+    clean = "clean"
+    step_cap = "step_cap"  # ran out of tool-call steps without a final answer
+    timed_out = "timed_out"  # the wall-clock limit killed it
+    denied_tool = "denied_tool"  # gave its final answer straight after a refused tool call
+    truncated = "truncated"  # the generation hit max_tokens mid-answer
+    harness_outage = "harness_outage"  # the harness never ran the prompt
+    abnormal_exit = "abnormal_exit"  # exited non-zero for any other reason
 
 
 class RecurUnit(enum.StrEnum):
@@ -332,6 +352,7 @@ class Attempt:
     exit_status: int | None
     files_touched: tuple[str, ...]
     error: str | None
+    termination: Termination = Termination.clean
 
 
 @dataclass(frozen=True)
@@ -346,6 +367,8 @@ class VerificationResult:
     summary: str
     evidence_path: str | None
     checked_at: str
+    # How the attempt this verdict judges ended. None where no attempt applies.
+    termination: Termination | None = None
 
 
 @dataclass(frozen=True)

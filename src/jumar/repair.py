@@ -227,6 +227,8 @@ def repair(
             harness=judge_harness,
             judge_timeout_s=getattr(config, "subtask_timeout_s", 300),
             judge_run_agent=judge_run_agent,
+            # A repair attempt that was cut off is not checked either.
+            termination=attempt.termination,
         )
         last_result = run_verify_fn(original_check, journal=journal, item_id=item.item_id, ctx=ctx)
 

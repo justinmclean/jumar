@@ -30,7 +30,7 @@ import pytest
 
 import jumar.openai_agent as openai_agent
 from jumar.harness import IN_PROCESS_HARNESSES
-from jumar.models import Capability, HarnessInfo
+from jumar.models import Capability, HarnessInfo, Termination
 from jumar.openai_agent import run_openai_agent
 
 _ALL_CAPS: frozenset[Capability] = frozenset(
@@ -1052,3 +1052,78 @@ def test_normal_stop_is_unaffected(tmp_path: Path, chat_server: Any) -> None:
     )
     assert result.exit_status == 0
     assert result.agent_claim == "All done."
+
+
+# ---------------------------------------------------------------------------
+# Termination class: the harness says how the run ended (W17)
+# ---------------------------------------------------------------------------
+
+
+def test_step_cap_is_reported_as_step_cap(tmp_path: Path, chat_server: Any) -> None:
+    base_url, _ = chat_server([_message("", [_tool_call("1", "read_file", {"path": "x"})])])
+    result = run_openai_agent(
+        "loop", cwd=tmp_path, capabilities=_ALL_CAPS, timeout_s=30, harness=_harness(base_url)
+    )
+    assert result.termination is Termination.step_cap
+
+
+def test_truncation_is_reported_as_truncated(tmp_path: Path, chat_server: Any) -> None:
+    base_url, _ = chat_server([_finished(_message("I have started to writ"), "length")])
+    result = run_openai_agent(
+        "do it",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=replace(_harness(base_url), max_tokens=8),
+    )
+    assert result.termination is Termination.truncated
+
+
+def test_a_final_answer_straight_after_a_refused_call_is_denied_tool(
+    tmp_path: Path, chat_server: Any
+) -> None:
+    """The model hit a wall and stopped: whatever it left is not finished work."""
+    base_url, _ = chat_server(
+        [
+            _message("", [_tool_call("1", "run_command", {"argv": ["ssh", "host"]})]),
+            _message("I could not do it, stopping."),
+        ]
+    )
+    result = run_openai_agent(
+        "do it",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url, commands_deny=("ssh",)),
+    )
+    assert result.exit_status == 0
+    assert result.termination is Termination.denied_tool
+
+
+def test_a_refusal_the_model_works_around_still_ends_clean(
+    tmp_path: Path, chat_server: Any
+) -> None:
+    (tmp_path / "notes.txt").write_text("hello\n")
+    base_url, _ = chat_server(
+        [
+            _message("", [_tool_call("1", "run_command", {"argv": ["ssh", "host"]})]),
+            _message("", [_tool_call("2", "read_file", {"path": "notes.txt"})]),
+            _message("Done."),
+        ]
+    )
+    result = run_openai_agent(
+        "do it",
+        cwd=tmp_path,
+        capabilities=_ALL_CAPS,
+        timeout_s=30,
+        harness=_harness(base_url, commands_deny=("ssh",)),
+    )
+    assert result.termination is Termination.clean
+
+
+def test_a_plain_answer_ends_clean(tmp_path: Path, chat_server: Any) -> None:
+    base_url, _ = chat_server([_message("All done.")])
+    result = run_openai_agent(
+        "do it", cwd=tmp_path, capabilities=_ALL_CAPS, timeout_s=30, harness=_harness(base_url)
+    )
+    assert result.termination is Termination.clean

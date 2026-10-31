@@ -42,7 +42,7 @@ from typing import Any
 
 from .config import CommandPolicy, Config, is_allowed
 from .harness import AgentResult
-from .models import Capability, HarnessInfo
+from .models import Capability, HarnessInfo, Termination
 
 # Default env var to read the API key from when [harness] api_key_env is unset.
 DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
@@ -384,6 +384,10 @@ def run_openai_agent(
         }
 
     step_cap = getattr(harness, "max_tool_steps", None) or MAX_TOOL_STEPS
+    # True when every call in the most recent tool batch was refused. A final
+    # answer straight after that is the model giving up at a wall, not
+    # finishing the work.
+    last_batch_denied = False
     for _step in range(step_cap):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -513,6 +517,7 @@ def run_openai_agent(
                 ),
                 timed_out=False,
                 agent_claim=None,
+                termination=Termination.truncated,
                 **_rate(),
             )
 
@@ -543,14 +548,17 @@ def run_openai_agent(
                 stderr=stderr,
                 timed_out=False,
                 agent_claim=lines[-1] if lines else None,
+                termination=Termination.denied_tool if last_batch_denied else Termination.clean,
                 **_rate(),
             )
 
         messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+        denials = 0
         for call in tool_calls:
             result_text = _dispatch_tool_call(
                 call, cwd=cwd, capabilities=capabilities, policy_config=policy_config
             )
+            denials += _is_denial(result_text)
             messages.append(
                 {
                     "role": "tool",
@@ -558,6 +566,8 @@ def run_openai_agent(
                     "content": result_text,
                 }
             )
+
+        last_batch_denied = denials == len(tool_calls)
 
     return AgentResult(
         exit_status=1,
@@ -569,5 +579,15 @@ def run_openai_agent(
         ),
         timed_out=False,
         agent_claim=None,
+        termination=Termination.step_cap,
         **_rate(),
     )
+
+
+def _is_denial(result_text: str) -> bool:
+    """True when a tool result is the policy refusing the call."""
+    try:
+        parsed = json.loads(result_text)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("error") == "capability_denied"

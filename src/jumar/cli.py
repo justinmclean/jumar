@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .models import HUMAN_PAUSE_REASON, HarnessInfo
+from .models import HUMAN_PAUSE_REASON, FailureCode, HarnessInfo, Termination
 
 SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
 
@@ -498,6 +498,18 @@ def _verifications_from_journal(
     return rebuilt
 
 
+def _failure_code(result: Any, default: str) -> str:
+    """``unclean_termination`` when the last attempt was cut off, else *default*.
+
+    A subtask whose last attempt hit its step cap or timed out did not fail
+    its check, it never reached one; the failure code says which.
+    """
+    termination = getattr(result, "termination", None)
+    if termination is not None and termination is not Termination.clean:
+        return FailureCode.unclean_termination.value
+    return default
+
+
 def run_item(
     item: Any,
     *,
@@ -687,6 +699,10 @@ def run_item(
             # real agent binary, and in production means the judge silently
             # ignores whatever runner the caller configured.
             judge_run_agent=_run_agent,
+            # A run that hit its step cap, timed out or was truncated is not
+            # allowed to be vouched for by an artefact it may only have half
+            # written: run_verify fails it unchecked.
+            termination=attempt.termination,
         )
         result = run_verify(subtask.check, journal=journal, item_id=item.item_id, ctx=ctx)
 
@@ -735,7 +751,7 @@ def run_item(
                     ITEM_FAILED,
                     item_id=item.item_id,
                     payload={
-                        "failure_code": "repairs_exhausted",
+                        "failure_code": _failure_code(exc.last_result, "repairs_exhausted"),
                         "failed_subtask_index": subtask.index,
                     },
                 )
@@ -748,7 +764,7 @@ def run_item(
                 ITEM_FAILED,
                 item_id=item.item_id,
                 payload={
-                    "failure_code": "check_failed",
+                    "failure_code": _failure_code(result, "check_failed"),
                     "failed_subtask_index": subtask.index,
                 },
             )
