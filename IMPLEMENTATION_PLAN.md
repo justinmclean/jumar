@@ -10,11 +10,13 @@ never weaken a check to get green.
 
 ## What's been built
 
-**Current state (2026-10-29):** `main` HEAD is `2318b06` (PR #43). Every
+**Current state (2026-10-31):** `main` HEAD is `9708ed7` (PR #53). Every
 planned phase is merged, including the three decision-gated items the previous
-plan carried (W5, W10, W11). Spec sync branch `sync-specs-20261029-121419` (not yet merged)
-documents `jumar-gh`, absence checks with `pattern`, the exit-0 harness
-error rule and the `@max-subtasks=` warning.
+plan carried (W5, W10, W11). The 2026-10-29 spec sync (PR #45) and the
+2026-10-31 spec sync for `@paused=human` and same-pass recurring dependents
+(PR #49) are both merged. W13–W15 are merged (PRs #51–#53); the spec sync
+for the two spec-loop features is in review (see In flight). W16–W24 (PR #50)
+are the open work items.
 
 ### Completed items (merged to main unless noted)
 
@@ -84,53 +86,22 @@ error rule and the `@max-subtasks=` warning.
 - **clean-exit-not-harness-error**: `detect_harness_error()` never classifies an attempt that exited 0. Merged PR #41.
 - **absence-pattern**: `kind=absence` with `pattern` asserts no named file contains the regex. Merged PR #42.
 - **jumar-gh-readonly**: `gh_readonly.py` + `jumar-gh` console script: read-only GitHub through a parsed allow list, `gh` itself still hard-denied. Merged PR #43.
+- **reject-non-portable-grep-checks**: grep checks BSD grep cannot run are refused at construction. Merged PR #44.
+- **human-pause-and-recurring-dependents**: `@paused=human` is never selected and is reported as with a person, not parked; a ticked box beats a leftover `@paused=`; a recurring item completed in an `--until-empty` pass unblocks its dependants in that pass. Merged PR #47; specs synced in PR #49.
+- **doctor-missing-crontab-is-warn**: a missing scheduler binary is a doctor WARN naming launchd and `systemd --user` timers, not a FAIL; other read failures still FAIL. Merged PR #48.
+- **cite-ac-ids-in-tests**: W13. Every AC id in `specs/02-functional-spec.md` is cited in `tests/`; two asserting tests added (AC6.8 empty file with a pattern, AC11.2 full state vocabulary). Merged PR #51.
+- **spec-loop-single-flight-lock**: W14. PID-stamped `.spec-loop.lock` (`SPEC_LOOP_LOCK`) in `tools/spec-loop/`: live holder makes a second run exit 0 with `already_running`, stale or unreadable lock reclaimed, released without an EXIT trap. Merged PR #52.
+- **spec-loop-verify-mode**: W15. `SPEC_LOOP_VERIFY=1` re-runs `SPEC_LOOP_VERIFY_CMD` (default `make check`) after a committed iteration; red stops the loop with exit 1 and keeps the branch. Merged PR #53.
 
 ---
 
 ## In flight (do not build)
 
-- **reject-non-portable-grep-checks**: open PR #44 (`fix/reject-non-portable-grep-checks`).
-- **human-pause and recurring dependents**: uncommitted in the main checkout,
-  sitting on `feat/jumar-gh-readonly`, which PR #43 already merged. Adds
-  `@paused=human` (never selected, reported as "With a person" rather than
-  parked) and lets a recurring item that completes in an `--until-empty` pass
-  unblock its dependents in the same pass. Needs its own branch off `main`
-  before it can be committed. Once merged, an `update` beat must add both to
-  `specs/02-functional-spec.md` (Parking, AC2.11, Stage 2 dependency gate) and
-  `specs/03-data-model.md`.
+- **Spec sync for W14/W15**: open PR #55 (`sync-specs-20261031-221834`).
+  Documents the lock and verify mode in `specs/05-operator-tooling.md`, adds
+  AC-L7/AC-L8, and drops both Known gaps.
 
 ## Work items (priority order)
-
-W13. **cite-ac-ids-in-tests**: `tests/` names no test for AC1.11, AC2.11,
-   AC3.7, AC3.8, AC6.8, AC6.9, AC8.8, AC11.2, AC11.3 or AC11.4. The behaviour is
-   probably covered under other names (W4 closed the last round of this), so
-   the work is to find each covering test and cite the AC id in its docstring,
-   and to add an asserting test, refusal path included, wherever none exists.
-   Tests only, no `src/jumar/` change.
-   *Validation:* `make check`, then every AC id in
-   `specs/02-functional-spec.md` appears in `tests/`:
-   `for ac in $(grep -oE '^- AC[-A-Z0-9.]+' specs/02-functional-spec.md | sed 's/- //' | sort -u); do grep -rqE "\b$ac\b" tests/ || echo "$ac"; done`
-   prints nothing.
-   *Closes:* the AC ids above.
-   *Branch slug:* `cite-ac-ids-in-tests`
-
-W14. **spec-loop-single-flight-lock**: `specs/05-operator-tooling.md` Known
-   gaps: an overlapping scheduled `loop.sh` invocation duplicates work. Add a
-   lock to `tools/spec-loop/lib.sh` with the product's semantics (PID-stamped,
-   live lock exits 0 with `already_running`, stale lock reclaimed).
-   *Validation:* `bash -n tools/spec-loop/loop.sh tools/spec-loop/lib.sh` +
-   `bash tools/spec-loop/tests/test_runner_fixtures.sh` extended with a live
-   lock refusing a second run and a stale lock being reclaimed.
-   *Closes:* 05's second Known gap.
-   *Branch slug:* `spec-loop-single-flight-lock`
-
-W15. **spec-loop-verify-mode**: `specs/05-operator-tooling.md` Known gaps:
-   the runner trusts the beat to have run its Validation command.
-   `SPEC_LOOP_VERIFY=1` re-runs `make check` after a build iteration commits
-   and reports a red result instead of treating the iteration as done.
-   *Validation:* as W14, with fixtures for a green and a red `make check`.
-   *Closes:* 05's first Known gap.
-   *Branch slug:* `spec-loop-verify-mode`
 
 W16. **guard-claude-harness-shell**: jumar's `is_allowed()` (`config.py`)
    matches argv[0] basename, which is fine for the in-process harness where
