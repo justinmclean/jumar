@@ -340,6 +340,26 @@ and it is unavailable to the Claude harness when `network` is not granted. The
 decomposition rules, and the execute prompt of any subtask granted `network`,
 tell the agent to use it in place of `gh`.
 
+**The agent's own shell.** Under the Claude harness the agent issues shell
+command lines through its Bash tool, and a `--disallowedTools` pattern such as
+`Bash(git push:*)` only matches the text it writes: `bash -c 'git push'` or
+`echo 'git push' | sh` gets past it. Every Bash call therefore passes a
+`PreToolUse` hook (`shell_guard.py`) that reads the line the way bash will —
+control operators and newlines, quoting, command/process/arithmetic/parameter
+substitutions, `-c` strings, `eval`, `alias`, heredocs fed to a shell,
+compound commands, and wrapper commands (`env`, `command`, `exec`, `nohup`,
+`time`, `timeout`, `nice`, `setsid`, `stdbuf`, `sudo`, `doas`, `xargs`,
+`flock`, `watch`, `busybox`) — and refuses `gh`, `git push` (and `send-pack`,
+or an alias defined for it) wherever the subcommand sits, and `jumar-gh` when
+`network` is not granted. It **fails closed**: a line it cannot parse, a
+command name built from an expansion, a shell reading commands from a pipe, or
+a wrapper option it does not know is refused, with a `jumar-guard[...]` reason
+telling the agent to spell the command plainly. It runs as `python3 -I` with
+no jumar imports, and the hook command turns any failure to start into a
+block. The patterns stay as defence in depth. A script file the agent writes
+and then runs is not read; as with the allow list, the container is the
+control.
+
 **Harness errors.** An attempt whose agent exited **non-zero** with output
 carrying the signature of a usage limit, an authentication failure, a missing
 agent binary or a transport failure is a harness error: the harness never ran
@@ -515,7 +535,10 @@ not advance the count: an outage is not evidence the item is broken.
 - AC8.3 With `commit_on_complete`, the commit lands on a per-item branch and the
   base branch's HEAD is unchanged.
 - AC8.4 No push and no PR command is ever invoked — asserted by a test that
-  fails if `git push` or `gh` appears in the dispatched argv.
+  fails if `git push` or `gh` appears in the dispatched argv. Under the Claude
+  harness the agent's Bash commands are refused for `git push` / `gh` however
+  they are spelled (stage 5, the agent's own shell), and an unparseable line or
+  a command name built from an expansion is refused rather than allowed.
 - AC8.5 A completed `@every=` item is left **unchecked** with its `@not-before=`
   advanced to the next occurrence; the rest of the file is byte-identical.
 - AC8.6 A recurring item whose occurrence was missed repeatedly advances to the
