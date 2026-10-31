@@ -15,7 +15,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../lib.sh"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/spec-loop-test.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+# Clean up on interrupt and at the end of the script. Not an EXIT trap: bash
+# runs an inherited EXIT trap inside a forked child that dies before its exec,
+# which would delete $TMP from under the still-running test.
+trap 'rm -rf "$TMP"; exit 130' INT TERM
 
 PASS=0
 FAIL=0
@@ -94,6 +97,57 @@ check "opencode uses run"     "run"                          "$opencode_argv"
 check "opencode uses --auto"  "--auto"                       "$opencode_argv"
 check "opencode passes model" "anthropic/claude-sonnet-4-5"  "$opencode_argv"
 
+# ---- single-flight lock ----------------------------------------------
+echo "spec_loop_lock_acquire / spec_loop_lock_release:"
+LOCK="$TMP/spec-loop.lock"
+
+# A live holder: a background sleep we control.
+sleep 300 & LIVE_PID=$!
+# A dead holder: a child that has already exited and been reaped.
+( exit 0 ) & DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null
+
+first_out="$(spec_loop_lock_acquire "$LOCK" "$LIVE_PID")"; first_rc=$?
+check "fresh acquire succeeds (rc=0)"          "0"              "$first_rc"
+check "fresh acquire stamps the holder pid"    "pid=$LIVE_PID"  "$(cat "$LOCK")"
+check_absent "fresh acquire is silent"         "reclaimed"      "$first_out"
+
+second_out="$(spec_loop_lock_acquire "$LOCK" "$$")"; second_rc=$?
+check "live lock refuses a second run (rc=1)"  "1"                            "$second_rc"
+check "live lock reports already_running"      "already_running (pid=$LIVE_PID)" "$second_out"
+check "live lock file is left untouched"       "pid=$LIVE_PID"                "$(cat "$LOCK")"
+
+spec_loop_lock_release "$LOCK" "$$"
+check "release by a non-holder leaves the lock" "pid=$LIVE_PID" "$(cat "$LOCK")"
+
+kill "$LIVE_PID" 2>/dev/null; wait "$LIVE_PID" 2>/dev/null
+# LIVE_PID is now dead too: the lock it left behind is stale.
+stale_out="$(spec_loop_lock_acquire "$LOCK" "$$")"; stale_rc=$?
+check "stale lock is reclaimed (rc=0)"         "0"                               "$stale_rc"
+check "stale reclaim names the dead pid"       "reclaimed stale lock (pid=$LIVE_PID)" "$stale_out"
+check "stale reclaim stamps the new holder"    "pid=$$"                          "$(cat "$LOCK")"
+
+spec_loop_lock_release "$LOCK" "$$"
+if [ -f "$LOCK" ]; then
+    FAIL=$((FAIL+1)); printf '  FAIL release by the holder removes the lock\n'
+else
+    PASS=$((PASS+1)); printf '  ok   release by the holder removes the lock\n'
+fi
+
+printf 'garbage\n' > "$LOCK"
+corrupt_out="$(spec_loop_lock_acquire "$LOCK" "$$")"; corrupt_rc=$?
+check "corrupt lock is treated as stale (rc=0)" "0"                                "$corrupt_rc"
+check "corrupt lock reclaim says so"            "reclaimed stale lock (pid=unknown)" "$corrupt_out"
+check "corrupt lock is replaced by the holder"  "pid=$$"                           "$(cat "$LOCK")"
+spec_loop_lock_release "$LOCK" "$$"
+
+# Dead-pid path with a pid we know is dead (DEAD_PID was reaped above).
+printf 'pid=%s\n' "$DEAD_PID" > "$LOCK"
+dead_out="$(spec_loop_lock_acquire "$LOCK" "$$")"; dead_rc=$?
+check "dead-pid lock is reclaimed (rc=0)"      "0"                                   "$dead_rc"
+check "dead-pid reclaim names it"              "reclaimed stale lock (pid=$DEAD_PID)" "$dead_out"
+spec_loop_lock_release "$LOCK" "$$"
+
 # ---- post-commit verification ----------------------------------------
 echo "spec_loop_verify_iteration:"
 GREEN_GATE="$TMP/green-gate"
@@ -131,4 +185,5 @@ check        "missing gate command exits 127"         "127" "$missing_rc"
 echo ""
 echo "──────────────────────────────"
 echo "PASS: $PASS   FAIL: $FAIL"
+rm -rf "$TMP"
 [ "$FAIL" -eq 0 ]
