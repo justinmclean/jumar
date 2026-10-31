@@ -436,28 +436,26 @@ def test_todo_fail_contributes_to_exit_status(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_module_absent_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When schedule module is absent, check is warn, not fail."""
-    import builtins
+def test_schedule_module_absent_is_unchecked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W18: an absent schedule module is unchecked, never ok and never fail."""
+    import sys
 
-    real_import = builtins.__import__
+    import jumar
 
-    def fake_import(name: str, *args: object, **kwargs: object) -> object:
-        if name == "jumar.schedule":
-            raise ImportError("schedule not available")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
+    # `from . import schedule` reads the package attribute first, then
+    # sys.modules; a None entry there is how Python spells "not importable".
+    monkeypatch.delattr(jumar, "schedule", raising=False)
+    monkeypatch.setitem(sys.modules, "jumar.schedule", None)
 
     todo = Path(__file__).parent.parent / "tests" / "test_doctor.py"  # any real file
     config = _cfg(todo_path=str(todo))
 
-    # Reimport doctor to pick up the monkeypatched import, then call _check_schedule
     from jumar.doctor import _check_schedule
 
     check = _check_schedule(config)
-    assert check.status == CheckStatus.warn
-    assert "schedule" in check.message.lower()
+    assert check.status == CheckStatus.unchecked
+    assert check.message.startswith("Unchecked, because")
+    assert "schedule module" in check.message
 
 
 def test_schedule_module_absent_does_not_fail_run(tmp_path: Path) -> None:
@@ -469,14 +467,15 @@ def test_schedule_module_absent_does_not_fail_run(tmp_path: Path) -> None:
     from jumar.doctor import _check_schedule
 
     check = _check_schedule(config)
-    # Should be warn (module absent) or ok (if schedule is present and empty)
-    assert check.status in (CheckStatus.warn, CheckStatus.ok)
+    # Machine-dependent (no cron here, cron with no entries there), but never a
+    # failure: that is the whole point of the test.
+    assert check.status != CheckStatus.fail
 
 
-def test_schedule_missing_crontab_binary_is_warn_and_exit_zero(
+def test_schedule_missing_crontab_binary_is_unchecked_and_exit_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No crontab binary on the machine (containers, cloud VMs) is warn, not fail."""
+    """No crontab binary (containers, cloud VMs): unchecked, not ok and not fail (W18)."""
     from jumar import schedule as _sched
 
     def _raise(*a: object, **k: object) -> object:
@@ -492,7 +491,8 @@ def test_schedule_missing_crontab_binary_is_warn_and_exit_zero(
     from jumar.doctor import _check_schedule
 
     check = _check_schedule(config)
-    assert check.status == CheckStatus.warn
+    assert check.status == CheckStatus.unchecked
+    assert check.message.startswith("Unchecked, because no scheduler binary was found")
     assert "crontab" in check.message
     assert "systemd --user" in check.message
     assert "launchd" in check.message
@@ -669,18 +669,111 @@ def test_legacy_check_warns_on_cron_marker(tmp_path: Path, monkeypatch: pytest.M
     assert "Pre-rename" in check.message
 
 
-def test_legacy_check_ok_when_crontab_unavailable(
+def test_legacy_check_is_unchecked_when_crontab_binary_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W18: the crontab was never read, so this is not a pass."""
+    from jumar import doctor as _doctor
+
+    def _raise(*a: object, **k: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "crontab")
+
+    monkeypatch.setattr(_doctor.subprocess, "run", _raise)
+    monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
+    check = _doctor._check_legacy_schedule_markers()
+    assert check.status is _doctor.CheckStatus.unchecked
+    assert "no crontab binary was found" in check.message
+
+
+def test_legacy_check_is_unchecked_when_crontab_cannot_be_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from jumar import doctor as _doctor
 
     def _raise(*a: object, **k: object) -> object:
-        raise OSError("no crontab binary")
+        raise PermissionError(13, "Permission denied", "crontab")
 
     monkeypatch.setattr(_doctor.subprocess, "run", _raise)
     monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
     check = _doctor._check_legacy_schedule_markers()
+    assert check.status is _doctor.CheckStatus.unchecked
+    assert "could not be read" in check.message
+
+
+def test_legacy_check_is_ok_for_a_user_with_no_crontab(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`crontab -l` exiting 1 with "no crontab for user" WAS checked: nothing is there."""
+    from jumar import doctor as _doctor
+
+    class _Result:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(_doctor.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
+    check = _doctor._check_legacy_schedule_markers()
     assert check.status is _doctor.CheckStatus.ok
+
+
+def test_legacy_check_still_warns_on_launchd_findings_without_crontab(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A finding outranks an unchecked source: what was seen is still reported."""
+    from jumar import doctor as _doctor
+
+    def _raise(*a: object, **k: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "crontab")
+
+    agents = tmp_path / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    (agents / "com.gsd.abc.plist").write_text("")  # legacy-name-ok
+    monkeypatch.setattr(_doctor.subprocess, "run", _raise)
+    monkeypatch.setattr(_doctor.Path, "home", staticmethod(lambda: tmp_path))
+    check = _doctor._check_legacy_schedule_markers()
+    assert check.status is _doctor.CheckStatus.warn
+
+
+# ---------------------------------------------------------------------------
+# W18 — an absent precondition is unchecked: never ok, never a failure
+# ---------------------------------------------------------------------------
+
+
+def test_unchecked_never_sets_the_exit_status() -> None:
+    report = DoctorReport(
+        checks=(
+            DoctorCheck("a", CheckStatus.ok, "fine"),
+            DoctorCheck("b", CheckStatus.unchecked, "Unchecked, because x."),
+        )
+    )
+    assert report.exit_status == 0
+
+
+def test_format_report_marks_unchecked_as_skip_and_does_not_claim_all_passed() -> None:
+    report = DoctorReport(
+        checks=(
+            DoctorCheck("a", CheckStatus.ok, "fine"),
+            DoctorCheck("b", CheckStatus.unchecked, "Unchecked, because x."),
+        )
+    )
+    text = format_report(report)
+    assert "[skip] b: Unchecked, because x." in text
+    assert "All checks passed" not in text
+    assert "1 could not run" in text
+
+
+def test_format_report_says_all_passed_only_when_everything_ran() -> None:
+    report = DoctorReport(checks=(DoctorCheck("a", CheckStatus.ok, "fine"),))
+    assert "All checks passed" in format_report(report)
+
+
+def test_speed_probe_without_base_url_is_unchecked() -> None:
+    from jumar.doctor import _check_generation_speed
+
+    config = _cfg(harness=HarnessConfig(agent="openai", model="m"))
+    check = _check_generation_speed(config)
+    assert check.status == CheckStatus.unchecked
+    assert "no base_url" in check.message
 
 
 # ---------------------------------------------------------------------------

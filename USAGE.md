@@ -620,6 +620,15 @@ model = "sonnet"
   one the selected `--harness-profile` supplies — not just the top-level
   `[jumar.harness] model`, which once every stage carries an override is an id
   nothing ever calls.
+- **`skip` means unchecked, not passed.** A `doctor` probe whose own
+  precondition is absent — no scheduler binary to read schedules with, no
+  `base_url` to time a completion against — reports
+  `[skip] … Unchecked, because …` instead of `ok` or `FAIL`. It never sets the
+  exit status, and the summary line counts it separately rather than saying
+  every check passed. The same rule holds for `judge` checks: a missing or
+  empty artefact fails before any model call, and one that exists but cannot be
+  read is `inconclusive` ("unchecked, because …"), so the judge is never asked
+  to rule on a note saying the evidence is missing.
 - **`api_key_env` names an environment variable**, not the key itself — the key
   never goes in `jumar.toml`. Leave it unset for a local server that takes no
   auth; the request is then sent with no `Authorization` header at all.

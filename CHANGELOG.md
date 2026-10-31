@@ -29,6 +29,14 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Fixed since then: an absent precondition is now reported as unchecked
+rather than passed or failed. `doctor` marks such probes `skip`
+("Unchecked, because …"): no scheduler binary, no schedule module, no
+`base_url` for the speed probe, and a crontab that could not be read, which the
+legacy-schedule probe used to report as `ok`. A `judge` check whose artefact is
+missing or empty fails without a model call, and one whose artefact cannot be
+read is inconclusive, instead of the model being shown "Artefact not found".
+
 Fixed since then: a subtask whose agent hit its step cap, timed out or was
 truncated was still verified, so an artefact it half wrote, or one an earlier
 attempt left behind, could pass the check and tick the box. Each attempt now

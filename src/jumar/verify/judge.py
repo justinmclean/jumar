@@ -14,6 +14,11 @@ Contract:
 - Structured response: agent must return {"verdict", "reason", "artefacts_shown"};
   any unparseable response is inconclusive (not a pass).
 - Returns inconclusive when no harness is configured in VerifyContext.
+- Absent preconditions are decided mechanically, before any model call: a
+  missing or empty artefact is ``failed`` (the work it should hold is not
+  there), and an artefact that exists but cannot be read is ``inconclusive``
+  -- unchecked, because it could not be shown to the judge. A model is never
+  asked to rule on prose saying the evidence is missing.
 """
 
 from __future__ import annotations
@@ -120,6 +125,53 @@ def build_judge_prompt(check: Check, ctx: VerifyContext) -> tuple[str, list[str]
     return prompt, artefact_names
 
 
+def _artefact_precondition(check: Check, ctx: VerifyContext) -> VerificationResult | None:
+    """Decide a missing, empty or unreadable artefact without a model call.
+
+    Returns None when the artefact is there and readable, so the judge runs.
+    """
+    assert check.path is not None
+    raw = check.path
+    file_path = Path(raw) if Path(raw).is_absolute() else ctx.cwd / raw
+    checked_at = stamp()
+
+    def _result(verdict: Verdict, error: str, summary: str, **extra: Any) -> VerificationResult:
+        return VerificationResult(
+            subtask_id=ctx.subtask_id,
+            attempt_no=ctx.attempt_no,
+            verdict=verdict,
+            kind=CheckKind.judge,
+            evidence={"error": error, "path": raw, "model_called": False, **extra},
+            summary=summary,
+            evidence_path=None,
+            checked_at=checked_at,
+        )
+
+    if not file_path.exists():
+        return _result(
+            Verdict.failed,
+            "artefact_missing",
+            f"judge verifier: artefact {raw!r} does not exist; failed without asking the judge",
+        )
+    try:
+        content = file_path.read_bytes()
+    except OSError as exc:
+        return _result(
+            Verdict.inconclusive,
+            "artefact_unreadable",
+            f"judge verifier: unchecked, because artefact {raw!r} could not be read ({exc})",
+            reason=str(exc),
+        )
+    if not content:
+        return _result(
+            Verdict.failed,
+            "artefact_empty",
+            f"judge verifier: artefact {raw!r} is empty; failed without asking the judge",
+            size_bytes=0,
+        )
+    return None
+
+
 def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
     """Run an adversarial judge agent and return a VerificationResult.
 
@@ -170,6 +222,10 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
             evidence_path=None,
             checked_at=checked_at,
         )
+
+    precondition = _artefact_precondition(check, ctx)
+    if precondition is not None:
+        return precondition
 
     prompt, artefact_names = build_judge_prompt(check, ctx)
 
