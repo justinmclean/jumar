@@ -56,7 +56,18 @@ prompt assembly + agent launch, unit-testable without an agent):
 - **Never pushes, never opens a PR.** Every beat ends at a local commit and
   prints the human-run `git push` + `gh pr create --web` commands.
 - **Validation is the gate.** A build iteration that cannot get `make check`
-  green does not commit; it records the blocker in the plan and stops.
+  green does not commit; it records the blocker in the plan and stops. With
+  `SPEC_LOOP_VERIFY=1` the runner does not take the beat's word for it: after
+  a build/update iteration commits, it re-runs the gate
+  (`SPEC_LOOP_VERIFY_CMD`, default `make check`) on the work-item branch. A red
+  gate is reported with its output, the iteration is not treated as done, the
+  branch is kept for review, and the loop stops with exit 1 — the runner-side
+  equivalent of the product's stage 6.
+- **Single flight.** The loop holds a PID-stamped lock (`.spec-loop.lock` at
+  the repo root, or `SPEC_LOOP_LOCK`) with the product's semantics (AC10.5,
+  AC10.6): a second invocation while one runs exits 0 with `already_running`
+  and touches nothing; a lock left by a dead run, or one that cannot be read,
+  is reclaimed. Release removes only the holder's own lock.
 - **No redoing built work.** Because the loop never pushes, a built item exists
   only as a local branch. Every iteration is fed both open PRs and local
   work-item branches as in-flight work.
@@ -76,6 +87,13 @@ prompt assembly + agent launch, unit-testable without an agent):
   as unlimited.
 - AC-L6 A build iteration that ends on the base branch with a changed HEAD stops
   the loop with an error.
+- AC-L7 A live lock refuses a second run with `already_running` and leaves the
+  lock file untouched; a lock whose PID is dead, or whose content cannot be
+  parsed, is reclaimed; release by a non-holder leaves the lock in place.
+- AC-L8 Under `SPEC_LOOP_VERIFY=1` a green gate is reported and the loop
+  continues; a red gate (including a gate command that cannot be found) is
+  reported with its exit status and log, and the loop stops with exit 1 without
+  leaving its lock behind.
 
 ## Relationship to the product
 
@@ -94,19 +112,15 @@ build 3` is a reasonable cadence once you trust it. Two cautions specific to the
 loop:
 
 - **Single-flight matters more here**, because two concurrent loops would fork
-  work-item branches off the same base and duplicate work. The loop has no lock
-  of its own (the product's `lock.py` guards the product, not the loop) — so a
-  scheduled loop must not overlap its own run window.
+  work-item branches off the same base and duplicate work. The loop's own lock
+  (see Non-negotiables) makes an overlapping scheduled invocation exit 0 with
+  `already_running` instead, so the cadence need not be longer than the longest
+  plausible run.
 - **Nothing is pushed**, so a scheduled loop accumulates local work-item
   branches for review. That is the intended shape: the machine builds, the human
   merges.
 
 ## Known gaps
 
-- The loop does not measure whether a build iteration's Validation command was
-  actually run (it trusts the beat prompt). A future `SPEC_LOOP_VERIFY=1` mode
-  could re-run `make check` in the runner after each iteration — the runner-side
-  equivalent of the product's stage 6.
-- The loop has no single-flight lock, so an overlapping scheduled invocation
-  would duplicate work. Until it does, keep the cadence longer than the longest
-  plausible run.
+- None recorded. Verify mode is opt-in: with `SPEC_LOOP_VERIFY` unset the loop
+  still trusts the beat to have run its Validation command.
