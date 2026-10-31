@@ -21,6 +21,12 @@ security posture is explicit and worth reading before you run it:
   (`mail`, `mailx`, `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`,
   `rsync`) are denied in every argv jumar dispatches, and `git push` / `gh`
   are hard-denied. Network *fetch* is allowed by default.
+- **The Claude harness's shell is parsed, not pattern-matched.** A
+  fail-closed `PreToolUse` hook reads every Bash command the agent issues the
+  way bash will and refuses `git push` and `gh` however they are spelled
+  (control operators, quoting, substitutions, `-c` strings, heredocs fed to a
+  shell, wrapper commands). A script file the agent writes and then runs is
+  not read, and an interpreter can still open a socket.
 - **MCP server inheritance is disabled** for the Claude harness
   (`--strict-mcp-config`), so user-configured MCP servers cannot bypass the
   deny list.

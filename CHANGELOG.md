@@ -22,6 +22,13 @@ as the first instead of a duplicate `jumar.toml` that drifts on `todo_path`
 and `capabilities`. `doctor` now probes the resolved model for every stage
 rather than the top-level `[harness] model` alone.
 
+Security since then: the Claude harness denied `git push` and `gh` with
+`--disallowedTools` text patterns, and a real run showed
+`bash -c 'git push origin main'` and `echo 'git push origin main' | sh` both
+reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
+command the agent issues and refuses those spellings and the rest of the
+family; the patterns stay as defence in depth.
+
 Fixed since then: `doctor` reported a missing `crontab` binary as FAIL and
 exited non-zero on machines that simply have no cron (containers, cloud VMs).
 It is now a WARN that names launchd agents and `systemd --user` timers as

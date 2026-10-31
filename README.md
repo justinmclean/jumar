@@ -261,6 +261,12 @@ primary source writes from memory instead, which is the worse outcome.
   `sendmail`, `ssmtp`, `msmtp`, `ssh`, `scp`, `sftp`, `rsync`. `git push` and
   `gh` are hard-denied in every dispatched argv, matched on the argv basename so
   an absolute path does not slip past.
+- The Claude harness's own shell is guarded too. A `PreToolUse` hook
+  (`shell_guard.py`) reads each command line the way bash does — through
+  control operators, quoting, substitutions, `bash -c` strings, heredocs fed to
+  a shell and wrappers such as `env` or `nohup` — and refuses `git push`, `gh`,
+  and `jumar-gh` without `network`. It fails closed: a line it cannot parse, or
+  a command name built from an expansion, is refused.
 - The allow list is consulted **before** a process is spawned. A refused argv is
   `inconclusive` and never runs.
 - Every subprocess is argv with `shell=False`, and `models.Check` refuses
