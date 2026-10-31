@@ -20,6 +20,7 @@ import pytest
 
 from jumar import cli
 from jumar.harness import AgentResult
+from jumar.models import Termination
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -115,6 +116,46 @@ def repair_transport_error_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentRe
 
 
 repair_transport_error_agent.calls = 0
+
+
+def step_capped_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Plans one subtask, writes an artefact that would pass, then dies at its step cap."""
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    (Path(cwd) / "marker.txt").write_text("OK\n")
+    return AgentResult(
+        exit_status=1,
+        stdout="partial work",
+        stderr="tool-call step cap (25) exceeded without a final answer",
+        timed_out=False,
+        agent_claim=None,
+        termination=Termination.step_cap,
+    )
+
+
+def timed_out_after_writing_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """Writes the passing artefact and is then killed by the wall-clock limit."""
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    (Path(cwd) / "marker.txt").write_text("OK\n")
+    return AgentResult(exit_status=-1, stdout="", stderr="", timed_out=True, agent_claim=None)
+
+
+def capped_then_clean_agent(prompt: str, *, cwd: Path, **_: Any) -> AgentResult:
+    """First attempt is cut off; the repair finishes cleanly."""
+    if prompt.startswith("Decompose the following todo item"):
+        return _result(_PLAN)
+    (Path(cwd) / "marker.txt").write_text("OK\n")
+    if prompt.startswith("A previous attempt at this subtask"):
+        return _result("finished the marker")
+    return AgentResult(
+        exit_status=1,
+        stdout="",
+        stderr="tool-call step cap (25) exceeded without a final answer",
+        timed_out=False,
+        agent_claim=None,
+        termination=Termination.step_cap,
+    )
 
 
 class _Args:
@@ -1027,3 +1068,65 @@ def test_retry_failed_does_not_reopen_an_item_completed_on_a_prior_retry(
 
     # Second retry attempt: must NOT re-execute — item is already done.
     assert cli._cmd_resume(_Args(run_id=run_id, retry_failed=True), _run_agent=exploding) == 0
+
+
+# ---------------------------------------------------------------------------
+# W17 — a cut-off run is not vouched for by what it left behind
+# ---------------------------------------------------------------------------
+
+
+def _journal_lines(workspace: Path) -> list[dict[str, Any]]:
+    run_dir = next(d for d in (workspace / "runs").iterdir() if d.is_dir())
+    text = (run_dir / "journal.jsonl").read_text()
+    return [json.loads(ln) for ln in text.splitlines() if ln.strip()]
+
+
+def test_a_step_capped_run_fails_even_though_its_artefact_would_pass(workspace: Path) -> None:
+    """W17 validation: the artefact satisfies file+pattern, the subtask still fails."""
+    rc = cli._cmd_run(_Args(), _run_agent=step_capped_agent)
+
+    assert rc == 1
+    assert (workspace / "marker.txt").read_text() == "OK\n"  # the check WOULD pass
+    assert "- [ ] Create the marker file" in (workspace / "todo.md").read_text()
+
+    lines = _journal_lines(workspace)
+    (failed,) = [ln for ln in lines if ln["event"] == "item_failed"]
+    assert failed["payload"]["failure_code"] == "unclean_termination"
+    verifications = [ln for ln in lines if ln["event"] == "verification"]
+    assert verifications, "every attempt still gets a journalled verdict"
+    for v in verifications:
+        assert v["payload"]["verdict"] == "failed"
+        assert v["payload"]["termination"] == "step_cap"
+        assert v["payload"]["evidence"]["check_run"] is False
+    finished = [ln for ln in lines if ln["event"] == "attempt_finished"]
+    assert finished and all(ln["payload"]["termination"] == "step_cap" for ln in finished)
+    assert not any(ln["event"] == "item_completed" for ln in lines)
+
+
+def test_a_timed_out_run_that_left_a_passing_artefact_still_fails(workspace: Path) -> None:
+    rc = cli._cmd_run(_Args(), _run_agent=timed_out_after_writing_agent)
+
+    assert rc == 1
+    assert "- [ ] Create the marker file" in (workspace / "todo.md").read_text()
+    (failed,) = [ln for ln in _journal_lines(workspace) if ln["event"] == "item_failed"]
+    assert failed["payload"]["failure_code"] == "unclean_termination"
+
+
+def test_a_cut_off_attempt_can_still_be_repaired_by_a_clean_one(workspace: Path) -> None:
+    rc = cli._cmd_run(_Args(), _run_agent=capped_then_clean_agent)
+
+    assert rc == 0
+    assert "- [x] Create the marker file" in (workspace / "todo.md").read_text()
+    verdicts = [
+        (v["payload"]["termination"], v["payload"]["verdict"])
+        for v in _journal_lines(workspace)
+        if v["event"] == "verification"
+    ]
+    assert verdicts == [("step_cap", "failed"), ("clean", "passed")]
+
+
+def test_a_clean_failing_run_keeps_its_old_failure_code(workspace: Path) -> None:
+    rc = cli._cmd_run(_Args(), _run_agent=lying_agent)
+    assert rc == 1
+    (failed,) = [ln for ln in _journal_lines(workspace) if ln["event"] == "item_failed"]
+    assert failed["payload"]["failure_code"] == "repairs_exhausted"

@@ -80,6 +80,7 @@ def test_failure_code_members() -> None:
         "dependency_blocked",
         "bad_schedule",
         "already_running",
+        "unclean_termination",
     }
 
 

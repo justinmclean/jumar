@@ -18,6 +18,7 @@ No other module needs to be touched (AC6.7).
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,8 +27,9 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 if TYPE_CHECKING:
     from ..config import Config
 
+from ..clock import stamp
 from ..journal import VERIFICATION, Journal
-from ..models import Check, CheckKind, HarnessInfo, VerificationResult
+from ..models import Check, CheckKind, HarnessInfo, Termination, Verdict, VerificationResult
 
 # ---------------------------------------------------------------------------
 # Context passed to every verifier
@@ -53,6 +55,9 @@ class VerifyContext:
     # absent the command verifier cannot consult the argv allow list and says
     # so rather than silently running whatever it was handed.
     config: Config | None = None
+    # How the attempt being checked ended. run_verify refuses to run the check
+    # for anything but a clean ending (see unclean_result).
+    termination: Termination | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +96,12 @@ def run_verify(
     returns but **before** this function returns, so it lands in the journal
     before the caller starts the next subtask (AC6.6).
 
+    When ``ctx.termination`` says the attempt ended any way but cleanly, the
+    check is **not run**: a step-capped, timed-out or truncated agent may have
+    left a partial artefact, or one from an earlier attempt, that satisfies
+    it. The result is ``failed`` with ``unclean_termination`` evidence instead
+    (see :func:`unclean_result`), journalled the same way.
+
     Raises :class:`VerifyError` if no verifier is registered for
     ``check.kind``.
     """
@@ -101,24 +112,56 @@ def run_verify(
             "Call register() before run_verify()."
         )
 
-    result = verifier(check, ctx)
+    if ctx.termination is not None and ctx.termination is not Termination.clean:
+        result = unclean_result(check, ctx, ctx.termination)
+    else:
+        result = verifier(check, ctx)
+        if ctx.termination is not None:
+            result = dataclasses.replace(result, termination=ctx.termination)
 
-    journal.append(
-        VERIFICATION,
-        subtask_id=ctx.subtask_id,
-        item_id=item_id,
-        payload={
-            "attempt_no": ctx.attempt_no,
-            "verdict": result.verdict.value,
-            "kind": result.kind.value,
-            "summary": result.summary,
-            "evidence": result.evidence,
-            "evidence_path": result.evidence_path,
-            "checked_at": result.checked_at,
-        },
-    )
+    payload: dict[str, Any] = {
+        "attempt_no": ctx.attempt_no,
+        "verdict": result.verdict.value,
+        "kind": result.kind.value,
+        "summary": result.summary,
+        "evidence": result.evidence,
+        "evidence_path": result.evidence_path,
+        "checked_at": result.checked_at,
+    }
+    if result.termination is not None:
+        payload["termination"] = result.termination.value
+    journal.append(VERIFICATION, subtask_id=ctx.subtask_id, item_id=item_id, payload=payload)
 
     return result
+
+
+def unclean_result(
+    check: Check, ctx: VerifyContext, termination: Termination
+) -> VerificationResult:
+    """The verdict for an attempt that did not end cleanly: ``failed``, unchecked.
+
+    The termination class rides on the verdict and in its evidence, so the
+    repair prompt, the journal and the report all say why the work was not
+    trusted, rather than showing a check that happened to pass.
+    """
+    return VerificationResult(
+        subtask_id=ctx.subtask_id,
+        attempt_no=ctx.attempt_no,
+        verdict=Verdict.failed,
+        kind=check.kind,
+        evidence={
+            "error": "unclean_termination",
+            "termination": termination.value,
+            "check_run": False,
+        },
+        summary=(
+            f"the agent's run ended non-clean ({termination.value}), so what it left "
+            "behind was not checked; finish the subtask so the run ends normally"
+        ),
+        evidence_path=None,
+        checked_at=stamp(),
+        termination=termination,
+    )
 
 
 # ---------------------------------------------------------------------------

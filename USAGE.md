@@ -209,6 +209,23 @@ event that follows carries the verifier's `verdict` and `evidence` dict —
 the concrete artefact that proved the claim, or the concrete observation that
 falsified it.
 
+### A run that was cut off is not checked
+
+Before the verifier looks at anything, jumar decides how the agent's run
+**ended**, and records it as `termination` on `attempt_finished` and on the
+verdict: `clean`, `step_cap` (ran out of tool-call steps), `timed_out`,
+`truncated` (hit `max_tokens` mid-answer), `denied_tool` (gave its final answer
+straight after a refused tool call), `harness_outage`, or `abnormal_exit`
+(exited non-zero for any other reason). Only a `clean` run is checked. Any
+other ending gets a `failed` verdict with `unclean_termination` evidence and
+`check_run: false`, because a file the agent half wrote, or one an earlier
+attempt left behind, can satisfy a check for work that never finished. The
+repair loop still runs, so a cut-off attempt can be finished by a clean one; an
+item whose last attempt was cut off fails with `unclean_termination` rather
+than `repairs_exhausted`. The Claude CLI reports only its exit status in print
+mode, so for it the classes are `clean`, `timed_out`, `step_cap` (a
+`--max-turns` stop), `harness_outage` and `abnormal_exit`.
+
 ### Verbose mode — echo the agent's output after each initial attempt
 
 ```bash

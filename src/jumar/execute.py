@@ -19,7 +19,7 @@ from typing import Any
 
 from .clock import stamp
 from .config import Config, resolve_harness
-from .harness import AgentResult, detect_harness_error
+from .harness import AgentResult, classify_termination, detect_harness_error
 from .harness import run_agent as _default_run_agent
 from .journal import ATTEMPT_FINISHED, ATTEMPT_STARTED, HARNESS_ERROR, Journal
 from .models import Attempt, Capability, HarnessInfo, Subtask, TodoItem, VerificationResult
@@ -217,6 +217,9 @@ def execute(
         encoding="utf-8",
     )
 
+    # How the run ended, decided now, before stage 6 looks at what it left.
+    termination = classify_termination(result, harness_error)
+
     error: str | None = None
     if harness_error is not None:
         error = "harness_error"
@@ -248,6 +251,7 @@ def execute(
             "tokens_per_second": round(tokens / gen_s, 1) if tokens and gen_s else None,
             "files_touched": list(touched),
             "error": error,
+            "termination": termination.value,
         },
     )
 
@@ -261,4 +265,5 @@ def execute(
         exit_status=result.exit_status,
         files_touched=touched,
         error=error,
+        termination=termination,
     )

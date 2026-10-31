@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import Capability, HarnessInfo
+from .models import Capability, HarnessInfo, Termination
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -156,6 +156,36 @@ class AgentResult:
     completion_tokens: int | None = None
     prompt_tokens: int | None = None
     generation_seconds: float | None = None
+    # How the run ended, when the harness knows first-hand (the in-process
+    # harness counts its own steps and reads finish_reason). None means "not
+    # reported": classify_termination() then derives it from the exit status.
+    termination: Termination | None = None
+
+
+# Claude's print mode reports a --max-turns stop in its output.
+_STEP_CAP_PHRASES: tuple[str, ...] = ("reached max turns", "max turns reached")
+
+
+def classify_termination(result: AgentResult, harness_error: str | None) -> Termination:
+    """Decide how an agent run ended, before anything it left behind is trusted.
+
+    Order matters: an outage or a timeout outranks whatever the harness
+    reported, and a non-zero exit is never ``clean`` even when the harness
+    said nothing more specific.
+    """
+    if harness_error is not None:
+        return Termination.harness_outage
+    if result.timed_out:
+        return Termination.timed_out
+    reported = getattr(result, "termination", None)
+    if reported is not None:
+        return Termination(reported)
+    if result.exit_status not in (0, None):
+        haystack = f"{result.stdout}\n{result.stderr}".lower()
+        if any(phrase in haystack for phrase in _STEP_CAP_PHRASES):
+            return Termination.step_cap
+        return Termination.abnormal_exit
+    return Termination.clean
 
 
 # ---------------------------------------------------------------------------
