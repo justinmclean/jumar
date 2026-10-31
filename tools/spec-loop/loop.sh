@@ -47,6 +47,11 @@
 #   SPEC_LOOP_PLAN_MAX plan line count that triggers ONE consolidation round
 #                      before building (default: 500)
 #   SPEC_LOOP_OUTPUT_FORMAT  text (default) | stream-json (live tool events)
+#   SPEC_LOOP_VERIFY   1 re-runs the validation gate in the runner after a
+#                      build/update iteration commits. A red gate is reported,
+#                      the iteration is not treated as done, and the loop stops
+#                      with exit 1 for review (default: 0, trust the beat).
+#   SPEC_LOOP_VERIFY_CMD  the gate command (default: make check)
 
 set -uo pipefail
 
@@ -93,6 +98,9 @@ fi
 PR_LIMIT="${SPEC_LOOP_PR_LIMIT:-100}"
 OUTPUT_FORMAT="${SPEC_LOOP_OUTPUT_FORMAT:-text}"
 PLAN_CONSOLIDATE_THRESHOLD="${SPEC_LOOP_PLAN_MAX:-500}"
+VERIFY="${SPEC_LOOP_VERIFY:-0}"
+VERIFY_CMD="${SPEC_LOOP_VERIFY_CMD:-make check}"
+VERIFY_RED=false
 
 # ---- parse arguments -------------------------------------------------
 usage() {
@@ -152,6 +160,7 @@ echo "Prompt: $PROMPT_FILE"
 echo "Base:   $BASE  (work items fork from here)"
 echo "Agent:  $AGENT"
 if [ -n "$MODEL" ]; then echo "Model:  $MODEL"; else echo "Model:  (agent default)"; fi
+if [ "$VERIFY" = "1" ]; then echo "Verify: $VERIFY_CMD  (re-run after each committed iteration)"; fi
 if [ "$MAX_ITERATIONS" -gt 0 ]; then echo "Max:    $MAX_ITERATIONS iterations"; else echo "Max:    unlimited"; fi
 echo "Stop:   Ctrl+C  or  touch STOP"
 echo "Note:   this loop never pushes and never opens a PR."
@@ -367,6 +376,26 @@ while true; do
             break
         fi
 
+        # Verify mode: the beat says it ran its Validation command; check.
+        # Runs on the work-item branch, before we leave it. A beat that stopped
+        # without committing has nothing to verify.
+        if [ "$VERIFY" = "1" ] && [ "$CUR_BRANCH" != "$BASE" ]; then
+            if [ "$(git rev-parse HEAD)" = "$BASE_HEAD" ]; then
+                echo "[ verify ] skipped: no commit on $CUR_BRANCH"
+            else
+                VERIFY_LOG="$(mktemp "${TMPDIR:-/tmp}/spec-loop-verify.XXXXXX")" || exit 1
+                # shellcheck disable=SC2086  # VERIFY_CMD is an operator-supplied command line
+                if ! spec_loop_verify_iteration "$VERIFY_LOG" $VERIFY_CMD; then
+                    VERIFY_RED=true
+                    echo "✗ '$VERIFY_CMD' is red on '$CUR_BRANCH'. This iteration is NOT done." >&2
+                    echo "  Stopping so you can review; the branch and its commit are kept." >&2
+                    git checkout "$BASE" >/dev/null 2>&1 || true
+                    break
+                fi
+                rm -f "$VERIFY_LOG"
+            fi
+        fi
+
         # Return to BASE so the tooling (plan, prompts, specs) is present again
         # and you are never stranded on a work branch. The work-item branch persists.
         if [ "$(current_branch)" != "$BASE" ]; then
@@ -376,3 +405,5 @@ while true; do
     fi
     echo ""
 done
+
+if [ "$VERIFY_RED" = true ]; then exit 1; fi

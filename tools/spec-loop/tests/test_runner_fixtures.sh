@@ -94,6 +94,40 @@ check "opencode uses run"     "run"                          "$opencode_argv"
 check "opencode uses --auto"  "--auto"                       "$opencode_argv"
 check "opencode passes model" "anthropic/claude-sonnet-4-5"  "$opencode_argv"
 
+# ---- post-commit verification ----------------------------------------
+echo "spec_loop_verify_iteration:"
+GREEN_GATE="$TMP/green-gate"
+cat > "$GREEN_GATE" <<'EOF'
+#!/usr/bin/env bash
+echo "all 1288 passed"
+exit 0
+EOF
+RED_GATE="$TMP/red-gate"
+cat > "$RED_GATE" <<'EOF'
+#!/usr/bin/env bash
+echo "FAILED tests/test_x.py::test_y" >&2
+exit 3
+EOF
+chmod +x "$GREEN_GATE" "$RED_GATE"
+
+green_out="$(spec_loop_verify_iteration "$TMP/green.log" "$GREEN_GATE" check)"; green_rc=$?
+check        "green gate returns 0"            "0"                     "$green_rc"
+check        "green gate reports green"        "[ verify ] green:"     "$green_out"
+check        "green gate names the command"    "green-gate check"      "$green_out"
+check_absent "green gate is not RED"           "RED"                   "$green_out"
+check        "green gate output is logged"     "all 1288 passed"       "$(cat "$TMP/green.log")"
+
+red_out="$(spec_loop_verify_iteration "$TMP/red.log" "$RED_GATE" check)"; red_rc=$?
+check        "red gate propagates its exit status" "3"                      "$red_rc"
+check        "red gate reports RED"                "[ verify ] RED (exit 3)" "$red_out"
+check        "red gate points at the log"          "$TMP/red.log"           "$red_out"
+check_absent "red gate is not green"               "green"                  "$red_out"
+check        "red gate stderr is logged"           "FAILED tests/test_x.py" "$(cat "$TMP/red.log")"
+
+missing_out="$(spec_loop_verify_iteration "$TMP/missing.log" "$TMP/no-such-gate")"; missing_rc=$?
+check        "missing gate command is RED, not green" "RED" "$missing_out"
+check        "missing gate command exits 127"         "127" "$missing_rc"
+
 echo ""
 echo "──────────────────────────────"
 echo "PASS: $PASS   FAIL: $FAIL"
