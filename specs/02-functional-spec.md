@@ -123,7 +123,12 @@ then ordering what survives.
 gate and reported as **Parked** with the token's value as the reason. Parking is
 a human-facing brake: stage 8 applies it automatically after repeated failures
 (`@paused=auto-failures`), and the human releases it by deleting the token from
-the line — there is no unpark command.
+the line — there is no unpark command. The reason `human` is special:
+`@paused=human` marks an item a person is doing. It is never selected, like any
+parked item, but `run`, `status` and `report` show it as **with a person**
+rather than as stuck, and it is not counted among the parked items. A ticked
+checkbox wins over a leftover `@paused=` token of any reason: the item is
+`done`, not parked.
 
 *Time eligibility.* Every selection is evaluated against a single `now`,
 captured once per run and journalled, so a long run cannot see time move
@@ -136,7 +141,12 @@ underneath it:
 - an item with no schedule is always time-eligible.
 
 *Dependency eligibility.* An item whose `@depends=` names an item that is not
-`done` is skipped (not failed) and reported as blocked. Cycles in `@depends` are
+`done` is skipped (not failed) and reported as blocked. An item completed
+earlier in the same `--until-empty` pass counts as `done` for this gate even
+though the file has not been re-read as such — in particular a **recurring**
+item, whose checkbox stays unticked and whose `@not-before=` has just been
+advanced, unblocks its dependants in the same pass instead of leaving them
+"deferred until the next occurrence". Cycles in `@depends` are
 detected up front and reported as a configuration error before any work starts.
 A dependency that is merely `deferred` blocks its dependant too — the dependant
 reports the *dependency's* eligibility instant, so the reason is actionable.
@@ -175,7 +185,10 @@ loosens a check, or skips verification.
   "nothing eligible" summary and the next eligibility instant.
 - AC2.11 An item with a `@paused=` token is never selected — before time and
   dependency gates — and is reported as Parked with its reason; the next
-  eligible item is selected instead.
+  eligible item is selected instead. `@paused=human` is reported as with a
+  person, not as parked, and a ticked checkbox beats any `@paused=` token.
+  Under `--until-empty`, a recurring item completed earlier in the pass
+  satisfies its dependants' `@depends=` gate in that same pass.
 - AC2.12 A `@depends=` target that names no item in the same file is a startup
   error (enforced at ingest, before any agent call) naming the item, the
   missing id, and the line, with a did-you-mean suggestion for near-miss
@@ -472,7 +485,9 @@ verdict. On completion:
   retired by being done — that is what makes it recurring. If the line had no
   `@not-before=`, one is appended; if it had one, it is replaced in place. The
   completion is recorded in the journal, which is the durable history the file
-  no longer carries.
+  no longer carries. Within a `--until-empty` pass the run remembers the
+  completion itself, so items that `@depends=` on the recurring item become
+  eligible in the same pass (stage 2, dependency eligibility).
 - A missed occurrence does **not** accumulate: if a daily item was not run for
   five days, the next occurrence is the next one after `now`, not five catch-up
   runs. Backlog-of-one is the only sane default for work that is executed rather
@@ -639,7 +654,9 @@ in the runs directory.
 
 - It is **read-only**: it creates no run directory, appends no journal entry,
   acquires no lock, and always exits 0.
-- Each item reports a state: `done` (checkbox checked), `parked` (`@paused=`
+- Each item reports a state: `done` (checkbox checked), `human`
+  (`@paused=human`: a person's work, never selected, not counted as parked),
+  `parked` (any other `@paused=`
   token, with its reason and `@failed=` count), `deferred` (with the next
   eligibility instant), `blocked` (unmet `@depends=`), `eligible`, or
   `never-attempted` (eligible, but no journal has ever touched it).
@@ -658,9 +675,10 @@ on stderr; progress (AC5.6) is suppressed. All timestamps are ISO-8601 UTC.
 - AC11.1 `jumar status` creates no run directory, appends to no journal, and
   exits 0 — including when the runs directory is empty or absent.
 - AC11.2 Every item in the todo file appears exactly once, with a state drawn
-  from `done | parked | deferred | blocked | eligible | never-attempted`.
+  from `done | human | parked | deferred | blocked | eligible | never-attempted`.
 - AC11.3 A parked item shows its `@paused=` reason and `@failed=` count; a
-  deferred item shows its next eligibility instant.
+  deferred item shows its next eligibility instant; `@paused=human` is `human`,
+  not `parked`; a checked checkbox is `done` even if a `@paused=` token remains.
 - AC11.4 Last-run id, instant, and outcome come from the journals; an item
   absent from every journal is `never-attempted`, not an error.
 - AC11.5 Under `--json`, stdout parses as a single JSON document; warnings and
