@@ -550,7 +550,10 @@ Notes that matter:
   `curl`/`wget` are allowed — an agent that cannot read a primary source
   fabricates it instead. The deny list is the outbound-transmission vectors
   (mail, ssh, scp, rsync, …), and `git push` / `gh` are hard-denied in every
-  dispatched argv. None of this is a sandbox: run jumar in a container/VM with
+  dispatched argv. Under the Claude harness the agent's Bash commands pass a
+  fail-closed guard hook as well: a refused command comes back to the agent as
+  `jumar-guard[deny]`, `[expansion]`, `[parse]` or `[wrapper]` with the reason,
+  and the usual fix is to spell the command plainly. None of this is a sandbox: run jumar in a container/VM with
   restricted egress and no push credentials (see README §Security posture).
 - **Choosing per-stage models:** put the strong model where the leverage is —
   **decompose high** (a bad plan poisons every later stage), **execute cheap**
