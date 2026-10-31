@@ -22,6 +22,11 @@ as the first instead of a duplicate `jumar.toml` that drifts on `todo_path`
 and `capabilities`. `doctor` now probes the resolved model for every stage
 rather than the top-level `[harness] model` alone.
 
+Fixed since then: `doctor` reported a missing `crontab` binary as FAIL and
+exited non-zero on machines that simply have no cron (containers, cloud VMs).
+It is now a WARN that names launchd agents and `systemd --user` timers as
+alternatives. A crontab that exists but cannot be read is still a FAIL.
+
 Renamed from GetStuffDone (`gsd`) to **jumar** on 2026-08-11, before anything
 was published under the old name.
 

@@ -504,6 +504,16 @@ def _check_schedule(config: Config) -> DoctorCheck:
             CheckStatus.warn,
             "Schedule module not available. Run 'jumar schedule add <cron>' to install one.",
         )
+    except FileNotFoundError as exc:
+        # The scheduler binary (crontab, launchctl, systemctl) is simply absent,
+        # as on many containers and cloud VMs. That is not a broken setup.
+        return DoctorCheck(
+            "schedule",
+            CheckStatus.warn,
+            f"No scheduler binary found ({exc.filename or exc}); schedule entries cannot be "
+            "read on this machine. Use launchd agents or systemd --user timers instead, "
+            "or install cron.",
+        )
     except Exception as exc:  # noqa: BLE001
         return DoctorCheck(
             "schedule",

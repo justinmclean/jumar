@@ -473,6 +473,60 @@ def test_schedule_module_absent_does_not_fail_run(tmp_path: Path) -> None:
     assert check.status in (CheckStatus.warn, CheckStatus.ok)
 
 
+def test_schedule_missing_crontab_binary_is_warn_and_exit_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No crontab binary on the machine (containers, cloud VMs) is warn, not fail."""
+    from jumar import schedule as _sched
+
+    def _raise(*a: object, **k: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "crontab")
+
+    monkeypatch.setattr(_sched, "default_backend", lambda override=None: _sched.CronBackend())
+    monkeypatch.setattr(_sched.subprocess, "run", _raise)
+
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Task\n")
+    config = _cfg(todo_path=str(todo))
+
+    from jumar.doctor import _check_schedule
+
+    check = _check_schedule(config)
+    assert check.status == CheckStatus.warn
+    assert "crontab" in check.message
+    assert "systemd --user" in check.message
+    assert "launchd" in check.message
+
+    report = run_doctor(config)
+    assert report.exit_status == 0
+
+
+def test_schedule_crontab_present_but_failing_is_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crontab that exists but cannot be read keeps the existing fail behaviour."""
+    from jumar import schedule as _sched
+
+    def _raise(*a: object, **k: object) -> object:
+        raise PermissionError(13, "Permission denied", "crontab")
+
+    monkeypatch.setattr(_sched, "default_backend", lambda override=None: _sched.CronBackend())
+    monkeypatch.setattr(_sched.subprocess, "run", _raise)
+
+    todo = tmp_path / "todo.md"
+    todo.write_text("- [ ] Task\n")
+    config = _cfg(todo_path=str(todo))
+
+    from jumar.doctor import _check_schedule
+
+    check = _check_schedule(config)
+    assert check.status == CheckStatus.fail
+    assert "Could not read installed schedule entries" in check.message
+
+    report = run_doctor(config)
+    assert report.exit_status == 1
+
+
 # ---------------------------------------------------------------------------
 # DoctorReport aggregation
 # ---------------------------------------------------------------------------
