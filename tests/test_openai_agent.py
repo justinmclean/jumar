@@ -1127,3 +1127,31 @@ def test_a_plain_answer_ends_clean(tmp_path: Path, chat_server: Any) -> None:
         "do it", cwd=tmp_path, capabilities=_ALL_CAPS, timeout_s=30, harness=_harness(base_url)
     )
     assert result.termination is Termination.clean
+
+
+def test_response_schema_is_sent_as_a_strict_json_schema_response_format(
+    tmp_path: Path, chat_server: Any
+) -> None:
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+    base_url, handler = chat_server([_message('{"x": "y"}')])
+    run_openai_agent(
+        "answer",
+        cwd=tmp_path,
+        capabilities=frozenset(),
+        timeout_s=30,
+        harness=_harness(base_url),
+        response_schema=schema,
+    )
+    fmt = handler.received[0]["response_format"]
+    assert fmt == {
+        "type": "json_schema",
+        "json_schema": {"name": "response", "strict": True, "schema": schema},
+    }
+
+
+def test_no_response_format_without_a_schema(tmp_path: Path, chat_server: Any) -> None:
+    base_url, handler = chat_server([_message("done")])
+    run_openai_agent(
+        "answer", cwd=tmp_path, capabilities=_ALL_CAPS, timeout_s=30, harness=_harness(base_url)
+    )
+    assert "response_format" not in handler.received[0]

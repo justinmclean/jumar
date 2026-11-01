@@ -11,8 +11,13 @@ Contract:
   explicitly listed artefact files only.  Executor transcript is never included.
 - Default-fail framing: the prompt tells the judge its default answer is FAIL
   and requires specific evidence to return "pass".
-- Structured response: agent must return {"verdict", "reason", "artefacts_shown"};
-  any unparseable response is inconclusive (not a pass).
+- Structured response, pinned by schema: JUDGE_VERDICT_SCHEMA is sent to the
+  harness (claude --json-schema, the openai harness's response_format) and
+  every reply is revalidated locally against it. An unparseable reply, an
+  out-of-enum verdict, a missing or extra field or an empty reason is
+  inconclusive, never a pass. A judge run that failed, or an endpoint that
+  rejects the schema, stays inconclusive: the call is never retried without
+  the schema.
 - Returns inconclusive when no harness is configured in VerifyContext.
 - Absent preconditions are decided mechanically, before any model call: a
   missing or empty artefact is ``failed`` (the work it should hold is not
@@ -29,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..clock import stamp
+from ..harness import SCHEMA_HARNESSES
 from ..harness import run_agent as _default_run_agent
 from ..models import Check, CheckKind, Verdict, VerificationResult
 
@@ -59,6 +65,49 @@ _JUDGE_PROMPT_TEMPLATE = (
 )
 
 
+JUDGE_VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["verdict", "reason", "artefacts_shown"],
+    "properties": {
+        "verdict": {"type": "string", "enum": ["pass", "fail", "inconclusive"]},
+        "reason": {"type": "string", "minLength": 1},
+        "artefacts_shown": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+_VERDICTS = {"pass": Verdict.passed, "fail": Verdict.failed, "inconclusive": Verdict.inconclusive}
+
+
+def schema_violations(raw: Any) -> list[str]:
+    """Revalidate a judge reply against JUDGE_VERDICT_SCHEMA; [] means valid.
+
+    Local and exact, whatever the harness promised: a schema the harness
+    could not enforce must not turn a malformed reply into a verdict.
+    """
+    if not isinstance(raw, dict):
+        return ["reply is not a JSON object"]
+    problems: list[str] = []
+    required = JUDGE_VERDICT_SCHEMA["required"]
+    for key in required:
+        if key not in raw:
+            problems.append(f"missing field {key!r}")
+    for key in sorted(set(raw) - set(required)):
+        problems.append(f"unexpected field {key!r}")
+    verdict = raw.get("verdict")
+    if "verdict" in raw and verdict not in _VERDICTS:
+        problems.append(f"verdict {verdict!r} is not one of pass, fail, inconclusive")
+    reason = raw.get("reason")
+    if "reason" in raw and not (isinstance(reason, str) and reason.strip()):
+        problems.append("reason is empty or not a string")
+    shown = raw.get("artefacts_shown")
+    if "artefacts_shown" in raw and not (
+        isinstance(shown, list) and all(isinstance(a, str) for a in shown)
+    ):
+        problems.append("artefacts_shown is not a list of strings")
+    return problems
+
+
 def _collect_artefacts(check: Check, cwd: Path, head_bytes: int) -> tuple[str, list[str]]:
     """Return (artefacts_block, artefact_names).  Never reads the executor transcript."""
     if check.path is None:
@@ -80,6 +129,15 @@ def _collect_artefacts(check: Check, cwd: Path, head_bytes: int) -> tuple[str, l
     marker = f" (first {head_bytes} bytes shown)" if truncated else ""
     block = f"--- {raw}{marker} ---\n{excerpt}\n--- end {raw} ---"
     return block, [raw]
+
+
+def _parse_whole(text: str) -> dict[str, Any] | None:
+    """The whole reply as one JSON object, or None."""
+    try:
+        result = json.loads(text.strip())
+    except json.JSONDecodeError:
+        return None
+    return result if isinstance(result, dict) else None
 
 
 def _extract_verdict(text: str) -> dict[str, Any] | None:
@@ -237,38 +295,58 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
         capabilities=frozenset(),
         timeout_s=ctx.judge_timeout_s,
         harness=ctx.harness,
+        response_schema=JUDGE_VERDICT_SCHEMA,
     )
+    schema_enforced = ctx.harness.harness in SCHEMA_HARNESSES
 
-    raw = _extract_verdict(result.stdout)
-    if raw is None or "verdict" not in raw:
+    def _inconclusive(error: str, summary: str, **extra: Any) -> VerificationResult:
         return VerificationResult(
             subtask_id=ctx.subtask_id,
             attempt_no=ctx.attempt_no,
             verdict=Verdict.inconclusive,
             kind=CheckKind.judge,
             evidence={
-                "error": "unparseable_response",
+                "error": error,
                 "raw_head": result.stdout[:500],
                 "artefacts_shown": artefact_names,
+                "schema_enforced": schema_enforced,
+                **extra,
             },
-            summary="judge verifier: could not parse structured response from agent",
+            summary=summary,
             evidence_path=None,
             checked_at=checked_at,
         )
 
-    verdict_str = str(raw.get("verdict", "")).lower()
-    reason = str(raw.get("reason", ""))
-    shown = raw.get("artefacts_shown", artefact_names)
+    # A judge run that did not finish cleanly has no verdict to read, however
+    # its output looks. Never fall back to a looser call.
+    if result.timed_out or result.exit_status not in (0, None):
+        return _inconclusive(
+            "judge_run_failed",
+            "judge verifier: the judge run did not finish cleanly "
+            f"(exit_status={result.exit_status}, timed_out={result.timed_out})",
+            stderr_head=(result.stderr or "")[:500],
+        )
 
-    if verdict_str == "pass":
-        verdict = Verdict.passed
-    elif verdict_str == "inconclusive":
-        verdict = Verdict.inconclusive
-    else:
-        # Default to failed — anything other than explicit "pass" or "inconclusive" fails.
-        verdict = Verdict.failed
+    # With the schema enforced the reply IS the object: no scraping for the
+    # first "{", which can land on an example the model quoted.
+    raw = _parse_whole(result.stdout) if schema_enforced else _extract_verdict(result.stdout)
+    if raw is None:
+        return _inconclusive(
+            "unparseable_response", "judge verifier: could not parse structured response from agent"
+        )
+    violations = schema_violations(raw)
+    if violations:
+        return _inconclusive(
+            "schema_violation",
+            "judge verifier: reply does not match the verdict schema: " + "; ".join(violations),
+            violations=violations,
+        )
 
-    summary = f"judge verdict={verdict_str}: {reason}" if reason else f"judge verdict={verdict_str}"
+    verdict_str = str(raw["verdict"])
+    reason = str(raw["reason"]).strip()
+    shown = raw["artefacts_shown"]
+    verdict = _VERDICTS[verdict_str]
+    summary = f"judge verdict={verdict_str}: {reason}"
 
     artefacts_dir = ctx.run_dir / "artifacts"
     artefacts_dir.mkdir(parents=True, exist_ok=True)
@@ -296,6 +374,7 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
             "verdict": verdict_str,
             "reason": reason,
             "artefacts_shown": shown,
+            "schema_enforced": schema_enforced,
             "completion_tokens": getattr(result, "completion_tokens", None),
             "prompt_tokens": getattr(result, "prompt_tokens", None),
         },
