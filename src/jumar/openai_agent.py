@@ -332,8 +332,13 @@ def run_openai_agent(
     timeout_s: int,
     harness: HarnessInfo,
     allow_tools: bool = True,
+    response_schema: dict[str, Any] | None = None,
 ) -> AgentResult:
     """Drive one agent session against an OpenAI-compatible endpoint.
+
+    ``response_schema`` is sent as a strict ``json_schema`` ``response_format``.
+    An endpoint that rejects it returns an error result like any other failed
+    request: the request is never retried without the schema.
 
     ``harness.base_url`` (resolved per-stage by the caller, e.g.
     ``config.harness.for_stage("execute")``) selects the server;
@@ -409,6 +414,11 @@ def run_openai_agent(
             payload["max_tokens"] = harness.max_tokens
         if allow_tools:
             payload["tools"] = list(_TOOLS)
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "strict": True, "schema": response_schema},
+            }
 
         try:
             response = _post_chat_completions(

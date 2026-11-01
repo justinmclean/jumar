@@ -693,8 +693,14 @@ Rules worth knowing before you write a check by hand:
   interpolation, anywhere.
 - `judge` requires a `rationale` explaining why no executable check is possible.
   It is prompted adversarially — its default answer is fail, and "looks
-  reasonable" is explicitly not evidence. An unparseable response is
-  `inconclusive`, not a pass.
+  reasonable" is explicitly not evidence. Its reply is pinned by a JSON
+  schema — `verdict` one of `pass` / `fail` / `inconclusive`, a non-empty
+  `reason`, an `artefacts_shown` list, nothing else — sent to Claude as
+  `--json-schema` and to the `openai` harness as a strict `response_format`,
+  and every reply is revalidated locally. A reply that breaks it (an empty
+  reason, an out-of-enum verdict, a missing or extra field), an unparseable
+  one, or a judge run that did not finish is `inconclusive`, never a pass. An
+  endpoint that rejects the schema is not retried without it.
 - `manual` under `--non-interactive` yields `inconclusive`, never an auto-pass.
 - A check that **cannot run** — missing binary, unreachable path — is
   `inconclusive`. That is not a pass, and it routes to repair like a failure.

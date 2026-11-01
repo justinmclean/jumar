@@ -29,6 +29,14 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Fixed since then: the judge scraped the first `{` from its reply and accepted
+any shape, so an empty reason could pass and an out-of-enum verdict silently
+became `failed`. The reply is now pinned by a JSON schema, sent to Claude as
+`--json-schema` and to the `openai` harness as a strict `response_format`, and
+revalidated locally; anything that breaks it, and any judge run that did not
+finish, is `inconclusive`. An endpoint that rejects the schema is never
+retried without it.
+
 Fixed since then: an absent precondition is now reported as unchecked
 rather than passed or failed. `doctor` marks such probes `skip`
 ("Unchecked, because …"): no scheduler binary, no schedule module, no

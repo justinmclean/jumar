@@ -25,6 +25,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .models import Capability, HarnessInfo, Termination
 
@@ -47,6 +48,12 @@ IN_PROCESS_HARNESSES: frozenset[str] = frozenset({"openai"})
 # Only claude accepts --resume <session-id>; all others run a fresh context
 # every invocation and must fall back to today's behaviour.
 SESSION_RESUMABLE_HARNESSES: frozenset[str] = frozenset({"claude"})
+
+# Harnesses that can be made to return output matching a JSON schema:
+# claude via --json-schema (print mode prints exactly the object), the
+# in-process harness via the chat-completions `response_format`. For the rest
+# the caller can only validate what comes back.
+SCHEMA_HARNESSES: frozenset[str] = frozenset({"claude", "openai"})
 
 # Harnesses that cannot express tool-level denials (git push, gh, sendmail…).
 # Using one of these without allow_unrestricted_harness = true is a startup error.
@@ -296,8 +303,12 @@ def build_argv(
     allow_tools: bool = True,
     session_id: str | None = None,
     session_is_new: bool = False,
+    response_schema: dict[str, Any] | None = None,
 ) -> list[str]:
     """Build the argv list for one agent invocation.
+
+    ``response_schema`` is passed as ``--json-schema`` to claude; harnesses
+    outside SCHEMA_HARNESSES ignore it, and the caller validates instead.
 
     ``allow_tools=False`` is for planning: the agent must answer from the
     prompt alone. Only harnesses that can express tool restrictions honour it —
@@ -363,6 +374,8 @@ def build_argv(
         for tool in disallowed:
             argv += ["--disallowedTools", tool]
         argv += ["--settings", claude_guard_settings(network=has_network)]
+        if response_schema is not None:
+            argv += ["--json-schema", json.dumps(response_schema, separators=(",", ":"))]
         argv += model_args
         if session_id is not None:
             argv += ["--session-id" if session_is_new else "--resume", session_id]
@@ -448,8 +461,12 @@ def run_agent(
     allow_tools: bool = True,
     session_id: str | None = None,
     session_is_new: bool = False,
+    response_schema: dict[str, Any] | None = None,
 ) -> AgentResult:
     """Build argv, scrub env, and run the agent subprocess.
+
+    ``response_schema`` asks a harness in SCHEMA_HARNESSES for output matching
+    it; the others ignore it, so a caller must still validate the reply.
 
     Returns an AgentResult whose ``timed_out`` flag is set on timeout.
     Never raises — all subprocess errors are captured in the result.
@@ -466,6 +483,7 @@ def run_agent(
             timeout_s=timeout_s,
             harness=harness,
             allow_tools=allow_tools,
+            response_schema=response_schema,
         )
 
     agent_bin = harness.invoked_as or harness.harness
@@ -480,6 +498,7 @@ def run_agent(
         allow_tools=allow_tools,
         session_id=session_id,
         session_is_new=session_is_new,
+        response_schema=response_schema,
     )
     env = scrub_env(harness_name)
     stdin_bytes = prompt.encode() if prompt_via_stdin(harness_name) else None

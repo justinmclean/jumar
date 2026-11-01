@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from jumar.journal import VERIFICATION, Journal
 from jumar.models import Check, CheckKind, HarnessInfo, Verdict
 from jumar.verify import VerifyContext, _registry, run_verify
@@ -111,7 +113,7 @@ def _runner(verdict: str, reason: str = "evidence cited") -> Any:
     """Return a fake runner that responds with the given verdict."""
 
     def _run(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         return _FakeResult(
             exit_status=0,
@@ -132,7 +134,7 @@ def _capturing_runner() -> tuple[Any, list[str]]:
     prompts: list[str] = []
 
     def _run(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         prompts.append(prompt)
         return _FakeResult(
@@ -204,7 +206,7 @@ def test_unparseable_response_yields_inconclusive(tmp_path: Path) -> None:
     """Spec rule: unparseable response → inconclusive (not a pass)."""
 
     def _garbage_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         return _FakeResult(exit_status=0, stdout="I cannot determine this.")
 
@@ -215,7 +217,7 @@ def test_unparseable_response_yields_inconclusive(tmp_path: Path) -> None:
 
 def test_unparseable_response_is_not_passed(tmp_path: Path) -> None:
     def _garbage_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         return _FakeResult(exit_status=0, stdout="looks good to me!")
 
@@ -224,16 +226,18 @@ def test_unparseable_response_is_not_passed(tmp_path: Path) -> None:
     assert result.verdict is not Verdict.passed
 
 
-def test_unknown_verdict_string_defaults_to_failed(tmp_path: Path) -> None:
-    """Any verdict other than "pass" or "inconclusive" is treated as failed."""
+def test_an_out_of_enum_verdict_is_inconclusive(tmp_path: Path) -> None:
+    """W19: a verdict outside pass/fail/inconclusive is a schema failure, not a verdict."""
     ctx = _ctx(tmp_path, runner=_runner("maybe"))
     result = verify_judge(_JUDGE_CHECK, ctx)
-    assert result.verdict == Verdict.failed
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["error"] == "schema_violation"
+    assert any("'maybe'" in v for v in result.evidence["violations"])
 
 
 def test_empty_stdout_yields_inconclusive(tmp_path: Path) -> None:
     def _empty_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         return _FakeResult(exit_status=0, stdout="")
 
@@ -535,25 +539,29 @@ def test_run_verify_judge_journals_verification_entry(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+_NO_SCHEMA_HARNESS = HarnessInfo(agent="codex", model="", harness="codex", invoked_as="codex")
+
+
 def test_response_in_markdown_fence_parsed(tmp_path: Path) -> None:
-    """Agent responses wrapped in ```json ... ``` fences must still be parsed."""
+    """A harness that cannot enforce the schema may wrap its reply in a fence."""
 
     def _fenced_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         payload = '{"verdict": "pass", "reason": "file found", "artefacts_shown": []}'
         return _FakeResult(exit_status=0, stdout=f"```json\n{payload}\n```")
 
-    ctx = _ctx(tmp_path, runner=_fenced_runner)
+    ctx = _ctx(tmp_path, runner=_fenced_runner, harness=_NO_SCHEMA_HARNESS)
     result = verify_judge(_JUDGE_CHECK, ctx)
     assert result.verdict == Verdict.passed
+    assert result.evidence["schema_enforced"] is False
 
 
 def test_invalid_json_in_fence_falls_through(tmp_path: Path) -> None:
     """A code-fence block with broken JSON is skipped; the result is inconclusive."""
 
     def _bad_fence_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         return _FakeResult(exit_status=0, stdout="```json\n{not valid json}\n```")
 
@@ -563,24 +571,39 @@ def test_invalid_json_in_fence_falls_through(tmp_path: Path) -> None:
 
 
 def test_bare_json_after_text_prefix_parsed(tmp_path: Path) -> None:
-    """JSON found after non-JSON prefix text is parsed via the brace-search path."""
+    """Without schema enforcement, JSON after prefix text is found by brace search."""
 
     def _prefixed_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         payload = '{"verdict": "pass", "reason": "looks good", "artefacts_shown": []}'
         return _FakeResult(exit_status=0, stdout=f"The result is: {payload}")
 
-    ctx = _ctx(tmp_path, runner=_prefixed_runner)
+    ctx = _ctx(tmp_path, runner=_prefixed_runner, harness=_NO_SCHEMA_HARNESS)
     result = verify_judge(_JUDGE_CHECK, ctx)
     assert result.verdict == Verdict.passed
+
+
+def test_with_the_schema_enforced_text_around_the_object_is_not_scraped(
+    tmp_path: Path,
+) -> None:
+    """W19: claude prints exactly the object; anything else is not a verdict."""
+
+    def _prefixed_runner(prompt: str, **_: Any) -> _FakeResult:
+        payload = '{"verdict": "pass", "reason": "looks good", "artefacts_shown": []}'
+        return _FakeResult(exit_status=0, stdout=f"Example reply: {payload}")
+
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_prefixed_runner))
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["error"] == "unparseable_response"
+    assert result.evidence["schema_enforced"] is True
 
 
 def test_brace_search_with_broken_json_is_inconclusive(tmp_path: Path) -> None:
     """Brace found but JSON parse fails → inconclusive."""
 
     def _broken_brace_runner(
-        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any
+        prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
         return _FakeResult(exit_status=0, stdout="result: { broken json here }")
 
@@ -605,3 +628,152 @@ def test_artefact_read_oserror_does_not_crash(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path, runner=runner)
     result = verify_judge(check, ctx)
     assert result.kind == CheckKind.judge  # did not crash
+
+
+# ---------------------------------------------------------------------------
+# W19 — the verdict schema is sent, and every reply is revalidated locally
+# ---------------------------------------------------------------------------
+
+
+def _replying(payload: object, *, exit_status: int = 0, timed_out: bool = False) -> Any:
+    def _run(prompt: str, **_: Any) -> _FakeResult:
+        stdout = payload if isinstance(payload, str) else json.dumps(payload)
+        return _FakeResult(exit_status=exit_status, stdout=stdout, timed_out=timed_out)
+
+    return _run
+
+
+@pytest.mark.parametrize(
+    ("reply", "violation"),
+    [
+        ({"verdict": "pass", "reason": "", "artefacts_shown": []}, "reason is empty"),
+        ({"verdict": "pass", "reason": "   ", "artefacts_shown": []}, "reason is empty"),
+        ({"verdict": "pass", "artefacts_shown": []}, "missing field 'reason'"),
+        ({"verdict": "pass", "reason": "ok"}, "missing field 'artefacts_shown'"),
+        ({"reason": "ok", "artefacts_shown": []}, "missing field 'verdict'"),
+        ({"verdict": "PASS", "reason": "ok", "artefacts_shown": []}, "'PASS'"),
+        ({"verdict": "yes", "reason": "ok", "artefacts_shown": []}, "'yes'"),
+        ({"verdict": "pass", "reason": "ok", "artefacts_shown": "x"}, "artefacts_shown"),
+        ({"verdict": "pass", "reason": "ok", "artefacts_shown": [], "confidence": 1}, "unexpected"),
+        ([{"verdict": "pass"}], "not a JSON object"),
+    ],
+)
+def test_a_reply_that_breaks_the_schema_is_inconclusive(
+    tmp_path: Path, reply: object, violation: str
+) -> None:
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_replying(reply)))
+    assert result.verdict == Verdict.inconclusive
+    if result.evidence["error"] == "schema_violation":
+        assert any(violation in v for v in result.evidence["violations"])
+    else:  # a top-level array never parses as the object
+        assert result.evidence["error"] == "unparseable_response"
+
+
+def test_an_empty_reason_never_passes_even_with_a_pass_verdict(tmp_path: Path) -> None:
+    reply = {"verdict": "pass", "reason": "", "artefacts_shown": []}
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_replying(reply)))
+    assert result.verdict != Verdict.passed
+
+
+def test_a_valid_reply_still_passes(tmp_path: Path) -> None:
+    reply = {"verdict": "pass", "reason": "output.json has a result key", "artefacts_shown": []}
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_replying(reply)))
+    assert result.verdict == Verdict.passed
+    assert result.evidence["schema_enforced"] is True
+
+
+@pytest.mark.parametrize("result_kw", [{"exit_status": 1}, {"exit_status": -1, "timed_out": True}])
+def test_a_judge_run_that_failed_is_inconclusive_whatever_it_printed(
+    tmp_path: Path, result_kw: dict[str, Any]
+) -> None:
+    reply = {"verdict": "pass", "reason": "fine", "artefacts_shown": []}
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_replying(reply, **result_kw)))
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["error"] == "judge_run_failed"
+
+
+def test_the_schema_is_sent_to_the_runner(tmp_path: Path) -> None:
+    from jumar.verify.judge import JUDGE_VERDICT_SCHEMA
+
+    seen: dict[str, Any] = {}
+
+    def _run(prompt: str, **kw: Any) -> _FakeResult:
+        seen.update(kw)
+        return _FakeResult(
+            exit_status=0,
+            stdout=json.dumps({"verdict": "fail", "reason": "no key", "artefacts_shown": []}),
+        )
+
+    verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_run))
+    assert seen["response_schema"] == JUDGE_VERDICT_SCHEMA
+    schema = seen["response_schema"]
+    assert schema["properties"]["verdict"]["enum"] == ["pass", "fail", "inconclusive"]
+    assert set(schema["required"]) == {"verdict", "reason", "artefacts_shown"}
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["reason"]["minLength"] == 1
+
+
+def test_claude_argv_carries_the_schema_as_json_schema() -> None:
+    from jumar.harness import build_argv
+    from jumar.verify.judge import JUDGE_VERDICT_SCHEMA
+
+    argv = build_argv(
+        agent_bin="claude",
+        harness_name="claude",
+        model=None,
+        capabilities=frozenset(),
+        prompt="x",
+        response_schema=JUDGE_VERDICT_SCHEMA,
+    )
+    assert json.loads(argv[argv.index("--json-schema") + 1]) == JUDGE_VERDICT_SCHEMA
+    plain = build_argv(
+        agent_bin="claude", harness_name="claude", model=None, capabilities=frozenset(), prompt="x"
+    )
+    assert "--json-schema" not in plain
+
+
+def test_an_endpoint_that_rejects_the_schema_leaves_the_judge_inconclusive(
+    tmp_path: Path,
+) -> None:
+    """Never fail open: one request, with the schema, and no retry without it."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: list[dict[str, Any]] = []
+
+    class _Rejecting(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            received.append(json.loads(body))
+            msg = b'{"error": {"message": "response_format json_schema is not supported"}}'
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Rejecting)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        host, port = server.server_address[:2]
+        harness = HarnessInfo(
+            agent="openai",
+            model="m",
+            harness="openai",
+            invoked_as="openai",
+            base_url=f"http://{host}:{port}/v1",
+        )
+        # judge_run_agent=None: the real harness.run_agent dispatch.
+        ctx = _ctx(tmp_path, harness=harness, runner=None)
+        result = verify_judge(_JUDGE_CHECK, ctx)
+    finally:
+        server.shutdown()
+
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["error"] == "judge_run_failed"
+    assert len(received) == 1
+    assert received[0]["response_format"]["type"] == "json_schema"
+    assert received[0]["response_format"]["json_schema"]["strict"] is True
