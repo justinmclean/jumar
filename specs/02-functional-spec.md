@@ -496,6 +496,22 @@ Rules:
   attempt was cut off fails with `unclean_termination` rather than
   `repairs_exhausted` or `check_failed`, and that failure advances `@failed=`
   (it is not an outage).
+- **A `command` check never runs agent-written code.** Every file it would
+  execute from inside the working tree — `argv[0]` written as a path, a bare
+  name PATH resolves inside the tree, an interpreter's script operand
+  (`python3 check.py`, `bash verify.sh`, `node`, `perl`, `ruby`, …), or a
+  `python3 -m` module found in the tree — is pinned by SHA-256 once the plan
+  has passed the gate, before any subtask runs (written once, so a resume keeps
+  it; journalled as `pinned_programs` in `check_inputs_snapshot`). Before
+  spawning, the command verifier refuses — `failed`, with `run: false` — a
+  file that was not pinned or did not exist then (`check_program_not_pinned`;
+  also when no pin is on record at all) or whose hash has changed
+  (`check_program_modified`). Inline code (`-c`, `-e`) is already in the
+  journalled argv and is not pinned; programs outside the tree, and in-tree
+  ones that existed at plan time and are unchanged, run as before. At
+  decompose time a model-written check that would run an in-tree script that
+  does not exist yet — the subtask would write its own verifier — is sent back
+  through the retry with the reason.
 - A `file` check on a **zero-byte** path is `failed` with `file_is_empty`
   evidence, before any pattern matching runs — a fetch that produced an empty
   file must not pass on "the path exists". On a pattern miss, the evidence
@@ -533,7 +549,9 @@ Rules:
   evidence, regardless of any pattern.
 - AC6.9 A `command` check whose argv is refused by the allow/deny policy yields
   `inconclusive` with `capability_denied` evidence, and no process is spawned —
-  asserted by a test that fails if `subprocess.run` is reached.
+  asserted by a test that fails if `subprocess.run` is reached. A `command`
+  check whose in-tree script changed after the plan was accepted, or was not
+  there then, is `failed` and the script is never executed.
 
 ---
 
