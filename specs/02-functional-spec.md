@@ -435,6 +435,12 @@ Rules:
 
 - A `judge` verifier is prompted **adversarially** — its default answer is fail,
   and it must state the specific evidence that changed its mind.
+- **An absent precondition is decided mechanically, before any model call.**
+  A `judge` check whose artefact does not exist, or is empty, is `failed`
+  (`artefact_missing` / `artefact_empty`); one that exists but cannot be read
+  is `inconclusive` (`artefact_unreadable`, "unchecked, because …"). The
+  evidence carries `model_called: false`. The judge is never asked to rule on
+  a note saying the evidence is missing.
 - `inconclusive` (check could not run — missing binary, unreachable path) is
   **not** a pass. It routes to repair like a failure, and if unresolved the item
   ends as `inconclusive`, distinct from `failed`.
@@ -470,7 +476,9 @@ Rules:
   and captured output in the evidence.
 - AC6.2 A `file` check for a path the subtask did not create yields `failed`.
 - AC6.3 A missing verifier binary yields `inconclusive`, not `failed` and not
-  `passed`.
+  `passed`. Likewise a `judge` artefact that exists but cannot be read is
+  `inconclusive`, and a missing or empty one is `failed`, each decided without
+  a model call.
 - AC6.4 The `judge` verifier receives no part of the executing agent's
   transcript — asserted by a test that inspects the assembled verifier prompt.
 - AC6.5 A `manual` check under `--non-interactive` yields `inconclusive`.
