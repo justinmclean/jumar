@@ -198,7 +198,14 @@ invariant — it would be reformulated per dependency chain, not dropped.
   backend, then launchd/systemd. The lock ships first: installing a recurring
   run before single-flight exists is how you get two agents editing one tree.
 - **Phase 6 — polish.** `jumar doctor` (config + harness + allow-list + installed
-  schedule sanity), richer reports, evidence artefact pruning.
+  schedule sanity), richer reports, evidence artefact pruning. A doctor probe
+  reports `ok`, `warn`, `fail` or `unchecked`. `unchecked` (shown `skip`,
+  "Unchecked, because …") is for a probe whose own precondition is absent — no
+  scheduler binary or schedule module, a crontab that cannot be read, no
+  `base_url` for the generation-speed probe — and is neither a pass nor a
+  failure: it never sets the exit status, and the summary counts it apart
+  from the checks that passed. A probe whose *subject* is missing (no harness
+  binary, no todo file, an unreachable endpoint) still fails.
 
 **Sequencing rule:** no phase that executes work may land before the
 verification it depends on. Phase 3 ships `execute` and `verify` together, in
