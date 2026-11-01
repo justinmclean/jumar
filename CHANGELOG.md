@@ -29,6 +29,11 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Added since then: `[harness] tiers`, an ordered list of profiles the execute
+stage escalates through. A subtask starts cheap (higher for a `judge` check or
+a check reading many files) and each repair runs one tier up; `--harness-profile`
+or `@harness=` pins the line-up. The tier of every attempt is journalled.
+
 Security since then: a `command` check such as `python3 check.py` ran
 whatever the script said, from a directory the agent writes to, so an agent
 could pass a check by rewriting it. Every file a command check executes from

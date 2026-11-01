@@ -201,6 +201,11 @@ _HARNESS_SCALAR_KEYS: frozenset[str] = frozenset(
 # out of step on todo_path, capabilities, and everything else.
 _HARNESS_PROFILES_KEY = "profiles"
 
+# [harness] tiers = ["haiku", "sonnet", "opus"]: an ordered list of profile
+# names, cheapest first, that the execute stage escalates through on failure
+# (tiers.py). Only on the base [harness]: a profile is one line-up, not a ladder.
+_HARNESS_TIERS_KEY = "tiers"
+
 # `Config.config_source` value when neither jumar.toml nor a populated
 # [tool.jumar] table in pyproject.toml was found — i.e. every field on the
 # returned Config is a built-in default. `doctor.py` treats this as a warn:
@@ -370,6 +375,10 @@ class Config:
     # todo item can select one with @harness=<name> after config load: which
     # model an item wants is a property of the item, not of the invocation.
     harness_profiles: Mapping[str, HarnessConfig] = field(default_factory=dict)
+    # [harness] tiers: profile names, cheapest first, that execute escalates
+    # through on failure. Empty means no escalation. Every name is a key of
+    # harness_profiles (checked at load).
+    harness_tiers: tuple[str, ...] = ()
     # Where this Config came from: an absolute jumar.toml path, a
     # "<pyproject.toml path> [tool.jumar]" description, or DEFAULT_CONFIG_SOURCE
     # when no file supplied any field. Set by load_config(); a Config built
@@ -501,7 +510,10 @@ def load_config(
     unknown_harness_keys = {
         k
         for k in harness_raw
-        if k not in _HARNESS_SCALAR_KEYS | _VALID_HARNESS_STAGES | {_HARNESS_PROFILES_KEY}
+        if k
+        not in _HARNESS_SCALAR_KEYS
+        | _VALID_HARNESS_STAGES
+        | {_HARNESS_PROFILES_KEY, _HARNESS_TIERS_KEY}
     }
     if unknown_harness_keys:
         raise ValueError(
@@ -695,6 +707,22 @@ def load_config(
         for name in sorted(profiles_raw)
     }
 
+    tiers_raw: Any = harness_raw.get(_HARNESS_TIERS_KEY, [])
+    if not isinstance(tiers_raw, list) or not all(isinstance(t, str) for t in tiers_raw):
+        raise ValueError(
+            f"[harness] {_HARNESS_TIERS_KEY} must be a list of profile names, cheapest first"
+        )
+    unknown_tiers = [t for t in tiers_raw if t not in harness_profiles]
+    if unknown_tiers:
+        known = ", ".join(sorted(harness_profiles)) or "(none defined)"
+        raise ValueError(
+            f"[harness] {_HARNESS_TIERS_KEY} names undefined profile(s) {unknown_tiers}; "
+            f"each tier must be a [harness.{_HARNESS_PROFILES_KEY}.<name>] table. Defined: {known}."
+        )
+    if len(set(tiers_raw)) != len(tiers_raw):
+        raise ValueError(f"[harness] {_HARNESS_TIERS_KEY} lists a profile more than once")
+    harness_tiers = tuple(tiers_raw)
+
     commands_raw: dict[str, Any] = raw.get("commands", {})
 
     def _command_list(base_key: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -732,6 +760,7 @@ def load_config(
         allow_unrestricted_harness=bool(_get("allow_unrestricted_harness", False)),
         harness_profile=harness_profile,
         harness_profiles=harness_profiles,
+        harness_tiers=harness_tiers,
         config_source=config_source,
     )
 
