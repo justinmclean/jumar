@@ -88,7 +88,13 @@ def _ctx(
     runner: Any | None = None,
     subtask_id: str = "item#0",
     attempt_no: int = 0,
+    artefact: str | None = '{"result": 1}\n',
 ) -> VerifyContext:
+    # _JUDGE_CHECK names output.json. Write it, so tests about the judge's
+    # response handling run against an artefact that exists; a missing
+    # artefact is decided before any model call (W18) and tested on its own.
+    if artefact is not None and not (tmp_path / "output.json").exists():
+        (tmp_path / "output.json").write_text(artefact)
     return VerifyContext(
         cwd=tmp_path,
         run_dir=tmp_path,
@@ -356,7 +362,8 @@ def test_artefact_file_missing_does_not_crash(tmp_path: Path) -> None:
     assert result.kind == CheckKind.judge
 
 
-def test_artefact_not_found_message_in_prompt(tmp_path: Path) -> None:
+def test_a_missing_artefact_fails_without_a_model_call(tmp_path: Path) -> None:
+    """W18: the judge is never asked to rule on prose saying the evidence is missing."""
     check = Check(
         kind=CheckKind.judge,
         statement="File must be present.",
@@ -364,9 +371,39 @@ def test_artefact_not_found_message_in_prompt(tmp_path: Path) -> None:
         path="missing_file.txt",
     )
     runner, captured = _capturing_runner()
-    ctx = _ctx(tmp_path, runner=runner)
-    verify_judge(check, ctx)
-    assert "missing_file.txt" in captured[0]
+    result = verify_judge(check, _ctx(tmp_path, runner=runner))
+    assert captured == []
+    assert result.verdict == Verdict.failed
+    assert result.evidence["error"] == "artefact_missing"
+    assert result.evidence["path"] == "missing_file.txt"
+    assert result.evidence["model_called"] is False
+
+
+def test_an_empty_artefact_fails_without_a_model_call(tmp_path: Path) -> None:
+    (tmp_path / "output.json").write_bytes(b"")
+    runner, captured = _capturing_runner()
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=runner))
+    assert captured == []
+    assert result.verdict == Verdict.failed
+    assert result.evidence["error"] == "artefact_empty"
+
+
+def test_an_unreadable_artefact_is_unchecked_without_a_model_call(tmp_path: Path) -> None:
+    """Present but unreadable: not a pass, not a fail -- unchecked, with the reason."""
+    (tmp_path / "output.json").mkdir()  # exists, but read_bytes raises
+    runner, captured = _capturing_runner()
+    result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=runner))
+    assert captured == []
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["error"] == "artefact_unreadable"
+    assert "unchecked, because" in result.summary
+
+
+def test_a_present_artefact_still_reaches_the_judge(tmp_path: Path) -> None:
+    runner, captured = _capturing_runner()
+    verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=runner))
+    assert len(captured) == 1
+    assert '{"result": 1}' in captured[0]
 
 
 def test_collect_artefacts_says_no_artefacts_when_path_is_none(tmp_path: Path) -> None:

@@ -48,6 +48,18 @@ class CheckStatus(StrEnum):
     ok = "ok"
     warn = "warn"
     fail = "fail"
+    # A precondition of the probe is absent (no scheduler binary, no endpoint
+    # configured), so it did not run. Neither a pass nor a failure: the
+    # message says "unchecked, because ...", and it never sets the exit status.
+    unchecked = "unchecked"
+
+
+def _unchecked(name: str, because: str, *, hint: str = "") -> DoctorCheck:
+    """A probe that could not run. Never ``ok``: nothing was looked at."""
+    message = f"Unchecked, because {because}."
+    if hint:
+        message += f" {hint}"
+    return DoctorCheck(name, CheckStatus.unchecked, message)
 
 
 @dataclass(frozen=True)
@@ -84,12 +96,23 @@ def run_doctor(config: Config) -> DoctorReport:
 
 def format_report(report: DoctorReport) -> str:
     """Render a DoctorReport as a human-readable string."""
-    _SYMBOL = {CheckStatus.ok: "ok  ", CheckStatus.warn: "warn", CheckStatus.fail: "FAIL"}
+    _SYMBOL = {
+        CheckStatus.ok: "ok  ",
+        CheckStatus.warn: "warn",
+        CheckStatus.fail: "FAIL",
+        CheckStatus.unchecked: "skip",
+    }
     lines = ["jumar doctor"]
     for check in report.checks:
         lines.append(f"  [{_SYMBOL[check.status]}] {check.name}: {check.message}")
     lines.append("")
-    if report.exit_status == 0:
+    skipped = sum(1 for c in report.checks if c.status == CheckStatus.unchecked)
+    if report.exit_status == 0 and skipped:
+        lines.append(
+            f"No check failed; {skipped} could not run (marked skip) and are neither "
+            "passed nor failed."
+        )
+    elif report.exit_status == 0:
         lines.append("All checks passed (failures would be marked FAIL).")
     else:
         lines.append("One or more checks failed — see FAIL lines above.")
@@ -360,7 +383,7 @@ def _check_generation_speed(config: Config) -> DoctorCheck:
     resolved = config.harness.for_stage("execute")
     base_url = resolved.base_url
     if not base_url:
-        return DoctorCheck("harness.speed", CheckStatus.warn, "No base_url configured; skipped.")
+        return _unchecked("harness.speed", "no base_url is configured for the execute stage")
 
     payload = {
         "model": resolved.model,
@@ -499,20 +522,16 @@ def _check_schedule(config: Config) -> DoctorCheck:
 
         entries = _sched.list_schedules()
     except ImportError:
-        return DoctorCheck(
-            "schedule",
-            CheckStatus.warn,
-            "Schedule module not available. Run 'jumar schedule add <cron>' to install one.",
-        )
+        return _unchecked("schedule", "the schedule module is not available")
     except FileNotFoundError as exc:
         # The scheduler binary (crontab, launchctl, systemctl) is simply absent,
-        # as on many containers and cloud VMs. That is not a broken setup.
-        return DoctorCheck(
+        # as on many containers and cloud VMs. That is not a broken setup, and
+        # it is not a clean bill of health either: nothing was read.
+        return _unchecked(
             "schedule",
-            CheckStatus.warn,
-            f"No scheduler binary found ({exc.filename or exc}); schedule entries cannot be "
-            "read on this machine. Use launchd agents or systemd --user timers instead, "
-            "or install cron.",
+            f"no scheduler binary was found ({exc.filename or exc}), so schedule entries "
+            "cannot be read on this machine",
+            hint="Use launchd agents or systemd --user timers instead, or install cron.",
         )
     except Exception as exc:  # noqa: BLE001
         return DoctorCheck(
@@ -570,12 +589,20 @@ def _check_legacy_schedule_markers() -> DoctorCheck:
     not author). They keep firing the old command until removed by hand.
     """
     crontab_text = ""
-    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+    # Why the crontab could not be read, if it could not. A user with no
+    # crontab at all ("no crontab for user", non-zero exit) WAS checked: there
+    # is nothing in it. A missing binary or a hung call was not.
+    cron_unchecked: str | None = None
+    try:
         result = subprocess.run(
             ["crontab", "-l"], capture_output=True, text=True, shell=False, timeout=10
         )
         if result.returncode == 0:
             crontab_text = result.stdout
+    except FileNotFoundError:
+        cron_unchecked = "no crontab binary was found"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        cron_unchecked = f"the crontab could not be read ({exc})"
 
     plist_names: list[str] = []
     agents_dir = Path.home() / "Library" / "LaunchAgents"
@@ -591,5 +618,12 @@ def _check_legacy_schedule_markers() -> DoctorCheck:
             + "; ".join(findings)
             + ". Remove them by hand (crontab -e / rm the plist) and reinstall with "
             "'jumar schedule add'.",
+        )
+    if cron_unchecked is not None:
+        # The launchd side was read (an absent LaunchAgents directory holds no
+        # agents); the crontab side was not, so this is not a pass.
+        return _unchecked(
+            "legacy-schedule",
+            f"{cron_unchecked}; no pre-rename launchd agents were found",
         )
     return DoctorCheck("legacy-schedule", CheckStatus.ok, "No pre-rename schedule entries found.")
