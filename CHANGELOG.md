@@ -29,6 +29,12 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Fixed since then: a judge `pass` was taken on trust. Its reason must now quote
+text present in the artefact the judge was shown, and must not be identical to
+an earlier attempt's reason for the same subtask; otherwise the pass is
+downgraded to `inconclusive`. Both tests are mechanical, with no second model
+call.
+
 Fixed since then: the judge scraped the first `{` from its reply and accepted
 any shape, so an empty reason could pass and an out-of-enum verdict silently
 became `failed`. The reply is now pinned by a JSON schema, sent to Claude as

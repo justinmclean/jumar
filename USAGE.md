@@ -700,7 +700,12 @@ Rules worth knowing before you write a check by hand:
   and every reply is revalidated locally. A reply that breaks it (an empty
   reason, an out-of-enum verdict, a missing or extra field), an unparseable
   one, or a judge run that did not finish is `inconclusive`, never a pass. An
-  endpoint that rejects the schema is not retried without it.
+  endpoint that rejects the schema is not retried without it. A `pass` must
+  also agree with its own reason: the reason has to quote, verbatim, text
+  present in the artefact the judge was shown, and must not repeat an earlier
+  attempt's judge reason word for word. A pass that fails either test is
+  downgraded to `inconclusive`, with the judge's original verdict kept in the
+  evidence.
 - `manual` under `--non-interactive` yields `inconclusive`, never an auto-pass.
 - A check that **cannot run** — missing binary, unreachable path — is
   `inconclusive`. That is not a pass, and it routes to repair like a failure.

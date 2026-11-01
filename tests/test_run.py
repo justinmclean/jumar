@@ -877,7 +877,7 @@ def test_a_judge_check_reaches_the_judge_with_a_harness(
         if prompt.startswith("You are a strict"):
             seen.append(prompt)
             return _result(
-                '{"verdict": "pass", "reason": "notes.md is a coherent summary", '
+                '{"verdict": "pass", "reason": "notes.md reads \\"a summary\\"", '
                 '"artefacts_shown": ["notes.md"]}'
             )
         if _is_decompose_prompt(prompt):
