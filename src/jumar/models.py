@@ -8,6 +8,7 @@ dict, or another shape defined here, so journal records are JSON-round-trippable
 from __future__ import annotations
 
 import enum
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -315,6 +316,26 @@ class Check:
                 "files of its own, so a judge check with no path can never "
                 "pass. Name the file the subtask leaves behind."
             )
+        if self.pattern is not None:
+            # The file and absence verifiers compile this with Python's re.
+            # A pattern that does not compile was only discovered at verify
+            # time, as an inconclusive check, after the work had been done.
+            try:
+                compiled = re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"pattern {self.pattern!r} is not a valid regex ({exc}). Escape "
+                    "literal ( ) [ ] . * + ? with a backslash."
+                ) from exc
+            # A pattern that matches the empty string matches every file, so
+            # it cannot fail: the "a check must be able to FAIL" rule, for
+            # patterns. `.*`, `(x)?`, `a*` and `^` are all refused.
+            if compiled.search("") is not None:
+                raise ValueError(
+                    f"pattern {self.pattern!r} matches the empty string, so it matches "
+                    "any file and the check can never fail. Anchor it on text that "
+                    "only the finished work contains."
+                )
 
 
 @dataclass(frozen=True)

@@ -1528,3 +1528,126 @@ def test_decompose_rules_steer_ordered_section_checks_to_kind_file() -> None:
     rules = "\n".join(_RULES)
     assert "-P" in rules and "BSD grep" in rules
     assert "kind=file" in rules
+
+
+# ---------------------------------------------------------------------------
+# W22 — rules the model keeps breaking, decided in code
+# ---------------------------------------------------------------------------
+
+
+def _check(**raw: Any) -> Check | str:
+    return _build_check({"statement": "s", **raw})
+
+
+@pytest.mark.parametrize("argv", [("gh", "pr", "view", "1"), ("/usr/local/bin/gh", "api", "user")])
+def test_a_gh_check_is_refused_with_the_jumar_gh_route(argv: tuple[str, ...]) -> None:
+    err = _check(kind="command", command=list(argv))
+    assert isinstance(err, str)
+    assert "jumar-gh" in err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("grep", "-q", "-e", "Status:", "-e", "Evidence:", "draft.md"),
+        ("grep", "-qe", "Status:", "-e", "Evidence:", "draft.md"),
+        ("grep", "--regexp=Status:", "--regexp", "Evidence:", "draft.md"),
+        ("grep", "-qf", "headings.txt", "draft.md"),
+        ("egrep", "--file=headings.txt", "draft.md"),
+    ],
+)
+def test_a_grep_with_several_patterns_is_refused(argv: tuple[str, ...]) -> None:
+    """It passes when ANY one matches: it cannot assert all of them, or their order."""
+    err = _check(kind="command", command=list(argv))
+    assert isinstance(err, str)
+    assert "ANY one matches" in err
+    assert "kind=file" in err
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "the regulation applies from two August",
+        "Article 50 sets the transparency obligations",
+    ],
+)
+def test_a_brittle_literal_phrase_is_refused(pattern: str) -> None:
+    for raw in (
+        {"kind": "file", "path": "out.md", "pattern": pattern},
+        {"kind": "command", "command": ["grep", "-q", pattern, "out.md"]},
+    ):
+        err = _check(**raw)
+        assert isinstance(err, str), raw
+        assert "exact spelling" in err
+
+
+@pytest.mark.parametrize(
+    "pattern", ["done", "^DONE$", "\\bcomplete\\b", "Success", " draft ", "TODO"]
+)
+def test_a_self_report_word_is_refused(pattern: str) -> None:
+    for raw in (
+        {"kind": "file", "path": "out.md", "pattern": pattern},
+        {"kind": "command", "command": ["grep", "-q", pattern, "out.md"]},
+    ):
+        err = _check(**raw)
+        assert isinstance(err, str), raw
+        assert "proves effort, not outcome" in err
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"kind": "file", "path": "out.md", "pattern": "OK"},
+        {"kind": "file", "path": "out.md", "pattern": "Article 50"},
+        {"kind": "file", "path": "out.md", "pattern": "applies from 2 August"},
+        {
+            "kind": "file",
+            "path": "out.md",
+            "pattern": "the\\s+regulation\\s+applies\\s+from\\s+August",
+        },
+        {"kind": "file", "path": "out.md", "pattern": "(?s)Status:.*Evidence:.*Post:"},
+        {"kind": "command", "command": ["grep", "-q", "-e", "Status:", "draft.md"]},
+        {"kind": "command", "command": ["grep", "-q", "Article 50", "draft.md"]},
+        {"kind": "command", "command": ["jumar-gh", "pr", "view", "1"]},
+        {"kind": "absence", "path": "out.md", "pattern": "TODO:\\s"},
+    ],
+)
+def test_ordinary_checks_are_still_accepted(raw: dict[str, Any]) -> None:
+    got = _check(**raw)
+    assert isinstance(got, Check), got
+
+
+def test_a_plan_breaking_a_rule_is_sent_back_with_the_reason(
+    journal: Journal, cfg: Config, tmp_path: Path
+) -> None:
+    bad = json.dumps(
+        {
+            "subtasks": [
+                {
+                    "description": "Write the notes",
+                    "capabilities": [],
+                    "depends_on": [],
+                    "check": {
+                        "kind": "command",
+                        "statement": "both headings present",
+                        "command": ["grep", "-q", "-e", "A:", "-e", "B:", "notes.md"],
+                    },
+                }
+            ]
+        }
+    )
+    runner, prompts = _prompt_capturing_runner([bad, _valid_response(1)])
+    plan = _decompose(_make_item(), runner, journal, cfg, tmp_path)
+
+    assert len(plan.subtasks) == 1
+    assert "Retry because:" in prompts[1]
+    assert "ANY one matches" in prompts[1]
+
+
+def test_the_rules_prose_separates_enforced_from_judgement() -> None:
+    rules = "\n".join(_RULES)
+    assert "ENFORCED" in rules and "JUDGEMENT" in rules
+    enforced, judgement = rules.split("JUDGEMENT", 1)
+    for named in ("grep -P", "several patterns", "jumar-gh", "matches the empty string"):
+        assert named in enforced
+    assert "surface variation" in judgement

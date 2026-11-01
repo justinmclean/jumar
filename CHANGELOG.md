@@ -29,6 +29,14 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Changed since then: decomposition rules the model kept breaking are decided in
+code instead of only asked for in the prompt. Every check refuses a `pattern`
+that is not a valid regex or that matches the empty string. A model-written
+plan is sent back with the reason for a `gh` check, a `grep` with several
+patterns, a brittle five-plus-word literal pattern, or a pattern that is only a
+self-report word. The prompt's rules shrink to a short enforced list and the
+rules that still need judgement.
+
 Added since then: every verdict reports whether the files its check reads were
 created, removed, changed or replaced wholesale since the previous attempt (or
 since the plan), so a repair that satisfies a check by swapping out the

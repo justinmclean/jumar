@@ -722,6 +722,16 @@ Rules worth knowing before you write a check by hand:
   downgraded to `inconclusive`, with the judge's original verdict kept in the
   evidence.
 - `manual` under `--non-interactive` yields `inconclusive`, never an auto-pass.
+- A `pattern` must be a valid Python regex and must be able to fail: one that
+  matches the empty string (`.*`, `(x)?`, `^`) matches every file and is
+  refused when the check is built.
+- In a model-written plan, a few more rules are decided in code and the plan
+  is sent back with the reason: no `gh` (use `jumar-gh`); no `grep` with
+  several patterns (`-e A -e B`, `-f`), which passes when any one matches; no
+  `pattern` that is one exact phrase of five or more words with no regex; and
+  no `pattern` that is only a word like `done`, `draft`, `complete` or
+  `success`, which proves something was typed rather than that the work is
+  right.
 - A check that **cannot run** — missing binary, unreachable path — is
   `inconclusive`. That is not a pass, and it routes to repair like a failure.
 
