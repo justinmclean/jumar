@@ -118,8 +118,16 @@ The `judge` verifier is the delicate one. Its contract:
   command outputs) and **nothing from the executing agent's transcript**.
 - Its prompt frames the default answer as **fail**: it must cite specific
   evidence to return `pass`, and "looks reasonable" is explicitly not evidence.
-- It returns structured `{verdict, reason, artefacts_shown}`; an unparseable
-  response is `inconclusive`, not a pass.
+- It returns structured `{verdict, reason, artefacts_shown}`, pinned by
+  `JUDGE_VERDICT_SCHEMA` (`verify/judge.py`) and enforced where the harness
+  can (`harness.SCHEMA_HARNESSES`: Claude's `--json-schema`, the `openai`
+  harness's `response_format`), then revalidated locally. An unparseable or
+  schema-violating response, or a judge run that did not finish, is
+  `inconclusive`, not a pass, and is never retried without the schema.
+- A `pass` is downgraded to `inconclusive` unless its reason quotes text
+  present in the artefact it was shown and differs from every earlier
+  attempt's judge reason for that subtask (read from the per-attempt
+  `…-judge-<n>.json` records under `runs/<run-id>/artifacts/`).
 
 ## Time, clocks, and scheduling
 

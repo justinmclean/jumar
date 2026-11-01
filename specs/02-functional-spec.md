@@ -435,6 +435,28 @@ Rules:
 
 - A `judge` verifier is prompted **adversarially** — its default answer is fail,
   and it must state the specific evidence that changed its mind.
+- **The judge's reply is pinned by a schema.** `verdict` is one of `pass` /
+  `fail` / `inconclusive`, `reason` a non-empty string, `artefacts_shown` a
+  list of strings, all required, nothing else. It is sent to Claude as
+  `--json-schema` and to the in-process `openai` harness as a strict
+  `json_schema` `response_format`, and every reply is revalidated locally
+  whatever the harness promised. With the schema enforced the whole reply must
+  be the object (no scraping for the first `{`); harnesses that cannot enforce
+  it keep a tolerant fence/brace extraction followed by the same validation. A
+  violation (`schema_violation`, listing each), an unparseable reply, or a
+  judge run that exited non-zero or timed out (`judge_run_failed`) is
+  `inconclusive`. An endpoint that rejects the schema is never retried without
+  it.
+- **A pass must agree with its own reason**, checked mechanically with no
+  second model call. The reason must quote — in `"…"`, `“…”`, `` `…` `` or
+  `'…'`, at least three characters — text present verbatim in the artefact
+  text the judge was shown (the same head as its prompt; whitespace normalised,
+  `\n` / `\t` / `\r` / `\"` escapes read as the characters they stand for),
+  and must not be byte-identical to an earlier attempt's judge reason for the
+  same subtask. A pass failing either is `inconclusive`
+  (`downgraded: reason_not_grounded` / `reason_repeated`), with the judge's own
+  verdict kept in the evidence. Only a pass is held to this: a repeated `fail`
+  reason stays a fail.
 - **An absent precondition is decided mechanically, before any model call.**
   A `judge` check whose artefact does not exist, or is empty, is `failed`
   (`artefact_missing` / `artefact_empty`); one that exists but cannot be read
@@ -478,7 +500,9 @@ Rules:
 - AC6.3 A missing verifier binary yields `inconclusive`, not `failed` and not
   `passed`. Likewise a `judge` artefact that exists but cannot be read is
   `inconclusive`, and a missing or empty one is `failed`, each decided without
-  a model call.
+  a model call. A judge reply that breaks the verdict schema, a judge run that
+  did not finish, and a `pass` whose reason quotes nothing from the artefact or
+  repeats an earlier attempt's reason are each `inconclusive`, never `passed`.
 - AC6.4 The `judge` verifier receives no part of the executing agent's
   transcript — asserted by a test that inspects the assembled verifier prompt.
 - AC6.5 A `manual` check under `--non-interactive` yields `inconclusive`.

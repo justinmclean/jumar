@@ -182,7 +182,12 @@ Evidence by kind:
 - `command`: `{argv, exit_status, stdout_head, stderr_head, duration_s}`
 - `file`: `{path, exists, size, sha256, matched_excerpt}`
 - `absence`: `{path, resolved, still_present}`
-- `judge`: `{verdict, reason, artefacts_shown}`
+- `judge`: `{verdict, reason, artefacts_shown, schema_enforced}`, plus
+  `grounded_quotes` on an accepted pass, or `downgraded`
+  (`reason_not_grounded` / `reason_repeated`) with `verdict` still the judge's
+  own when a pass was downgraded; `{error: schema_violation, violations}`,
+  `{error: unparseable_response}` or `{error: judge_run_failed}` when no
+  verdict could be read.
 - `manual`: `{response, answered_at}`
 - any kind, when the attempt did not end `clean`: `{error: "unclean_termination",
   termination, check_run: false}` — the check was not run.
