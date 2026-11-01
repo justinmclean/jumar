@@ -232,6 +232,22 @@ Hard rules enforced by the code, not by the prompt:
   any reason connected to the work (`true`, `echo`, `date`, `ls` with no
   operands, …) is rejected at construction. A check that always passes is
   "trust me" with extra steps.
+- A `pattern` (on `file` and `absence` checks) must be a **valid Python regex**
+  and must be able to fail: one that matches the empty string (`.*`, `(x)?`,
+  `^`) matches every file and is rejected at `Check` construction.
+- Rules a model-written plan keeps breaking are decided in code at decompose
+  time, and the plan is sent back with the reason through the same single
+  retry: a `gh` command check (the reason points at `jumar-gh`); a `grep -P` /
+  `-z` / `--perl-regexp` / `--null-data`, which BSD grep on macOS does not
+  have; a `grep` with several patterns (`-e A -e B`, `--regexp` twice, `-f`),
+  which passes when any one matches and so cannot assert all of them or their
+  order; a `pattern` — or a grep's own pattern — that is one exact phrase of
+  five or more words with no regex metacharacter; and one that is only a
+  self-report word (`done`, `draft`, `complete(d)`, `finished`, `success`,
+  `todo`, `wip`, `placeholder`). These are heuristics about model-written
+  plans, so author-written `check:` lines and directly built checks are not
+  subject to them. The prompt names them in a short ENFORCED list and keeps
+  full prose only for rules that need judgement.
 - The plan is capped at `max_subtasks` (config, default 12; a valid
   `@max-subtasks=` overrides it, and the overriding cap is the one the
   decomposition prompt states and the one the length check enforces). A longer plan is rejected and the item is flagged for the human to
@@ -260,7 +276,10 @@ Hard rules enforced by the code, not by the prompt:
   (`bash -c …`, `sh -c …`, `zsh --command …`) is rejected at construction; the
   same shell running a script file is accepted.
 - AC3.8 A `kind=command` check whose argv cannot fail (`true`, `echo`, `date`,
-  bare `ls`) is rejected as unfalsifiable at construction.
+  bare `ls`) is rejected as unfalsifiable at construction, as is a `pattern`
+  that matches the empty string; a `pattern` that is not a valid regex is
+  rejected too. A model-written plan breaking one of the decompose-time rules
+  is sent back with that rule's reason in the retry prompt.
 
 **Known gaps**
 

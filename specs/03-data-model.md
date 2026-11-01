@@ -122,6 +122,8 @@ Invariants (enforced in `models.py`, tested):
   (`""`, `"n/a"`, `"none"`, `"TODO"`, `"verify manually"`) — the anti-"trust me"
   guard from AC3.1.
 - A `command` is argv, never `shell=True`. No shell metacharacter interpolation.
+- `pattern`, when set, compiles with Python's `re` and does not match the empty
+  string.
 
 ## Subtask
 
