@@ -104,57 +104,43 @@ _SCHEMA_EXAMPLE = json.dumps(
 )
 
 _RULES = [
-    "- Every subtask MUST have a `check` with an executable proof of success.",
-    "- `check.statement` must be specific and testable"
-    " — never empty, 'n/a', 'none', 'TODO', or 'verify manually'.",
-    "- Use `kind=judge` ONLY when no executable check is possible;"
-    " it MUST include a non-empty `rationale` explaining why,"
-    " and a `path` naming the ONE file the judge should read.",
-    "- The judge cannot run commands, list directories or open files of its"
-    " own. It is shown `path` and nothing else. A `kind=judge` check whose"
-    " evidence is spread across several files, or is 'the repo history' or"
-    " 'the run notes', can NEVER pass. Either name the single file the"
-    " subtask leaves behind, or make the subtask write one and check that.",
-    "- `kind=command` requires `command` (a JSON argv list, never a shell string).",
-    "- `kind=command` MUST NOT be a shell wrapper:"
-    ' ["bash", "-c", "..."] (or sh/zsh/dash -c) is REJECTED.'
-    " Express the check as the program itself,"
-    ' e.g. ["grep", "-q", "Article 50", "sources/ai-act.html"].',
-    "- Checks run on macOS, where the `grep` on PATH may be BSD grep, which"
-    " has NO `-P` and NO `-z`. A `grep -P`, `-z` or `-Pz` argv then exits 2"
-    " with 'invalid option', which reads as a FAILED check however good the"
-    " work is, and burns the whole repair budget. It is REJECTED. Write a"
-    " check that passes or fails on the work, not on which grep the machine"
-    " happens to have.",
-    "- Never assert 'this file contains these headings in this order' with"
-    " grep. Use `kind=file` with `path` and a `pattern`: the file verifier"
-    " matches the pattern against the WHOLE file with Python's `re`, so"
-    " `(?s)A:.*B:.*C:` works there, and a miss puts the file's actual"
-    " content in the evidence for the repair to reconcile against. Reach"
-    " for `kind=command` only when the check needs a program to RUN"
-    " something, not to read a file.",
-    "- The check MUST be able to FAIL. An argv that exits 0 regardless of the"
-    " work — `true`, `echo`, `date`, bare `ls` — is REJECTED. Ask yourself:"
-    " what would make this check return non-zero? If nothing would, it is not a check.",
-    "- A `pattern` is a REGEX and must tolerate surface variation. Do not"
-    " demand one exact spelling of something you will also be writing:"
-    ' prefer "Art(icle)?\\s*2\\(12\\)" over "Art 2(12)". Anchor on the fact,'
-    " not on your own phrasing of it — a brittle pattern fails a correct"
-    " document and wastes the repair budget on rewording.",
-    "- `kind=file` FAILS on a zero-byte file. A download that returned no body"
-    " leaves the path present and empty, so assert content, not existence:"
-    " give `pattern` with a phrase that can only appear in the real document.",
-    "- Check the OUTCOME, not the artefact of your own effort. `grep -q draft"
-    " notes.md` proves you typed a word; it does not prove the work is right.",
-    "- `kind=file` or `kind=absence` requires `path`.",
-    "- `kind=absence` without `pattern` asserts the PATH does not exist. To"
-    " assert a file does not CONTAIN something, give `pattern` as well.",
-    "- `depends_on` must list 0-based subtask indices and must form a DAG (no cycles).",
+    # --- Enforced in code: a plan that breaks one of these is rejected and sent
+    # back with the reason. Named briefly so the model avoids the round trip.
+    "ENFORCED (a plan breaking any of these is rejected and returned to you):",
+    "- Every subtask has a `check`; `check.statement` is specific, never empty,"
+    " 'n/a', 'none', 'TODO' or 'verify manually'.",
+    "- `kind=command` has `command` as a JSON argv list, never a shell string, and"
+    ' never a shell wrapper (["bash", "-c", "..."], sh/zsh/dash -c).',
+    "- A check must be able to FAIL: no `true`, `echo`, `date`, bare `ls`, and no"
+    " `pattern` that matches the empty string (`.*`, `(x)?`).",
+    "- No `grep -P` / `-z`: BSD grep on macOS lacks them. Use kind=file with a `pattern` instead.",
+    "- No grep with several patterns (`-e A -e B`, `-f`): it passes if ANY matches."
+    " Use kind=file with one pattern, e.g. (?s)First:.*Second:.",
+    "- `pattern` is a valid Python regex; it is not one exact 5+ word phrase, and"
+    " not just a word like 'done', 'draft', 'complete' or 'success'.",
+    "- `kind=file` / `kind=absence` need `path`; `kind=judge` needs a `rationale`"
+    " and a `path`. `depends_on` holds 0-based indices and forms a DAG.",
+    "- `gh` is never run; use `jumar-gh` with the same arguments (read-only:"
+    " `api` GETs, `api graphql` queries, `issue`/`pr` view, list, diff, checks,"
+    " `search`; needs `network`).",
+    "",
+    "JUDGEMENT (no code can check these for you):",
+    "- Use `kind=judge` ONLY when no executable check is possible. The judge"
+    " cannot run commands or open files: it is shown `path` and nothing else, so"
+    " name the ONE file the subtask leaves behind, or make the subtask write one.",
+    "- Prefer `kind=file` with `path` and `pattern` for anything that reads a"
+    " file: the pattern runs against the WHOLE file with Python's `re`, and a"
+    " miss puts the file's content in the evidence. Use `kind=command` only when"
+    " a program must RUN something.",
+    "- A `pattern` must tolerate surface variation: anchor on the fact, not your"
+    ' own phrasing of it — prefer "Art(icle)?\\s*2\\(12\\)" over "Art 2(12)".',
+    "- `kind=file` FAILS on a zero-byte file, so assert content, not existence:"
+    " a phrase that can only appear in the real document.",
+    "- Check the OUTCOME, not the artefact of your own effort: that the facts are"
+    " right, not that a word you typed is present.",
+    "- `kind=absence` without `pattern` asserts the PATH does not exist; give"
+    " `pattern` to assert a file does not CONTAIN something.",
     "- `capabilities` must be a subset of the granted capabilities.",
-    "- `gh` is always refused, in subtasks and in checks. For GitHub data use"
-    " `jumar-gh` with the same arguments: it runs read-only gh commands"
-    " (`api` GETs, `api graphql` queries, `issue`/`pr` view, list, diff and"
-    " checks, `search`) and refuses everything else. It needs `network`.",
     "- Do NOT use tools, read files, run commands, or browse. Answer from this"
     " prompt alone. You are writing a plan, not doing the work.",
     "- Return ONLY valid JSON — no prose, no markdown fences.",
@@ -314,6 +300,113 @@ def _bsd_grep_violation(command: tuple[str, ...]) -> str | None:
     return None
 
 
+_GREPS = {"grep", "egrep", "fgrep", "rgrep"}
+_REGEX_META = set("\\.^$*+?()[]{}|")
+# A pattern that is nothing but one of these words proves the agent typed it,
+# not that the work is right. "OK" is deliberately absent: as a marker a
+# subtask writes into real output it is a fact about that output.
+_SELF_REPORT_WORDS = frozenset(
+    {"done", "draft", "complete", "completed", "finished", "success", "todo", "wip", "placeholder"}
+)
+_BRITTLE_WORDS = 5
+
+
+def _grep_patterns(command: tuple[str, ...]) -> tuple[list[str], bool]:
+    """(patterns, reads_pattern_file) for a grep argv; ([], False) otherwise."""
+    if not command or command[0].rsplit("/", 1)[-1] not in _GREPS:
+        return [], False
+    patterns: list[str] = []
+    from_file = False
+    operands: list[str] = []
+    takes_value = set("efmABCDd")
+    args = list(command[1:])
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            operands.extend(args[i:])
+            break
+        if arg.startswith("--"):
+            name, _, value = arg.partition("=")
+            if name in ("--regexp", "--file"):
+                if not value and i < len(args):
+                    value = args[i]
+                    i += 1
+                if name == "--regexp":
+                    patterns.append(value)
+                else:
+                    from_file = True
+            continue
+        if not arg.startswith("-") or arg == "-":
+            operands.append(arg)
+            continue
+        for j, flag in enumerate(arg[1:], start=1):
+            if flag in takes_value:
+                value = arg[j + 1 :]
+                if not value and i < len(args):
+                    value = args[i]
+                    i += 1
+                if flag == "e":
+                    patterns.append(value)
+                elif flag == "f":
+                    from_file = True
+                break
+    if not patterns and not from_file and operands:
+        patterns.append(operands[0])
+    return patterns, from_file
+
+
+def _pattern_violation(pattern: str, where: str) -> str | None:
+    """A model-written pattern that cannot prove the work: brittle, or self-report."""
+    bare = pattern.replace("\\b", "").strip("^$ \t").lower()
+    if bare in _SELF_REPORT_WORDS:
+        return (
+            f"{where} {pattern!r} only checks that the word {bare!r} was written, which"
+            " proves effort, not outcome. Match text that only the finished work"
+            " contains (a fact, a number, a heading from the real source)."
+        )
+    if not (_REGEX_META & set(pattern)) and len(pattern.split()) >= _BRITTLE_WORDS:
+        return (
+            f"{where} {pattern!r} demands one exact spelling of a {len(pattern.split())}-word"
+            " phrase, so a correct document worded differently fails it. Anchor on the"
+            " fact: a short distinctive term, with \\s+ between words and"
+            " alternation for variants, e.g. Art(icle)?\\s*2\\(12\\)."
+        )
+    return None
+
+
+def _plan_rule_violation(
+    kind: CheckKind, command: tuple[str, ...] | None, pattern: str | None
+) -> str | None:
+    """Rules the model keeps breaking, enforced on model-written plans (W22).
+
+    The prose in _RULES only names these; this is where they are decided.
+    """
+    if command:
+        program = command[0].rsplit("/", 1)[-1]
+        if program == "gh":
+            return (
+                "kind=command runs `gh`, which is always refused. For GitHub data use"
+                " `jumar-gh` with the same arguments (read-only; needs `network`)."
+            )
+        patterns, from_file = _grep_patterns(command)
+        if from_file or len(patterns) > 1:
+            return (
+                "kind=command is a grep with several patterns (-e ... -e ..., or -f),"
+                " which passes when ANY one matches: it cannot prove that all of them,"
+                " or that they appear in order. Use kind=file with a `path` and one"
+                " `pattern` such as (?s)First:.*Second:.*Third: instead."
+            )
+        for grep_pattern in patterns:
+            found = _pattern_violation(grep_pattern, "grep pattern")
+            if found:
+                return found
+    if pattern is not None and kind in (CheckKind.file, CheckKind.absence):
+        return _pattern_violation(pattern, "pattern")
+    return None
+
+
 def _build_check(raw: Any) -> Check | str:
     """Construct a Check from a raw dict; return an error string if invalid.
 
@@ -357,6 +450,10 @@ def _build_check(raw: Any) -> Check | str:
                 " re, so an ordered multi-section pattern such as (?s)A:.*B:.*C: works"
                 " there."
             )
+
+    rule = _plan_rule_violation(kind, command, pattern)
+    if rule is not None:
+        return rule
 
     try:
         return Check(

@@ -670,3 +670,32 @@ def test_todo_item_with_schedule() -> None:
     item = _make_todo_item(schedule=schedule)
     assert item.schedule is not None
     assert item.schedule.not_before == "2026-08-11T00:00:00+00:00"
+
+
+# ---------------------------------------------------------------------------
+# W22 — a pattern must be a valid regex that can fail
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern", ["Art 2(12", "[unclosed", "*starts", "(?P<x"])
+def test_a_pattern_that_is_not_a_regex_is_refused(pattern: str) -> None:
+    with pytest.raises(ValueError, match="not a valid regex"):
+        Check(kind=CheckKind.file, statement="s", path="f.md", pattern=pattern)
+
+
+@pytest.mark.parametrize("pattern", [".*", "(?s).*", "(Article)?", "a*", "^", "$", "|x", "(?:)"])
+def test_a_pattern_that_matches_the_empty_string_is_refused(pattern: str) -> None:
+    with pytest.raises(ValueError, match="matches the empty string"):
+        Check(kind=CheckKind.file, statement="s", path="f.md", pattern=pattern)
+
+
+def test_the_empty_pattern_rule_covers_absence_checks_too() -> None:
+    with pytest.raises(ValueError, match="matches the empty string"):
+        Check(kind=CheckKind.absence, statement="s", path="f.md", pattern=".*")
+
+
+@pytest.mark.parametrize("pattern", ["OK", "Art(icle)?\\s*2\\(12\\)", "(?s)A:.*B:", "^Status:"])
+def test_a_real_pattern_is_accepted(pattern: str) -> None:
+    assert (
+        Check(kind=CheckKind.file, statement="s", path="f.md", pattern=pattern).pattern == pattern
+    )
