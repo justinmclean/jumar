@@ -23,7 +23,9 @@ Capability    = read_fs | write_fs | run_commands | network | git_commit
 FailureCode   = unverifiable_plan | plan_too_long | invalid_plan
               | capability_denied | timed_out | check_failed
               | repairs_exhausted | harness_error | dependency_blocked
-              | bad_schedule | already_running
+              | bad_schedule | already_running | unclean_termination
+Termination   = clean | step_cap | timed_out | denied_tool | truncated
+              | harness_outage | abnormal_exit
 RecurUnit     = day | week | month | weekday | dow      # dow = named weekdays
 ScheduleBackend = cron | launchd | systemd
 ```
@@ -159,6 +161,7 @@ One execution of one subtask (initial or repair).
 | `exit_status` | int \| None | harness process status |
 | `files_touched` | list[str] | best-effort, from git status or mtime scan |
 | `error` | str \| None | harness-level failure |
+| `termination` | Termination | how the run ended; only `clean` is ever checked (stage 6) |
 
 ## VerificationResult
 
@@ -172,6 +175,7 @@ One execution of one subtask (initial or repair).
 | `summary` | str | one line, human-facing |
 | `evidence_path` | str \| None | full untruncated output artefact |
 | `checked_at` | str | ISO-8601 UTC |
+| `termination` | Termination \| None | how the judged attempt ended; None where no attempt applies |
 
 Evidence by kind:
 
@@ -180,6 +184,8 @@ Evidence by kind:
 - `absence`: `{path, resolved, still_present}`
 - `judge`: `{verdict, reason, artefacts_shown}`
 - `manual`: `{response, answered_at}`
+- any kind, when the attempt did not end `clean`: `{error: "unclean_termination",
+  termination, check_run: false}` — the check was not run.
 
 ## Run
 
