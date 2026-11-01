@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from ..clock import stamp
 from ..journal import VERIFICATION, Journal
 from ..models import Check, CheckKind, HarnessInfo, Termination, Verdict, VerificationResult
+from .inputs import check_inputs_evidence
 
 # ---------------------------------------------------------------------------
 # Context passed to every verifier
@@ -118,6 +119,26 @@ def run_verify(
         result = verifier(check, ctx)
         if ctx.termination is not None:
             result = dataclasses.replace(result, termination=ctx.termination)
+
+    # Report whether what the check reads was swapped out since the last
+    # attempt (or since the plan): a repair can satisfy a check by changing
+    # the world instead of finishing the work. Reported, never decisive.
+    inputs = check_inputs_evidence(
+        check,
+        subtask_id=ctx.subtask_id,
+        attempt_no=ctx.attempt_no,
+        cwd=ctx.cwd,
+        run_dir=ctx.run_dir,
+    )
+    summary = result.summary
+    if inputs.get("replaced_wholesale"):
+        summary += (
+            f" [note: {', '.join(inputs['replaced_wholesale'])} replaced wholesale "
+            f"since {inputs['since']}]"
+        )
+    result = dataclasses.replace(
+        result, evidence={**result.evidence, "check_inputs": inputs}, summary=summary
+    )
 
     payload: dict[str, Any] = {
         "attempt_no": ctx.attempt_no,

@@ -542,11 +542,12 @@ def run_item(
     from .decompose import DecomposeError, decompose, item_max_subtasks
     from .execute import execute
     from .gate import GateDecision, GateError, GateMode, gate
-    from .journal import ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
+    from .journal import CHECK_INPUTS_SNAPSHOT, ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED
     from .models import Verdict
     from .progress import Progress
     from .repair import RepairExhausted, RepairHarnessError, repair
     from .verify import VerifyContext, run_verify
+    from .verify.inputs import snapshot_plan
 
     prog = progress if progress is not None else Progress(enabled=False)
 
@@ -616,6 +617,22 @@ def run_item(
         return 0
     if decision == GateDecision.skip:
         return 0
+
+    # --- baseline of every check's inputs, before any subtask runs. Each
+    # verification compares against it (or the previous attempt) and reports
+    # an input replaced wholesale -- see verify/inputs.py.
+    journal.append(
+        CHECK_INPUTS_SNAPSHOT,
+        item_id=item.item_id,
+        payload={
+            "subtasks": {
+                s.subtask_id: snapshot_plan(
+                    s.check, subtask_id=s.subtask_id, cwd=cwd, run_dir=run_dir
+                )
+                for s in plan.subtasks
+            }
+        },
+    )
 
     # --- inner loop: one subtask at a time, verified before the next (AC5.1)
     verifications: list[Any] = list(prior_verifications or [])

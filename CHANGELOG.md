@@ -29,6 +29,12 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Added since then: every verdict reports whether the files its check reads were
+created, removed, changed or replaced wholesale since the previous attempt (or
+since the plan), so a repair that satisfies a check by swapping out the
+artefact or the test it runs is visible in the journal and on the summary
+line. It does not change the verdict.
+
 Fixed since then: a judge `pass` was taken on trust. Its reason must now quote
 text present in the artefact the judge was shown, and must not be identical to
 an earlier attempt's reason for the same subtask; otherwise the pass is
