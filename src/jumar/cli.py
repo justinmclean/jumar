@@ -546,6 +546,7 @@ def run_item(
     from .models import Verdict
     from .progress import Progress
     from .repair import RepairExhausted, RepairHarnessError, repair
+    from .tiers import ladder_for, starting_tier
     from .verify import VerifyContext, run_verify
     from .verify.inputs import snapshot_plan
     from .verify.pinned import pin_plan
@@ -642,6 +643,10 @@ def run_item(
         },
     )
 
+    # Execute-stage escalation (tiers.py): inactive when the line-up is pinned
+    # by --harness-profile or @harness=, or when no [harness] tiers are set.
+    ladder = ladder_for(config, item.meta.get("harness"))
+
     # --- inner loop: one subtask at a time, verified before the next (AC5.1)
     verifications: list[Any] = list(prior_verifications or [])
     prior_evidence: list[Any] = list(verifications)
@@ -660,6 +665,7 @@ def run_item(
         # work.  Repairs always resume — by then the session exists, and a
         # second --session-id with the same UUID is an error.
         exec_session_id = plan.session_id
+        start_tier = starting_tier(subtask, cwd, ladder)
         attempt = execute(
             subtask,
             item=item,
@@ -672,6 +678,8 @@ def run_item(
             session_id=exec_session_id,
             session_is_new=subtask.index == 0,
             _run_agent=_run_agent,
+            tier=ladder,
+            tier_index=start_tier,
         )
 
         prog.agent_transcript(getattr(attempt, "transcript_path", None))
@@ -754,6 +762,8 @@ def run_item(
                     judge_run_agent=_run_agent,
                     on_attempt=prog.repair_attempt,
                     on_result=lambda r: prog.repair_result(r.verdict, getattr(r, "summary", None)),
+                    tier=ladder,
+                    start_tier=start_tier,
                 )
             except RepairHarnessError as exc:
                 prog.verdict("harness_error", "execution harness failed during repair")

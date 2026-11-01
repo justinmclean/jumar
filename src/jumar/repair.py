@@ -137,6 +137,8 @@ def repair(
     judge_run_agent: Any | None = None,
     on_attempt: Callable[[int, int], None] | None = None,
     on_result: Callable[[VerificationResult], None] | None = None,
+    tier: Any | None = None,
+    start_tier: int = 0,
 ) -> VerificationResult:
     """Retry *subtask* up to ``config.max_repairs`` times after a non-pass.
 
@@ -212,6 +214,11 @@ def repair(
             session_id=session_id,
             _run_agent=_run_agent,
             prompt_override=repair_prompt,
+            # Every repair follows an attempt that failed or ended non-clean,
+            # so each one climbs a tier (capped at the top, where it retries
+            # in place). tiers.py; a pinned line-up passes an inactive ladder.
+            tier=tier,
+            tier_index=start_tier + attempt_no,
         )
         if attempt.error == "harness_error":
             raise RepairHarnessError(attempt_no=attempt_no)

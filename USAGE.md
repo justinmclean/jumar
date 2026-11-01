@@ -562,6 +562,18 @@ Notes that matter:
   you can force a whole pass onto one line-up to compare. A name with no
   matching profile fails at ingest, before any model call — never a silent
   fall-back to the default.
+- **`tiers` escalates the execute model on failure instead of guessing up
+  front.** `[jumar.harness] tiers = ["cheap", "mid", "top"]` names profiles,
+  cheapest first. Each subtask starts on the lowest tier — one higher for a
+  `judge` check, and one higher again when its check reads three or more files
+  — and every repair (each follows a failed or cut-off attempt) runs one tier
+  up, retrying in place once it reaches the top. `max_repairs` still bounds
+  the total. A harness outage ends the item without escalating. An explicit
+  `--harness-profile` or an item's `@harness=` pins the line-up and turns
+  escalation off; decompose and the judge never use tiers. Each attempt's
+  `tier` is journalled on `attempt_started` and `attempt_finished`. A tier's
+  model name goes to the agent CLI as is: the Claude CLI accepts `haiku`,
+  `sonnet`, `opus`, `fable` and full ids such as `claude-fable-5-1`.
 - **Harness profiles are for a second model line-up, not a second config file.**
   `jumar run --harness-profile heavy` layers `[jumar.harness.profiles.heavy]`
   over `[jumar.harness]`; everything else in the file — `todo_path`,

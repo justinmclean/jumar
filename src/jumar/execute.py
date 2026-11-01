@@ -110,6 +110,8 @@ def execute(
     session_is_new: bool = False,
     _run_agent: Any | None = None,
     prompt_override: str | None = None,
+    tier: Any | None = None,
+    tier_index: int = 0,
 ) -> Attempt:
     """Execute *subtask* via the agent harness.
 
@@ -135,10 +137,18 @@ def execute(
                      harnesses that do not support session resumption.
     _run_agent:      Injectable harness callable for tests (default: harness.run_agent).
     prompt_override: When set, replaces the default prompt (used by repair.py).
+    tier:            A tiers.TierLadder; when active, the execute harness is the
+                     profile at ``tier_index`` instead of the item's line-up,
+                     and the attempt's tier is journalled.
     """
     runner = _run_agent if _run_agent is not None else _default_run_agent
 
-    resolved = resolve_harness(config, item.meta.get("harness")).for_stage("execute")
+    tier_info: dict[str, Any] = {}
+    if tier is not None and tier.active:
+        resolved = tier.harness(tier_index).for_stage("execute")
+        tier_info = tier.describe(tier_index)
+    else:
+        resolved = resolve_harness(config, item.meta.get("harness")).for_stage("execute")
     harness_info = HarnessInfo(
         agent=resolved.agent,
         model=resolved.model,
@@ -172,6 +182,7 @@ def execute(
                 "agent": harness_info.agent,
                 "model": harness_info.model,
             },
+            **tier_info,
         },
     )
 
@@ -252,6 +263,7 @@ def execute(
             "files_touched": list(touched),
             "error": error,
             "termination": termination.value,
+            **tier_info,
         },
     )
 
