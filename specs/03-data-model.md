@@ -181,7 +181,10 @@ One execution of one subtask (initial or repair).
 
 Evidence by kind:
 
-- `command`: `{argv, exit_status, stdout_head, stderr_head, duration_s}`
+- `command`: `{argv, exit_status, stdout_head, stderr_head, duration_s}`; when
+  refused for unpinned in-tree code, `{argv, run: false, error:
+  check_program_not_pinned | check_program_modified, path, pinned_sha256,
+  current_sha256}`.
 - `file`: `{path, exists, size, sha256, matched_excerpt}`
 - `absence`: `{path, resolved, still_present}`
 - `judge`: `{verdict, reason, artefacts_shown, schema_enforced}`, plus
@@ -196,7 +199,8 @@ Evidence by kind:
 - every kind, always: `check_inputs: {since, inputs, created, removed, changed,
   replaced_wholesale}` — `since` is `plan`, `attempt N`, or null when no
   baseline exists. `check_inputs_snapshot`'s payload is
-  `{subtasks: {subtask_id: {path: sha256 | null}}}`; per-line digests live in
+  `{subtasks: {subtask_id: {path: sha256 | null}}, pinned_programs:
+  {subtask_id: {path: sha256 | null}}}` (the second for command checks only); per-line digests live in
   `runs/<run-id>/artifacts/<subtask>-inputs-<plan|attempt-N>.json`.
 
 ## Run
