@@ -167,22 +167,29 @@ def _verify(tmp_path: Path, check: Check, attempt_no: int) -> Any:
     return run_verify(check, journal=Journal(run_dir / "journal.jsonl", "r"), item_id="i", ctx=ctx)
 
 
-def test_the_verdict_names_a_check_script_rewritten_by_a_repair(tmp_path: Path) -> None:
-    """The command check re-runs unchanged, but the script it runs was swapped."""
-    script = "".join(f"assert step_{i}()\n" for i in range(10))
-    (tmp_path / "verify_out.py").write_text(script)
+def test_the_verdict_names_a_file_a_command_check_reads_rewritten_by_a_repair(
+    tmp_path: Path,
+) -> None:
+    """The command check re-runs unchanged, but the data it reads was swapped.
+
+    (A check *script* swapped the same way is no longer reported but refused:
+    the code a check executes is pinned at plan time -- see test_pinned.py.)
+    """
+    (tmp_path / "report.csv").write_text("".join(f"row {i},pending\n" for i in range(10)))
     check = Check(
-        kind=CheckKind.command, statement="verifier passes", command=("python3", "verify_out.py")
+        kind=CheckKind.command,
+        statement="report has a done row",
+        command=("grep", "-q", ",done", "report.csv"),
     )
     snapshot_plan(check, subtask_id="i#0", cwd=tmp_path, run_dir=tmp_path / "run")
 
-    _verify(tmp_path, check, 0)  # fails: step_0 is undefined
-    (tmp_path / "verify_out.py").write_text("raise SystemExit(0)\n")  # the "repair"
+    _verify(tmp_path, check, 0)  # fails: no row is done
+    (tmp_path / "report.csv").write_text("x,done\n")  # the "repair"
     result = _verify(tmp_path, check, 1)
 
     assert result.verdict.value == "passed"
-    assert result.evidence["check_inputs"]["replaced_wholesale"] == ["verify_out.py"]
-    assert "verify_out.py replaced wholesale since attempt 0" in result.summary
+    assert result.evidence["check_inputs"]["replaced_wholesale"] == ["report.csv"]
+    assert "report.csv replaced wholesale since attempt 0" in result.summary
 
 
 def test_the_report_never_changes_the_verdict(tmp_path: Path) -> None:
