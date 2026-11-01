@@ -109,7 +109,7 @@ def _ctx(
     )
 
 
-def _runner(verdict: str, reason: str = "evidence cited") -> Any:
+def _runner(verdict: str, reason: str = 'output.json holds "result": 1') -> Any:
     """Return a fake runner that responds with the given verdict."""
 
     def _run(
@@ -548,7 +548,7 @@ def test_response_in_markdown_fence_parsed(tmp_path: Path) -> None:
     def _fenced_runner(
         prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
-        payload = '{"verdict": "pass", "reason": "file found", "artefacts_shown": []}'
+        payload = '{"verdict": "pass", "reason": "has `\\"result\\": 1`", "artefacts_shown": []}'
         return _FakeResult(exit_status=0, stdout=f"```json\n{payload}\n```")
 
     ctx = _ctx(tmp_path, runner=_fenced_runner, harness=_NO_SCHEMA_HARNESS)
@@ -576,7 +576,7 @@ def test_bare_json_after_text_prefix_parsed(tmp_path: Path) -> None:
     def _prefixed_runner(
         prompt: str, *, cwd: Any, capabilities: Any, timeout_s: Any, harness: Any, **_: Any
     ) -> _FakeResult:
-        payload = '{"verdict": "pass", "reason": "looks good", "artefacts_shown": []}'
+        payload = '{"verdict": "pass", "reason": "shows `\\"result\\": 1`", "artefacts_shown": []}'
         return _FakeResult(exit_status=0, stdout=f"The result is: {payload}")
 
     ctx = _ctx(tmp_path, runner=_prefixed_runner, harness=_NO_SCHEMA_HARNESS)
@@ -590,7 +590,7 @@ def test_with_the_schema_enforced_text_around_the_object_is_not_scraped(
     """W19: claude prints exactly the object; anything else is not a verdict."""
 
     def _prefixed_runner(prompt: str, **_: Any) -> _FakeResult:
-        payload = '{"verdict": "pass", "reason": "looks good", "artefacts_shown": []}'
+        payload = '{"verdict": "pass", "reason": "shows `\\"result\\": 1`", "artefacts_shown": []}'
         return _FakeResult(exit_status=0, stdout=f"Example reply: {payload}")
 
     result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_prefixed_runner))
@@ -676,7 +676,7 @@ def test_an_empty_reason_never_passes_even_with_a_pass_verdict(tmp_path: Path) -
 
 
 def test_a_valid_reply_still_passes(tmp_path: Path) -> None:
-    reply = {"verdict": "pass", "reason": "output.json has a result key", "artefacts_shown": []}
+    reply = {"verdict": "pass", "reason": 'output.json has "result": 1', "artefacts_shown": []}
     result = verify_judge(_JUDGE_CHECK, _ctx(tmp_path, runner=_replying(reply)))
     assert result.verdict == Verdict.passed
     assert result.evidence["schema_enforced"] is True
@@ -777,3 +777,123 @@ def test_an_endpoint_that_rejects_the_schema_leaves_the_judge_inconclusive(
     assert len(received) == 1
     assert received[0]["response_format"]["type"] == "json_schema"
     assert received[0]["response_format"]["json_schema"]["strict"] is True
+
+
+# ---------------------------------------------------------------------------
+# W20 — a pass must agree with its own reason
+# ---------------------------------------------------------------------------
+
+_NOTES_CHECK = Check(
+    kind=CheckKind.judge,
+    statement="notes.md mentions the parser fix.",
+    rationale="Prose cannot be checked mechanically.",
+    path="notes.md",
+)
+_NOTES = "# Notes\n\n- Fixed the parser crash\n  on empty input.\n- Added a --verbose flag.\n"
+
+
+def _notes_ctx(tmp_path: Path, reason: str, *, attempt_no: int = 0, verdict: str = "pass") -> Any:
+    (tmp_path / "notes.md").write_text(_NOTES)
+    return _ctx(tmp_path, runner=_runner(verdict, reason), attempt_no=attempt_no, artefact=None)
+
+
+def test_a_pass_that_quotes_nothing_is_downgraded(tmp_path: Path) -> None:
+    """W20 validation: a non-quoting pass is not accepted."""
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, "The notes clearly cover the fix."))
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["downgraded"] == "reason_not_grounded"
+    assert result.evidence["verdict"] == "pass"  # what the judge said is kept
+    assert "downgraded to inconclusive" in result.summary
+
+
+def test_a_quote_that_is_not_in_the_artefact_is_downgraded(tmp_path: Path) -> None:
+    reason = 'The notes say "Fixed the lexer crash on startup".'
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason))
+    assert result.verdict == Verdict.inconclusive
+    assert result.evidence["downgraded"] == "reason_not_grounded"
+
+
+def test_a_grounded_quote_passes_even_across_a_line_break(tmp_path: Path) -> None:
+    reason = 'The notes say "Fixed the parser crash on empty input."'
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason))
+    assert result.verdict == Verdict.passed
+    assert result.evidence["grounded_quotes"] == ["Fixed the parser crash on empty input."]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "The notes say “Fixed the parser crash”.",
+        "The notes say `Added a --verbose flag.`",
+        "The notes say 'Fixed the parser crash'.",
+        'The notes say "Fixed the parser crash\\n  on empty input."',
+    ],
+)
+def test_curly_quotes_backticks_single_quotes_and_escaped_newlines_count(
+    tmp_path: Path, reason: str
+) -> None:
+    assert verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason)).verdict == Verdict.passed
+
+
+def test_a_quote_too_short_to_cite_anything_does_not_count(tmp_path: Path) -> None:
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, 'It has an "a" in it.'))
+    assert result.verdict == Verdict.inconclusive
+
+
+def test_a_quote_beyond_what_the_judge_was_shown_does_not_count(tmp_path: Path) -> None:
+    (tmp_path / "notes.md").write_text("x" * 5000 + "\nFixed the parser crash\n")
+    ctx = _ctx(
+        tmp_path, runner=_runner("pass", 'It says "Fixed the parser crash".'), artefact=None
+    )  # evidence_head_bytes=4000: the line was never shown
+    assert verify_judge(_NOTES_CHECK, ctx).verdict == Verdict.inconclusive
+
+
+def test_a_pass_repeating_an_earlier_attempts_reason_is_downgraded(tmp_path: Path) -> None:
+    """W20 validation: the identical-verdict rubber stamp, caught mechanically."""
+    reason = 'The notes say "Fixed the parser crash".'
+    first = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason, attempt_no=0))
+    assert first.verdict == Verdict.passed
+
+    again = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason, attempt_no=1))
+    assert again.verdict == Verdict.inconclusive
+    assert again.evidence["downgraded"] == "reason_repeated"
+    assert again.evidence["repeats_attempt"] == 0
+
+
+def test_a_pass_repeating_an_earlier_fail_reason_is_downgraded(tmp_path: Path) -> None:
+    reason = 'The notes say "Fixed the parser crash".'
+    verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason, attempt_no=0, verdict="fail"))
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason, attempt_no=1))
+    assert result.evidence["downgraded"] == "reason_repeated"
+
+
+def test_a_fresh_grounded_reason_on_a_later_attempt_passes(tmp_path: Path) -> None:
+    verify_judge(
+        _NOTES_CHECK, _notes_ctx(tmp_path, 'It says "Added a --verbose flag."', attempt_no=0)
+    )
+    result = verify_judge(
+        _NOTES_CHECK, _notes_ctx(tmp_path, 'It says "Fixed the parser crash".', attempt_no=1)
+    )
+    assert result.verdict == Verdict.passed
+
+
+def test_a_repeated_fail_reason_stays_a_fail(tmp_path: Path) -> None:
+    """Only a pass is held to its reason; a repeated fail is the work not changing."""
+    reason = "The notes do not mention the fix."
+    verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason, attempt_no=0, verdict="fail"))
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, reason, attempt_no=1, verdict="fail"))
+    assert result.verdict == Verdict.failed
+    assert "downgraded" not in result.evidence
+
+
+def test_the_downgrade_is_recorded_for_later_attempts(tmp_path: Path) -> None:
+    result = verify_judge(_NOTES_CHECK, _notes_ctx(tmp_path, "Looks complete."))
+    assert result.evidence_path is not None
+    record = json.loads(Path(result.evidence_path).read_text())
+    assert record["verdict"] == "pass"
+    assert record["downgraded"] == "reason_not_grounded"
+
+
+def test_the_prompt_asks_for_a_verbatim_quote(tmp_path: Path) -> None:
+    prompt, _ = build_judge_prompt(_JUDGE_CHECK, _ctx(tmp_path))
+    assert "verbatim" in prompt and "double quotes" in prompt

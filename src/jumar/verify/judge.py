@@ -18,6 +18,11 @@ Contract:
   inconclusive, never a pass. A judge run that failed, or an endpoint that
   rejects the schema, stays inconclusive: the call is never retried without
   the schema.
+- A pass has to agree with its own reason, checked mechanically: the reason
+  must quote text that is present in the artefact the judge was shown, and
+  must not be byte-identical to an earlier attempt's judge reason for the same
+  subtask. Otherwise the pass is downgraded to inconclusive -- the
+  identical-verdict rubber stamp, caught without asking another model.
 - Returns inconclusive when no harness is configured in VerifyContext.
 - Absent preconditions are decided mechanically, before any model call: a
   missing or empty artefact is ``failed`` (the work it should hold is not
@@ -57,9 +62,12 @@ _JUDGE_PROMPT_TEMPLATE = (
     "Artefacts for review:\n{artefacts_block}\n\n"
     "Return ONLY valid JSON with this exact shape:\n"
     '{{"verdict": "pass"|"fail"|"inconclusive",'
-    ' "reason": "<one-line explanation citing specific evidence>",'
+    ' "reason": "<one line citing specific evidence; for pass, quote in double'
+    ' quotes the exact text copied from the artefact that shows the criterion is met>",'
     ' "artefacts_shown": ["<list of artefact names you examined>"]}}\n\n'
-    '- "pass": the criterion is clearly met; cite the specific evidence.\n'
+    '- "pass": the criterion is clearly met; quote, verbatim and in double quotes,'
+    " the artefact text that shows it. A pass whose reason quotes nothing from the"
+    " artefact is not accepted.\n"
     '- "fail": the criterion is not met or evidence is absent.\n'
     '- "inconclusive": cannot evaluate from the available artefacts alone.'
 )
@@ -129,6 +137,68 @@ def _collect_artefacts(check: Check, cwd: Path, head_bytes: int) -> tuple[str, l
     marker = f" (first {head_bytes} bytes shown)" if truncated else ""
     block = f"--- {raw}{marker} ---\n{excerpt}\n--- end {raw} ---"
     return block, [raw]
+
+
+# Quoted spans in a reason: "...", “...”, `...`, '...'. At least three
+# characters, so a quoted letter or a bare "ok" does not count as citing.
+_QUOTED = re.compile(r'"([^"]{3,})"|“([^”]{3,})”|`([^`]{3,})`|\'([^\']{3,})\'')
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.split())
+
+
+# A model quoting a multi-line excerpt inside a JSON string often writes the
+# line break as the two characters backslash-n. Read those escapes as the
+# characters they stand for before comparing; the text must still match.
+_QUOTE_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\r": "\r", '\\"': '"'}
+
+
+def _unescape(span: str) -> str:
+    for escaped, char in _QUOTE_ESCAPES.items():
+        span = span.replace(escaped, char)
+    return span
+
+
+def grounded_quotes(reason: str, shown: str) -> list[str]:
+    """The quoted spans of *reason* that appear verbatim in *shown*.
+
+    Whitespace is normalised on both sides, so a quote that re-wraps a line
+    still counts. Nothing else is: a paraphrase is not a quote.
+    """
+    haystack = _squash(shown)
+    found: list[str] = []
+    for match in _QUOTED.finditer(reason):
+        span = _squash(_unescape(next(g for g in match.groups() if g is not None)))
+        if len(span) >= 3 and span in haystack:
+            found.append(span)
+    return found
+
+
+def _shown_excerpt(check: Check, ctx: VerifyContext) -> str:
+    """Exactly the artefact text the judge was shown (the same head as the prompt)."""
+    assert check.path is not None
+    file_path = Path(check.path) if Path(check.path).is_absolute() else ctx.cwd / check.path
+    try:
+        return file_path.read_text(errors="replace")[: ctx.evidence_head_bytes]
+    except OSError:
+        return ""
+
+
+def _earlier_reasons(ctx: VerifyContext) -> dict[int, str]:
+    """attempt_no -> judge reason, for this subtask's earlier attempts in this run."""
+    artefacts_dir = ctx.run_dir / "artifacts"
+    safe_id = ctx.subtask_id.replace("#", "-")
+    reasons: dict[int, str] = {}
+    for n in range(ctx.attempt_no):
+        path = artefacts_dir / f"{safe_id}-judge-{n}.json"
+        try:
+            recorded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(recorded, dict) and isinstance(recorded.get("reason"), str):
+            reasons[n] = recorded["reason"]
+    return reasons
 
 
 def _parse_whole(text: str) -> dict[str, Any] | None:
@@ -348,6 +418,31 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
     verdict = _VERDICTS[verdict_str]
     summary = f"judge verdict={verdict_str}: {reason}"
 
+    # A pass must agree with its own reason (W20). Both tests are mechanical:
+    # no second model is asked whether the first one was right.
+    downgrade: dict[str, Any] = {}
+    if verdict is Verdict.passed:
+        quotes = grounded_quotes(reason, _shown_excerpt(check, ctx))
+        repeated = [n for n, earlier in _earlier_reasons(ctx).items() if earlier == reason]
+        if not quotes:
+            downgrade = {
+                "downgraded": "reason_not_grounded",
+                "detail": "the pass reason quotes no text present in the artefact shown",
+            }
+        elif repeated:
+            downgrade = {
+                "downgraded": "reason_repeated",
+                "detail": f"the pass reason is identical to attempt {max(repeated)}'s",
+                "repeats_attempt": max(repeated),
+            }
+        else:
+            downgrade = {"grounded_quotes": quotes}
+        if "downgraded" in downgrade:
+            verdict = Verdict.inconclusive
+            summary = (
+                f"judge said pass, downgraded to inconclusive: {downgrade['detail']} ({reason})"
+            )
+
     artefacts_dir = ctx.run_dir / "artifacts"
     artefacts_dir.mkdir(parents=True, exist_ok=True)
     safe_id = ctx.subtask_id.replace("#", "-")
@@ -359,6 +454,7 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
                 "reason": reason,
                 "artefacts_shown": shown,
                 "raw_response": result.stdout,
+                **downgrade,
             },
             indent=2,
         ),
@@ -375,6 +471,7 @@ def verify_judge(check: Check, ctx: VerifyContext) -> VerificationResult:
             "reason": reason,
             "artefacts_shown": shown,
             "schema_enforced": schema_enforced,
+            **downgrade,
             "completion_tokens": getattr(result, "completion_tokens", None),
             "prompt_tokens": getattr(result, "prompt_tokens", None),
         },
