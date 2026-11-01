@@ -191,6 +191,11 @@ Evidence by kind:
 - `manual`: `{response, answered_at}`
 - any kind, when the attempt did not end `clean`: `{error: "unclean_termination",
   termination, check_run: false}` — the check was not run.
+- every kind, always: `check_inputs: {since, inputs, created, removed, changed,
+  replaced_wholesale}` — `since` is `plan`, `attempt N`, or null when no
+  baseline exists. `check_inputs_snapshot`'s payload is
+  `{subtasks: {subtask_id: {path: sha256 | null}}}`; per-line digests live in
+  `runs/<run-id>/artifacts/<subtask>-inputs-<plan|attempt-N>.json`.
 
 ## Run
 
@@ -282,7 +287,7 @@ One JSON object per line in `runs/<run-id>/journal.jsonl`:
 ```
 
 `event` ∈ `run_started | item_selected | item_deferred | plan_created |
-plan_rejected | gate_decision | attempt_started | attempt_finished |
+plan_rejected | gate_decision | check_inputs_snapshot | attempt_started | attempt_finished |
 verification | repair_started | item_completed | item_failed |
 schedule_advanced | lock_reclaimed | already_running |
 failure_count_advanced | failure_count_cleared | item_parked | run_finished`.

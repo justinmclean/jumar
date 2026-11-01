@@ -529,6 +529,20 @@ On `failed` or `inconclusive`, the subtask is retried up to `max_repairs`
 its evidence, and is told explicitly what did not pass. After each repair the
 **same check** is re-run — a repair may never rewrite its own acceptance check.
 
+A repair can still make the unchanged check pass by changing what it reads
+instead of finishing the work: discarding a real draft for the bare string a
+pattern wants, or editing the test file a `command` check runs. So a check's
+inputs — its `path` (unless a glob) and every argv token of a `command` check
+that names an existing regular file inside the working tree — are hashed once
+the plan has passed the gate, before the first subtask runs, and journalled as
+`check_inputs_snapshot`; this baseline is written once, so a resumed run keeps
+it. Every verification hashes them again and its evidence carries
+`check_inputs`: against the previous attempt (or the plan, for the first),
+the inputs `created`, `removed`, `changed`, and `replaced_wholesale` (fewer
+than a fifth of the previous version's distinct non-blank lines survive). A
+wholesale replacement is also noted on the verdict's summary. This is a
+report: it never changes the verdict.
+
 If the budget is exhausted, the item stops with `failed_at_subtask=<n>`.
 Remaining subtasks are not attempted and the item's checkbox is left unticked.
 A plain `jumar run` handles one item per invocation, so it ends there. Under
@@ -540,7 +554,9 @@ entirely under `--halt-on-fail` (or `halt_on_fail = true` in config).
 - AC7.1 A failing subtask is retried exactly `max_repairs` times, no more.
 - AC7.2 The repair prompt contains the failing check and its evidence.
 - AC7.3 A repair attempt that modifies the subtask's `check` is rejected and the
-  original check is re-run.
+  original check is re-run. A repair that replaces the file the check reads
+  wholesale is reported on the verdict (`check_inputs.replaced_wholesale`,
+  naming the attempt it is measured against), without changing the verdict.
 - AC7.4 On budget exhaustion the item is `failed`, later subtasks are not run,
   and under `--until-empty` the next eligible item is selected (default) or the
   run halts (`--halt-on-fail`).
