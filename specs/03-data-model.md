@@ -342,6 +342,10 @@ model = "opus"            # valid stage tables: decompose, execute, judge
 [jumar.harness.profiles.heavy]   # named alternative harness; same shape as
 execute = { model = "opus" }     # [jumar.harness]. Select with --harness-profile heavy
 
+# Under [jumar.harness]: profiles the execute stage escalates through, cheapest
+# first (stage 7). Each must be a defined [jumar.harness.profiles.<name>].
+# tiers = ["cheap", "mid", "heavy"]
+
 schedule_backend = "cron"   # optional; cron | launchd | systemd. Unset = platform default
 
 [jumar.commands]
@@ -376,3 +380,8 @@ quietly used the wrong line-up is indistinguishable from one that used the
 right one — and every profile is shape-checked at load, not only the selected
 one. The selected name is recorded on `Config.harness_profile` and reported by
 `doctor`.
+
+`[jumar.harness] tiers` is a list of profile names, cheapest first, recorded on
+`Config.harness_tiers`. It is valid only on the base `[jumar.harness]`; a name
+with no `[jumar.harness.profiles.<name>]` table, a non-list, or a repeated name
+is a startup error. Empty (the default) means no escalation.

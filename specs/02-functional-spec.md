@@ -566,6 +566,19 @@ On `failed` or `inconclusive`, the subtask is retried up to `max_repairs`
 its evidence, and is told explicitly what did not pass. After each repair the
 **same check** is re-run — a repair may never rewrite its own acceptance check.
 
+**Model tiers.** When `[harness] tiers` lists profiles (cheapest first), the
+execute stage escalates instead of predicting difficulty up front. A subtask
+starts on tier 0, one higher for a `judge` check and one higher again when its
+check reads three or more files, capped at the top. Every repair follows an
+attempt that failed or ended non-clean, so repair *n* runs at
+`start + n`, capped at the top tier, where it retries in place; `max_repairs`
+still bounds the total. A harness outage ends the item before any repair, so it
+never escalates. An explicit `--harness-profile` or an item's `@harness=` pins
+the line-up and turns escalation off, and decompose and the judge never use
+tiers. Each attempt's `tier`, `tier_index` and `tiers` are journalled on
+`attempt_started` and `attempt_finished`. An item resumes its execution session
+across tiers: the agent CLI keeps the context when resumed under another model.
+
 A repair can still make the unchanged check pass by changing what it reads
 instead of finishing the work: discarding a real draft for the bare string a
 pattern wants, or editing the test file a `command` check runs. So a check's
@@ -588,7 +601,10 @@ entirely under `--halt-on-fail` (or `halt_on_fail = true` in config).
 
 **Acceptance criteria**
 
-- AC7.1 A failing subtask is retried exactly `max_repairs` times, no more.
+- AC7.1 A failing subtask is retried exactly `max_repairs` times, no more —
+  with `[harness] tiers`, each repair one tier above the last, retrying in place
+  at the top tier, and never escalating when the line-up is pinned or on a
+  harness outage.
 - AC7.2 The repair prompt contains the failing check and its evidence.
 - AC7.3 A repair attempt that modifies the subtask's `check` is rejected and the
   original check is re-run. A repair that replaces the file the check reads
