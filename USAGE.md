@@ -722,6 +722,13 @@ Rules worth knowing before you write a check by hand:
   downgraded to `inconclusive`, with the judge's original verdict kept in the
   evidence.
 - `manual` under `--non-interactive` yields `inconclusive`, never an auto-pass.
+- A `command` check never runs agent-written code. Any file it would execute
+  from the working tree — `./verify.sh`, the script in `python3 check.py`, a
+  `python3 -m` module, or a bare name PATH finds inside the tree — is pinned by
+  hash when the plan is accepted, and the check is refused (`failed`, not run)
+  if that file did not exist then or has changed since. A plan whose check
+  would run a script the subtask itself has to write is sent back. Programs
+  outside the tree, and an unchanged in-tree `.venv`, run as before.
 - A `pattern` must be a valid Python regex and must be able to fail: one that
   matches the empty string (`.*`, `(x)?`, `^`) matches every file and is
   refused when the check is built.

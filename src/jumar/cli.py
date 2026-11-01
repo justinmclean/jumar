@@ -548,6 +548,7 @@ def run_item(
     from .repair import RepairExhausted, RepairHarnessError, repair
     from .verify import VerifyContext, run_verify
     from .verify.inputs import snapshot_plan
+    from .verify.pinned import pin_plan
 
     prog = progress if progress is not None else Progress(enabled=False)
 
@@ -630,7 +631,14 @@ def run_item(
                     s.check, subtask_id=s.subtask_id, cwd=cwd, run_dir=run_dir
                 )
                 for s in plan.subtasks
-            }
+            },
+            # In-tree code each command check runs, pinned by hash: the
+            # verifier refuses to run it if it is missing or has changed.
+            "pinned_programs": {
+                s.subtask_id: pin_plan(s.check, subtask_id=s.subtask_id, cwd=cwd, run_dir=run_dir)
+                for s in plan.subtasks
+                if s.check.command
+            },
         },
     )
 

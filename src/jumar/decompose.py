@@ -47,6 +47,7 @@ from .models import (
     SubtaskStatus,
     TodoItem,
 )
+from .verify.pinned import unwritten_program
 
 # ---------------------------------------------------------------------------
 # Rejection reason codes (internal)
@@ -497,6 +498,7 @@ def _parse_and_validate(
     item_capabilities: frozenset[Capability],
     max_subtasks: int,
     authored_texts: tuple[str, ...],
+    cwd: Path | None = None,
 ) -> tuple[tuple[Subtask, ...], str | None, str | None]:
     """Build and validate Subtask objects from raw JSON.
 
@@ -551,6 +553,10 @@ def _parse_and_validate(
             return (), "missing_check", f"subtask {i} ({description!r}): {check_result}"
 
         check = check_result
+        if cwd is not None:
+            unwritten = unwritten_program(check, cwd)
+            if unwritten is not None:
+                return (), "missing_check", f"subtask {i} ({description!r}): {unwritten}"
 
         if authored_texts:
             subtask_caps = item_capabilities
@@ -874,6 +880,7 @@ def decompose(
                     item.capabilities,
                     max_subtasks,
                     to_check,
+                    cwd=cwd,
                 )
 
         if rejection is None:

@@ -48,6 +48,32 @@ def verify_command(check: Check, ctx: VerifyContext) -> VerificationResult:
     from ..config import Config, is_allowed
 
     policy = ctx.config if ctx.config is not None else Config()
+
+    # Code the check would run from the working tree must be byte-identical to
+    # what was there when the plan was accepted. Otherwise the verifier is
+    # agent-authored code, and a pass means nothing. Refused before spawning.
+    from .pinned import unpinned_program
+
+    refusal = unpinned_program(check, subtask_id=ctx.subtask_id, cwd=ctx.cwd, run_dir=ctx.run_dir)
+    if refusal is not None:
+        why = (
+            "was not in the working tree when the plan was accepted"
+            if refusal["error"] == "check_program_not_pinned"
+            else "changed after the plan was accepted"
+        )
+        return VerificationResult(
+            subtask_id=ctx.subtask_id,
+            attempt_no=ctx.attempt_no,
+            verdict=Verdict.failed,
+            kind=CheckKind.command,
+            evidence={"argv": argv, "run": False, **refusal},
+            summary=(
+                f"Not run: {refusal['path']} {why}, so the check would execute agent-written code"
+            ),
+            evidence_path=None,
+            checked_at=checked_at,
+        )
+
     if not is_allowed(argv, policy):
         return VerificationResult(
             subtask_id=ctx.subtask_id,

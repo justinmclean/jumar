@@ -29,6 +29,14 @@ reaching the remote. A fail-closed `PreToolUse` hook now parses every Bash
 command the agent issues and refuses those spellings and the rest of the
 family; the patterns stay as defence in depth.
 
+Security since then: a `command` check such as `python3 check.py` ran
+whatever the script said, from a directory the agent writes to, so an agent
+could pass a check by rewriting it. Every file a command check executes from
+the working tree is now pinned by hash when the plan is accepted, and the
+verifier refuses to run the check if one is missing from the pin or has
+changed. A plan whose check would run a script the subtask must write is sent
+back at decompose time.
+
 Changed since then: decomposition rules the model kept breaking are decided in
 code instead of only asked for in the prompt. Every check refuses a `pattern`
 that is not a valid regex or that matches the empty string. A model-written
