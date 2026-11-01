@@ -209,6 +209,21 @@ event that follows carries the verifier's `verdict` and `evidence` dict —
 the concrete artefact that proved the claim, or the concrete observation that
 falsified it.
 
+### When a repair rewrites what the check reads
+
+A repair re-runs the same check, but it can still make that check pass by
+changing the world rather than finishing the work: throwing away a real draft
+and writing just the string the pattern looks for, or editing the test file a
+`command` check runs. So the files every check reads — its `path`, and any
+argv token of a `command` check that names a file in the working tree — are
+hashed when the plan is accepted (`check_inputs_snapshot` in the journal) and
+again at every verification. Each verdict's evidence carries `check_inputs`:
+against the previous attempt (or the plan, for the first), which inputs were
+`created`, `removed`, `changed`, or `replaced_wholesale` (fewer than a fifth of
+the previous version's lines survive). A wholesale replacement is also noted
+on the verdict's summary line. This is a report for the reader of the journal;
+it never changes the verdict.
+
 ### A run that was cut off is not checked
 
 Before the verifier looks at anything, jumar decides how the agent's run
