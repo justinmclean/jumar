@@ -323,6 +323,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit the status as a JSON document on stdout (warnings still go to stderr).",
     )
+    status_p.add_argument(
+        "--by-usage",
+        action="store_true",
+        help="Order items by total tokens used across all runs, costliest first.",
+    )
 
     return parser
 
@@ -1555,7 +1560,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
     todo_path = Path(config.todo_path)
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
 
-    report = build_status(todo_path, runs_dir, config, now)
+    report = build_status(
+        todo_path, runs_dir, config, now, by_usage=bool(getattr(args, "by_usage", False))
+    )
     use_json: bool = getattr(args, "json", False)
     if use_json:
         print(format_status_json(report))
