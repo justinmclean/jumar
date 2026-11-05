@@ -23,6 +23,9 @@ verification  subtask_id, payload: {verdict, summary}
 item_completed item_id
 item_failed   item_id, payload: {failure_code?, failed_subtask_index?}
 run_finished  (presence only)
+
+Token usage is rolled up from the same entries by usage.py (plan_created,
+plan_rejected, attempt_finished and judge verification events).
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import HUMAN_PAUSE_REASON
+from .usage import ItemUsage, RunUsage, Usage, format_usage, usage_from_entries
 
 # ---------------------------------------------------------------------------
 # Data shapes
@@ -67,6 +71,7 @@ class ReportItem:
     failed_subtask_index: int | None = None
     eligible_at: str | None = None  # non-None only for deferred
     blocked_reason: str | None = None  # non-None only for blocked
+    usage: ItemUsage | None = None  # None when no model call was made for the item
 
 
 @dataclass
@@ -82,6 +87,7 @@ class RunReport:
     interrupted: bool  # True if no run_finished event was found
     items: list[ReportItem] = field(default_factory=list)
     next_eligible_at: str | None = None  # earliest future eligibility across deferred items
+    usage: RunUsage = field(default_factory=RunUsage)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +249,9 @@ def build_report(run_dir: Path) -> RunReport:
                 st.verdict = v
                 st.evidence_summary = s
 
+    # Token usage per item and for the run (usage.py).
+    run_usage = usage_from_entries(entries)
+
     # Build ReportItem list.
     items: list[ReportItem] = []
 
@@ -261,6 +270,7 @@ def build_report(run_dir: Path) -> RunReport:
                 subtasks=subtasks_sorted,
                 failure_code=item_failure_code.get(iid),
                 failed_subtask_index=item_failed_subtask_idx.get(iid),
+                usage=run_usage.items.get(iid),
             )
         )
 
@@ -316,6 +326,7 @@ def build_report(run_dir: Path) -> RunReport:
         interrupted=interrupted,
         items=items,
         next_eligible_at=next_eligible_at,
+        usage=run_usage,
     )
 
 
@@ -360,6 +371,9 @@ def format_summary(report: RunReport) -> str:
         parts.append(f"{len(in_progress)} in progress (interrupted)")
 
     lines.append("Run: " + (", ".join(parts) if parts else "nothing to report"))
+
+    if report.usage.total.calls:
+        lines.append(f"Tokens: {format_usage(report.usage.total)}")
 
     if report.next_eligible_at:
         lines.append(f"Next eligible: {report.next_eligible_at}")
@@ -522,7 +536,47 @@ def format_markdown(report: RunReport) -> str:
             lines.append(f"- **{item.text}** (in progress at interruption)")
         lines.append("")
 
+    lines.extend(_usage_markdown(report))
+
     return "\n".join(lines)
+
+
+def _usage_cell(usage: Usage | None) -> str:
+    """A table cell for a Usage: the token total, or why there is none."""
+    if usage is None or usage.calls == 0:
+        return "–"
+    if usage.reported_calls == 0:
+        return "not reported"
+    return f"{usage.total_tokens:,}"
+
+
+def _usage_markdown(report: RunReport) -> list[str]:
+    """The ``## Usage`` section: one row per item, stage columns, tier lines."""
+    if not report.usage.total.calls:
+        return []
+    lines = ["## Usage", "", f"Total: {format_usage(report.usage.total)}.", ""]
+    lines.append("| Item | Decompose | Execute | Judge | Total |")
+    lines.append("|------|-----------|---------|-------|-------|")
+    text_for = {item.item_id: item.text for item in report.items}
+    for item_id, item_usage in report.usage.items.items():
+        stage = item_usage.by_stage
+        lines.append(
+            f"| {text_for.get(item_id, item_id)} "
+            f"| {_usage_cell(stage.get('decompose'))} "
+            f"| {_usage_cell(stage.get('execute'))} "
+            f"| {_usage_cell(stage.get('judge'))} "
+            f"| {_usage_cell(item_usage.total)} |"
+        )
+    lines.append("")
+    tiered = [(iid, u) for iid, u in report.usage.items.items() if u.by_tier]
+    if tiered:
+        lines.append("By tier:")
+        lines.append("")
+        for item_id, item_usage in tiered:
+            parts = [f"{tier}: {format_usage(usage)}" for tier, usage in item_usage.by_tier.items()]
+            lines.append(f"- **{text_for.get(item_id, item_id)}**: " + "; ".join(parts))
+        lines.append("")
+    return lines
 
 
 # ---------------------------------------------------------------------------

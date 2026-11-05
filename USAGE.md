@@ -303,6 +303,7 @@ Status for: todo.md
 
   [ELIGIBLE        ] Add a --json flag to the export script
     last: run=20260808-0851-a3f9  at=2026-08-08T08:51:11.729401+00:00  outcome=failed
+    usage: 48,210 prompt + 6,133 completion tokens over 7 calls across 2 runs
     failing subtask: Document the flag in the README
     check kind: file
   [NEVER-ATTEMPTED ] Update the README install section
@@ -329,7 +330,17 @@ For a failed item, `status` shows which subtask failed and what check kind —
 so you know whether to inspect a file, a command's exit code, or a judge
 artefact before retrying.
 
-`jumar status --json` emits the same data as a JSON document.
+The `usage:` line is the item's token spend summed over every run that called a
+model for it, not just the latest, so a flaky item that has been repaired many
+times shows what it has really cost. Counts are tokens, not money: jumar does
+not know what a token costs on the endpoint behind a harness. Only the
+in-process `openai` harness reports counts; a subprocess CLI such as `claude`
+reports none, and those calls show as "tokens not reported by the harness"
+rather than as zero. `jumar status --by-usage` orders the rows costliest first,
+with items that never used a model at the end in file order.
+
+`jumar status --json` emits the same data as a JSON document; each item carries
+a `usage` object with `total`, `by_stage` and `by_tier` token sums, or `null`.
 
 ### Putting it together — the next-action loop
 
@@ -367,6 +378,13 @@ $ echo $?
 
 That is the shape of every failure report: **which subtask, which check, what
 the evidence was**. Not "the agent reported a problem".
+
+When the run called a model, the summary also carries a `Tokens:` line with the
+run's prompt and completion totals, and `report.md` ends with a `## Usage`
+table: one row per item with decompose, execute and judge columns, and under it
+a per-tier breakdown for any item the execute stage escalated through
+`[harness] tiers`. The same numbers are in `--json` under `usage`, per run and
+per item.
 
 The written `runs/<run-id>/report.md`:
 
@@ -798,7 +816,7 @@ jumar plan   [--dry-run] [--todo PATH] [--json]
 jumar run    [--dry-run | --approve] [--non-interactive] [--until-empty [--halt-on-fail]] [--verbose] [--json] [--todo PATH]
 jumar resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
 jumar report RUN_ID [--runs-dir DIR] [--json]             # ditto
-jumar status [--todo PATH] [--runs-dir DIR] [--json]
+jumar status [--todo PATH] [--runs-dir DIR] [--json] [--by-usage]
 jumar schedule (add | list | remove | show) …
 jumar doctor
 ```
