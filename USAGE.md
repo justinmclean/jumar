@@ -303,6 +303,7 @@ Status for: todo.md
 
   [ELIGIBLE        ] Add a --json flag to the export script
     last: run=20260808-0851-a3f9  at=2026-08-08T08:51:11.729401+00:00  outcome=failed
+    usage: 48,210 prompt + 6,133 completion tokens over 7 calls across 2 runs
     failing subtask: Document the flag in the README
     check kind: file
   [NEVER-ATTEMPTED ] Update the README install section
@@ -329,7 +330,17 @@ For a failed item, `status` shows which subtask failed and what check kind —
 so you know whether to inspect a file, a command's exit code, or a judge
 artefact before retrying.
 
-`jumar status --json` emits the same data as a JSON document.
+The `usage:` line is the item's token spend summed over every run that called a
+model for it, not just the latest, so a flaky item that has been repaired many
+times shows what it has really cost. Counts are tokens, not money: jumar does
+not know what a token costs on the endpoint behind a harness. Only the
+in-process `openai` harness reports counts; a subprocess CLI such as `claude`
+reports none, and those calls show as "tokens not reported by the harness"
+rather than as zero. `jumar status --by-usage` orders the rows costliest first,
+with items that never used a model at the end in file order.
+
+`jumar status --json` emits the same data as a JSON document; each item carries
+a `usage` object with `total`, `by_stage` and `by_tier` token sums, or `null`.
 
 ### Putting it together — the next-action loop
 
@@ -367,6 +378,13 @@ $ echo $?
 
 That is the shape of every failure report: **which subtask, which check, what
 the evidence was**. Not "the agent reported a problem".
+
+When the run called a model, the summary also carries a `Tokens:` line with the
+run's prompt and completion totals, and `report.md` ends with a `## Usage`
+table: one row per item with decompose, execute and judge columns, and under it
+a per-tier breakdown for any item the execute stage escalated through
+`[harness] tiers`. The same numbers are in `--json` under `usage`, per run and
+per item.
 
 The written `runs/<run-id>/report.md`:
 
@@ -503,6 +521,36 @@ ever deletes inside its own block — your existing crontab lines are never
 reformatted. Overlapping firings are safe: the single-flight lock (`lock.py`)
 makes the second firing exit 0 with `already_running`, and a stale lock from a
 crashed run is reclaimed with a journalled note.
+
+### Keeping `runs/` small — `jumar prune`
+
+Every `plan --dry-run`, `run` and `resume` leaves a `runs/<run-id>/` folder, so
+a scheduled list grows by one folder per firing. `jumar prune` removes old ones,
+and only when you say which:
+
+```bash
+jumar prune --list --older-than 30d     # show what would go, remove nothing
+jumar prune --older-than 30d            # runs started more than 30 days ago (12h, 2w also work)
+jumar prune --keep 50                   # keep the newest 50 real runs, remove every dry run
+jumar prune --dry-runs                  # remove only plan/run --dry-run folders, whatever their age
+```
+
+With no selector `prune` exits 2 and removes nothing: the default keeps every
+run. Dry-run folders record a choice or a plan, never work, so `--keep` never
+counts them and removes them first; `--keep-dry-runs` makes them count like any
+other run.
+
+Three kinds of folder are kept whatever the selector says, and the output names
+each one with its reason:
+
+- a run with no `run_finished` event, which may be in progress or resumable
+  (`--include-unfinished` lifts this);
+- the latest run of every item still open in the todo file, which is what
+  `jumar status` reports as the item's last attempt and what a retry resumes from;
+- a folder with no readable `run_started` event, whose age is unknown.
+
+Removed runs are dropped from `runs/index.tsv` as well. `--json` emits the
+removed and kept lists as a document.
 
 ---
 
@@ -798,7 +846,8 @@ jumar plan   [--dry-run] [--todo PATH] [--json]
 jumar run    [--dry-run | --approve] [--non-interactive] [--until-empty [--halt-on-fail]] [--verbose] [--json] [--todo PATH]
 jumar resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
 jumar report RUN_ID [--runs-dir DIR] [--json]             # ditto
-jumar status [--todo PATH] [--runs-dir DIR] [--json]
+jumar prune  (--keep N | --older-than AGE | --dry-runs) [--keep-dry-runs] [--include-unfinished] [--list] [--json] [--todo PATH] [--runs-dir DIR]
+jumar status [--todo PATH] [--runs-dir DIR] [--json] [--by-usage]
 jumar schedule (add | list | remove | show) …
 jumar doctor
 ```

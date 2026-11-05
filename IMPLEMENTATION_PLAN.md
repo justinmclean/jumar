@@ -14,6 +14,12 @@ never weaken a check to get green.
 planned phase is merged, including W16-W24 (PRs #56-#72) and their spec syncs
 (PRs #65-#73). The remaining gap is test coverage for the loop's own
 acceptance criteria (see Work items).
+**Current state (2026-11-01):** `main` HEAD is `17fa58f` (PR #72). Every
+planned phase is merged, and so is every work item through W24: W13–W15
+(PRs #51–#53) and W16–W24 (PRs #56, #59, #61, #63, #64, #66, #68, #70, #72),
+each followed by its spec sync (PRs #55, #58, #60, #62, #65, #67, #69, #71),
+except W24's, which is in review (see In flight). W25–W27 below are follow-ups
+deferred while building W17 and W24, and one decision left open by W16.
 
 ### Completed items (merged to main unless noted)
 
@@ -98,6 +104,16 @@ acceptance criteria (see Work items).
 - **decompose-rules-as-code**: W22. The rules the model kept breaking are decided in code (`_plan_rule_violation`, pattern invariants), with the prose cut. Merged PR #68.
 - **dont-execute-agent-written-checks**: W23. `verify/pinned.py` refuses to run a check's in-tree code unless it is pinned at plan time and unchanged. Merged PR #70.
 - **escalate-model-on-failure**: W24. `tiers.py`: each repair runs one model tier up; outages and pinned profiles never escalate; tier journalled per attempt. Merged PR #72.
+- **agents-network-default**: issue #4. AGENTS.md now states the decided default (`network` is a default capability; the boundary is send, not fetch). Merged PR #57.
+- **guard-claude-harness-shell**: W16. `shell_guard.py`, a fail-closed `PreToolUse` hook on the Claude harness's Bash tool, parses each command line like bash and refuses `git push` / `gh` / `jumar-gh` without network however spelled; built natively because Magpie's agent-guard neither denies push/gh nor fails closed. Merged PR #56.
+- **termination-class-on-verdicts**: W17. Each attempt records how its run ended; only a `clean` ending is checked, anything else is a failed verdict, and an item whose last attempt was cut off fails with `unclean_termination`. Merged PR #59.
+- **absent-precondition-is-unchecked**: W18. doctor's `unchecked` (`skip`) status for probes whose own precondition is absent; a judge artefact that is missing or empty fails, and an unreadable one is inconclusive, before any model call. Merged PR #61.
+- **pin-judge-output-schema**: W19. `JUDGE_VERDICT_SCHEMA` sent to Claude (`--json-schema`) and the openai harness (`response_format`), revalidated locally; no scraping when enforced; never retried without the schema. Merged PR #63.
+- **grader-agrees-with-reason**: W20. A judge pass must quote text present in the artefact it was shown and must not repeat an earlier attempt's reason, or it is downgraded to inconclusive. Merged PR #64.
+- **snapshot-check-inputs**: W21. Check inputs hashed at plan time and at every verification; each verdict reports inputs created, removed, changed or replaced wholesale. Report only. Merged PR #66.
+- **decompose-rules-as-code**: W22. `Check` refuses invalid or empty-matching patterns; decompose sends back `gh` checks, multi-pattern greps, brittle literal patterns and self-report patterns; `_RULES` split into ENFORCED and JUDGEMENT. Merged PR #68.
+- **dont-execute-agent-written-checks**: W23. Every file a command check executes from the working tree is pinned by SHA-256 at plan time; the verifier refuses to run one that was not pinned or changed. Merged PR #70.
+- **escalate-model-on-failure**: W24. `[harness] tiers`; a subtask starts on a mechanical tier and each repair runs one tier up; pinned by `--harness-profile` / `@harness=`; tier journalled per attempt. Merged PR #72.
 
 ---
 
@@ -135,6 +151,51 @@ W25. **cover-the-loop-acceptance-criteria**: `specs/05-operator-tooling.md`
    `for ac in 1 2 3 4 5 6 7 8; do grep -rqF "AC-L$ac" tools/spec-loop/tests ||
    echo "uncited AC-L$ac"; done` prints nothing.
    *Branch slug:* `cover-loop-acceptance-criteria`
+- **Spec sync for W24**: open PR #73 (`sync-specs-20261101-020203`).
+  Documents execute-stage model tiers in `specs/02-functional-spec.md`
+  (stage 7, AC7.1) and `specs/03-data-model.md`.
+
+## Work items (priority order)
+
+W25. **claude-termination-from-json-output**: W17 detects `denied_tool` and
+   `truncated` only for the in-process `openai` harness, because the Claude CLI
+   in print/text mode exposes nothing but its exit status. Run the Claude
+   execute harness with `--output-format json` and read `subtype`
+   (`error_max_turns`), `is_error` and `permission_denials` from the result, so
+   a Claude attempt that ended on a refused tool call or a turn cap is
+   classified like the in-process one. The transcript and `agent_claim` must
+   still come from the result text, so `--verbose` output and claim parsing
+   stay unchanged.
+   *Validation:* `make check` + harness tests that a JSON result with
+   `permission_denials` and a final answer classifies as `denied_tool`, an
+   `error_max_turns` result as `step_cap`, and a plain success as `clean`, with
+   `agent_claim` unchanged.
+   *Branch slug:* `claude-termination-from-json-output`
+
+W26. **decompose-tier-hint**: W24 set the starting tier from mechanical
+   signals only; its optional decompose hint was deferred because it adds a
+   plan field. Let the decompose response carry an optional per-subtask
+   `effort` (`low` | `high`) that raises the starting tier by one for `high`,
+   never lowers it, and is ignored when tiers are off or the line-up is
+   pinned. Carry it in the `plan_created` payload and through
+   `_rebuild_plan` so a resume starts at the same tier.
+   *Validation:* `make check` + tests that `high` starts one tier up, `low`
+   and a missing field change nothing, an unknown value is a plan rejection,
+   and a resumed item keeps its starting tier.
+   *Branch slug:* `decompose-tier-hint`
+
+W27. **shell-guard-deny-list** — *decision needed before building.* W16's
+   guard refuses only what the `--disallowedTools` patterns covered (`git
+   push`, `gh`, `jumar-gh` without network). `specs/01-product-spec.md` says
+   mail and remote-copy tools are denied too, but today that holds only for
+   argv jumar dispatches (checks), not for the agent's own shell. Extending the
+   guard to the configured `[commands] deny` list would close that, and would
+   also change what an agent's shell may run. Decide, then: pass the deny list
+   to the hook and refuse those programs however spelled.
+   *Validation:* `make check` + guard tests that `ssh`, `scp` and `sendmail`
+   are refused through wrappers, `-c` strings and pipes, and that a
+   `deny_also` entry is honoured.
+   *Branch slug:* `shell-guard-deny-list`
 
 ---
 

@@ -108,6 +108,7 @@ Everything below is built, tested and merged.
 | `jumar status` | Item-centric view across the todo file and every run journal. |
 | `jumar schedule add\|list\|remove\|show` | Install and inspect cron/launchd entries. |
 | `jumar doctor` | Check config, harness binary, allow list, schedules, todo file. |
+| `jumar prune` | Remove old `runs/` folders by age or count. Keeps everything unless told otherwise. |
 
 `--json` is available on `plan`, `run`, `report` and `status`; `--verbose` streams the
 agent's output during `run`. `run --until-empty` keeps one lock and starts the
