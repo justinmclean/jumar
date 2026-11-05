@@ -97,6 +97,13 @@ summed over every run, and `--by-usage` ranks items costliest first. Counts are
 tokens, not money; a harness that reports no counts (the `claude` CLI) shows as
 "not reported", never as zero.
 
+Added since then: `@budget=` on an item, a spend ceiling summed over every
+run: `200k` or `1.5m` tokens, or `12calls`. When an item ends over its
+ceiling it is journalled as `budget_exceeded` and parked with
+`@paused=budget`, the way a failure threshold parks with
+`@paused=auto-failures`. A ticked box is not parked; an item already parked
+for failures keeps that reason.
+
 Renamed from GetStuffDone (`gsd`) to **jumar** on 2026-08-11, before anything
 was published under the old name.
 

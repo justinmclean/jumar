@@ -379,6 +379,20 @@ def _finalize(
                 )
             )
 
+    # @budget= must parse; a ceiling nobody can read is ignored, never guessed.
+    if "budget" in meta:
+        from .budget import parse_budget
+
+        try:
+            parse_budget(meta["budget"])
+        except ValueError as exc:
+            warnings.append(
+                ParseWarning(
+                    partial.line_no,
+                    f"Line {partial.line_no}: @budget={meta['budget']!r} ignored: {exc}",
+                )
+            )
+
     # @depends= (comma-separated)
     depends: tuple[str, ...]
     if "depends" in meta:

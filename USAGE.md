@@ -292,6 +292,29 @@ item fails at that subtask. Under `--until-empty`, the next eligible item is
 selected; with `--halt-on-fail` (or `halt_on_fail = true` in config) the run
 stops there instead. Without `--until-empty` a run handles one item anyway.
 
+### Capping what an item may cost — `@budget=`
+
+`@failed=` and `@paused=auto-failures` stop an item that keeps failing. Nothing
+stopped one that keeps *running*: passing on a cheap tier, failing on the
+next, repaired, and burning the same tokens every scheduled firing.
+`@budget=` is the other bound:
+
+```markdown
+- [ ] Draft the quarterly summary @budget=200k
+- [ ] Rotate the backup logs @every=weekday @budget=40calls
+```
+
+`200k`, `1.5m` or `500000` is a ceiling on total tokens, prompt plus
+completion, summed over every run the item has had (the same roll-up `jumar
+status` shows). `12calls` is a ceiling on model calls, whatever they cost, and
+is the only form that binds when the harness reports no token counts. The
+check runs when an item ends, done or failed, so the run that crosses the line
+finishes; the item then parks with `@paused=budget`, journalled first as
+`budget_exceeded` with what was spent, and is never selected again until you
+delete the token. A ticked box is finished work and is not parked; a recurring
+item stays unticked and is. An item already parked for failures keeps that
+reason. A value that cannot be read is an ingest warning and no ceiling.
+
 ### Status — item-centric view across all runs
 
 While `jumar report` answers "what happened to this run?", `jumar status` answers

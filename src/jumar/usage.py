@@ -23,11 +23,14 @@ RunUsage           – a whole run's Usage with its per-item breakdown.
 usage_from_entries() – build a RunUsage from parsed journal entries.
 merge_usage()      – add one Usage into another.
 format_usage()     – one short human-readable phrase for a Usage.
+usage_across_runs() – one item's usage summed over every journal under runs/.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 STAGE_DECOMPOSE = "decompose"
@@ -175,3 +178,46 @@ def format_usage(usage: Usage) -> str:
     if usage.unreported_calls:
         text += f" ({usage.unreported_calls} more unreported)"
     return text
+
+
+def _read_entries(journal_path: Path) -> list[dict[str, Any]]:
+    """A journal's entries, stopping at the first corrupt line."""
+    entries: list[dict[str, Any]] = []
+    try:
+        with journal_path.open(encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    break
+                if isinstance(entry, dict):
+                    entries.append(entry)
+    except OSError:
+        pass
+    return entries
+
+
+def usage_across_runs(runs_dir: Path, item_id: str) -> tuple[ItemUsage, int]:
+    """One item's usage summed over every journal under *runs_dir*.
+
+    Returns the usage and how many runs contributed a model call. This is
+    what ``@budget=`` is measured against, so it includes the run in
+    progress: its journal is on disk like any other.
+    """
+    total = ItemUsage(item_id=item_id)
+    runs = 0
+    if not runs_dir.is_dir():
+        return total, runs
+    for run_dir in sorted(runs_dir.iterdir()):
+        journal_path = run_dir / "journal.jsonl"
+        if not run_dir.is_dir() or not journal_path.exists():
+            continue
+        item_usage = usage_from_entries(_read_entries(journal_path)).items.get(item_id)
+        if item_usage is None or item_usage.total.calls == 0:
+            continue
+        merge_item_usage(total, item_usage)
+        runs += 1
+    return total, runs
