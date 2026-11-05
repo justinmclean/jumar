@@ -89,6 +89,12 @@ exited non-zero on machines that simply have no cron (containers, cloud VMs).
 It is now a WARN that names launchd agents and `systemd --user` timers as
 alternatives. A crontab that exists but cannot be read is still a FAIL.
 
+Changed since then: the Claude CLI is run with `--output-format json` and its
+envelope unwrapped, so Claude runs now journal `prompt_tokens` and
+`completion_tokens` like the `openai` harness does, a `--max-turns` stop is
+read from the envelope instead of a phrase scan, and the raw envelope is kept
+in the attempt transcript. Every consumer still sees the reply text; output
+that is not an envelope passes through unchanged.
 Added since then: `jumar prune` removes old `runs/` folders by age
 (`--older-than 30d`) or count (`--keep 50`), or just the dry-run folders
 (`--dry-runs`). With no selector it keeps everything. Unfinished runs, the

@@ -167,10 +167,79 @@ class AgentResult:
     # harness counts its own steps and reads finish_reason). None means "not
     # reported": classify_termination() then derives it from the exit status.
     termination: Termination | None = None
+    # The claude CLI's `--output-format json` envelope, verbatim, when the
+    # reply came wrapped in one. `stdout` is then the unwrapped reply text.
+    envelope: str | None = None
 
 
 # Claude's print mode reports a --max-turns stop in its output.
 _STEP_CAP_PHRASES: tuple[str, ...] = ("reached max turns", "max turns reached")
+
+# `claude -p --output-format json` subtypes that mean the run was cut off.
+_CLAUDE_STEP_CAP_SUBTYPES: frozenset[str] = frozenset({"error_max_turns"})
+
+
+@dataclass(frozen=True)
+class ClaudeEnvelope:
+    """What jumar reads out of a `claude -p --output-format json` reply."""
+
+    result: str  # the reply text; with --json-schema, the structured object as JSON text
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    is_error: bool
+    subtype: str | None
+    raw: str
+
+
+def parse_claude_envelope(stdout: str) -> ClaudeEnvelope | None:
+    """Unwrap the CLI's result envelope, or None when stdout is not one.
+
+    None is the fail-safe: the caller keeps stdout as the reply text, exactly
+    as the text output format worked, and reports no token counts. An older
+    CLI, a crash before the envelope was printed, or a stray line all land
+    there rather than in a traceback.
+
+    ``prompt_tokens`` sums fresh, cache-read and cache-creation input tokens:
+    the uncached ceiling, the same reading the ``openai`` harness gives.
+    """
+    text = stdout.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or data.get("type") != "result":
+        return None
+
+    result = data.get("result")
+    if not isinstance(result, str):
+        structured = data.get("structured_output")
+        result = json.dumps(structured) if isinstance(structured, dict) else ""
+
+    usage = data.get("usage")
+    prompt: int | None = None
+    completion: int | None = None
+    if isinstance(usage, dict):
+        inputs = [
+            usage.get(key)
+            for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+        ]
+        if any(isinstance(v, int) for v in inputs):
+            prompt = sum(v for v in inputs if isinstance(v, int))
+        output = usage.get("output_tokens")
+        if isinstance(output, int):
+            completion = output
+
+    subtype = data.get("subtype")
+    return ClaudeEnvelope(
+        result=result,
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        is_error=bool(data.get("is_error", False)),
+        subtype=str(subtype) if isinstance(subtype, str) else None,
+        raw=stdout,
+    )
 
 
 def classify_termination(result: AgentResult, harness_error: str | None) -> Termination:
@@ -374,6 +443,10 @@ def build_argv(
         for tool in disallowed:
             argv += ["--disallowedTools", tool]
         argv += ["--settings", claude_guard_settings(network=has_network)]
+        # One JSON envelope instead of the bare reply: it carries the token
+        # counts, the session id and how the run ended. run_agent() unwraps
+        # it, so every consumer still sees the reply text as stdout.
+        argv += ["--output-format", "json"]
         if response_schema is not None:
             argv += ["--json-schema", json.dumps(response_schema, separators=(",", ":"))]
         argv += model_args
@@ -516,14 +589,27 @@ def run_agent(
         )
         stdout = proc.stdout.decode(errors="replace")
         stderr = proc.stderr.decode(errors="replace")
+        envelope = parse_claude_envelope(stdout) if harness_name == "claude" else None
+        if envelope is not None:
+            # Consumers read the reply, not the wrapper: the judge parses it
+            # as its verdict object, decompose as its plan, and the outage
+            # scan looks for the CLI's error text in it.
+            stdout = envelope.result
         lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
         agent_claim: str | None = lines[-1] if lines else None
+        termination: Termination | None = None
+        if envelope is not None and envelope.subtype in _CLAUDE_STEP_CAP_SUBTYPES:
+            termination = Termination.step_cap
         return AgentResult(
             exit_status=proc.returncode,
             stdout=stdout,
             stderr=stderr,
             timed_out=False,
             agent_claim=agent_claim,
+            completion_tokens=envelope.completion_tokens if envelope else None,
+            prompt_tokens=envelope.prompt_tokens if envelope else None,
+            termination=termination,
+            envelope=envelope.raw if envelope else None,
         )
     except subprocess.TimeoutExpired as exc:
         raw_out = exc.stdout if isinstance(exc.stdout, bytes) else b""
