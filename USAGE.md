@@ -522,6 +522,36 @@ reformatted. Overlapping firings are safe: the single-flight lock (`lock.py`)
 makes the second firing exit 0 with `already_running`, and a stale lock from a
 crashed run is reclaimed with a journalled note.
 
+### Keeping `runs/` small — `jumar prune`
+
+Every `plan --dry-run`, `run` and `resume` leaves a `runs/<run-id>/` folder, so
+a scheduled list grows by one folder per firing. `jumar prune` removes old ones,
+and only when you say which:
+
+```bash
+jumar prune --list --older-than 30d     # show what would go, remove nothing
+jumar prune --older-than 30d            # runs started more than 30 days ago (12h, 2w also work)
+jumar prune --keep 50                   # keep the newest 50 real runs, remove every dry run
+jumar prune --dry-runs                  # remove only plan/run --dry-run folders, whatever their age
+```
+
+With no selector `prune` exits 2 and removes nothing: the default keeps every
+run. Dry-run folders record a choice or a plan, never work, so `--keep` never
+counts them and removes them first; `--keep-dry-runs` makes them count like any
+other run.
+
+Three kinds of folder are kept whatever the selector says, and the output names
+each one with its reason:
+
+- a run with no `run_finished` event, which may be in progress or resumable
+  (`--include-unfinished` lifts this);
+- the latest run of every item still open in the todo file, which is what
+  `jumar status` reports as the item's last attempt and what a retry resumes from;
+- a folder with no readable `run_started` event, whose age is unknown.
+
+Removed runs are dropped from `runs/index.tsv` as well. `--json` emits the
+removed and kept lists as a document.
+
 ---
 
 ## 8. Configuration
@@ -816,6 +846,7 @@ jumar plan   [--dry-run] [--todo PATH] [--json]
 jumar run    [--dry-run | --approve] [--non-interactive] [--until-empty [--halt-on-fail]] [--verbose] [--json] [--todo PATH]
 jumar resume RUN_ID [--retry-failed] [--runs-dir DIR]     # RUN_ID: full id, prefix, or 'latest'
 jumar report RUN_ID [--runs-dir DIR] [--json]             # ditto
+jumar prune  (--keep N | --older-than AGE | --dry-runs) [--keep-dry-runs] [--include-unfinished] [--list] [--json] [--todo PATH] [--runs-dir DIR]
 jumar status [--todo PATH] [--runs-dir DIR] [--json] [--by-usage]
 jumar schedule (add | list | remove | show) …
 jumar doctor

@@ -89,6 +89,12 @@ exited non-zero on machines that simply have no cron (containers, cloud VMs).
 It is now a WARN that names launchd agents and `systemd --user` timers as
 alternatives. A crontab that exists but cannot be read is still a FAIL.
 
+Added since then: `jumar prune` removes old `runs/` folders by age
+(`--older-than 30d`) or count (`--keep 50`), or just the dry-run folders
+(`--dry-runs`). With no selector it keeps everything. Unfinished runs, the
+latest run of every open item, and folders whose age cannot be read are
+always kept and named with the reason; `--list` shows the outcome without
+removing anything.
 Added since then: token usage is rolled up from the journal. `jumar report`
 prints a `Tokens:` line and `report.md` ends with a `## Usage` table, one row
 per item with decompose, execute and judge columns and a per-tier breakdown
