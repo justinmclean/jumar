@@ -541,10 +541,23 @@ def run_item(
     Returns the exit-status contribution: 0 when the item completed, was
     dry-run, or was skipped by the human; 1 when it failed or was inconclusive.
     """
-    from .backoff import advance_failure_count, clear_failure_count
+    from .backoff import advance_failure_count as _advance_failure_count
+    from .backoff import clear_failure_count as _clear_failure_count
+    from .budget import enforce_budget
     from .complete import complete
     from .config import resolve_harness
     from .decompose import DecomposeError, decompose, item_max_subtasks
+
+    # Every way an item ends, failed or done, is followed by the @budget=
+    # check, so the two bookkeeping calls below carry it (budget.py).
+    def advance_failure_count(todo_path: Path, item: Any, config: Any, journal: Any) -> None:
+        _advance_failure_count(todo_path, item, config, journal)
+        enforce_budget(todo_path, item, journal, run_dir.parent)
+
+    def clear_failure_count(todo_path: Path, item: Any, journal: Any) -> None:
+        _clear_failure_count(todo_path, item, journal)
+        enforce_budget(todo_path, item, journal, run_dir.parent)
+
     from .execute import execute
     from .gate import GateDecision, GateError, GateMode, gate
     from .journal import CHECK_INPUTS_SNAPSHOT, ITEM_COMPLETED, ITEM_FAILED, ITEM_SELECTED

@@ -52,6 +52,7 @@ FAILURE_COUNT_ADVANCED = "failure_count_advanced"
 FAILURE_COUNT_CLEARED = "failure_count_cleared"
 ITEM_PARKED = "item_parked"
 RETRY_STARTED = "retry_started"
+BUDGET_EXCEEDED = "budget_exceeded"
 
 
 # ---------------------------------------------------------------------------
