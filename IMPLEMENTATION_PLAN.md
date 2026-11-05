@@ -10,6 +10,10 @@ never weaken a check to get green.
 
 ## What's been built
 
+**Current state (2026-11-05):** `main` HEAD is `7e12f04` (PR #73). Every
+planned phase is merged, including W16-W24 (PRs #56-#72) and their spec syncs
+(PRs #65-#73). The remaining gap is test coverage for the loop's own
+acceptance criteria (see Work items).
 **Current state (2026-11-01):** `main` HEAD is `17fa58f` (PR #72). Every
 planned phase is merged, and so is every work item through W24: W13–W15
 (PRs #51–#53) and W16–W24 (PRs #56, #59, #61, #63, #64, #66, #68, #70, #72),
@@ -91,6 +95,15 @@ deferred while building W17 and W24, and one decision left open by W16.
 - **cite-ac-ids-in-tests**: W13. Every AC id in `specs/02-functional-spec.md` is cited in `tests/`; two asserting tests added (AC6.8 empty file with a pattern, AC11.2 full state vocabulary). Merged PR #51.
 - **spec-loop-single-flight-lock**: W14. PID-stamped `.spec-loop.lock` (`SPEC_LOOP_LOCK`) in `tools/spec-loop/`: live holder makes a second run exit 0 with `already_running`, stale or unreadable lock reclaimed, released without an EXIT trap. Merged PR #52.
 - **spec-loop-verify-mode**: W15. `SPEC_LOOP_VERIFY=1` re-runs `SPEC_LOOP_VERIFY_CMD` (default `make check`) after a committed iteration; red stops the loop with exit 1 and keeps the branch. Merged PR #53.
+- **guard-claude-harness-shell**: W16. `shell_guard.py` treats the claude harness's shell as untrusted text; denied commands are refused under control operators, heredocs, wrappers and built-up command names, failing closed on an unresolvable name. Merged.
+- **termination-class-on-verdicts**: W17. The verdict carries how the run ended (clean, step cap, timed out, truncated, outage); non-clean termination is its own failure code and a leftover artefact cannot vouch for it. Merged.
+- **absent-precondition-is-unchecked**: W18. A missing precondition is `unchecked, because X` in doctor probes and the judge (no model call on a missing artefact). Merged.
+- **pin-judge-output-schema**: W19. Strict JSON schema for the judge verdict on the claude and openai harnesses, revalidated locally; schema failures are inconclusive. Merged PR #63.
+- **grader-agrees-with-reason**: W20. A judge pass that quotes nothing from the artefact, or repeats an earlier attempt's reason, is downgraded to inconclusive. Merged PR #64.
+- **snapshot-check-inputs**: W21. Check inputs are hashed at plan time and the verdict reports an input a repair replaced wholesale. Merged PR #66.
+- **decompose-rules-as-code**: W22. The rules the model kept breaking are decided in code (`_plan_rule_violation`, pattern invariants), with the prose cut. Merged PR #68.
+- **dont-execute-agent-written-checks**: W23. `verify/pinned.py` refuses to run a check's in-tree code unless it is pinned at plan time and unchanged. Merged PR #70.
+- **escalate-model-on-failure**: W24. `tiers.py`: each repair runs one model tier up; outages and pinned profiles never escalate; tier journalled per attempt. Merged PR #72.
 - **agents-network-default**: issue #4. AGENTS.md now states the decided default (`network` is a default capability; the boundary is send, not fetch). Merged PR #57.
 - **guard-claude-harness-shell**: W16. `shell_guard.py`, a fail-closed `PreToolUse` hook on the Claude harness's Bash tool, parses each command line like bash and refuses `git push` / `gh` / `jumar-gh` without network however spelled; built natively because Magpie's agent-guard neither denies push/gh nor fails closed. Merged PR #56.
 - **termination-class-on-verdicts**: W17. Each attempt records how its run ended; only a `clean` ending is checked, anything else is a failed verdict, and an item whose last attempt was cut off fails with `unclean_termination`. Merged PR #59.
@@ -106,6 +119,38 @@ deferred while building W17 and W24, and one decision left open by W16.
 
 ## In flight (do not build)
 
+- **cost-rollup** (local branch, 1 commit): per-item token usage rolled up in
+  `jumar report` and `jumar status` (`usage.py`).
+- **Uncommitted in the working tree** (human's, awaiting review): `jumar prune`
+  (`prune.py`), `@budget=` item ceilings (`budget.py`), and the Claude
+  `--output-format json` envelope unwrapping (`harness.py`). None of these is
+  in `specs/` yet; the next `update` beat documents them once they land. Do not
+  plan or build against them.
+- **docs/plan-magpie-practices** (local branch): behind `main`; a plan sync,
+  not a work item.
+
+## Work items (priority order)
+
+W25. **cover-the-loop-acceptance-criteria**: `specs/05-operator-tooling.md`
+   states AC-L1 to AC-L8, but no test or fixture cites AC-L1 to AC-L6. Of
+   those, AC-L3 is half tested (the fixture asserts `Bash(gh:*)` is denied but
+   not `Bash(git push:*)`), and AC-L4 (unknown mode exits non-zero with usage),
+   AC-L5 (non-numeric iteration count rejected, never read as unlimited) and
+   AC-L6 (a build iteration that ends on the base branch with a changed HEAD
+   stops the loop with an error) have no test at all, and they are refusal
+   paths. Add them to `tools/spec-loop/tests/test_runner_fixtures.sh` against
+   a throwaway git repo and the fake agent already used there, and cite every
+   AC-L id (AC-L1 to AC-L8) in a comment at its check, as W13 did for the
+   product ACs. Tests only: `loop.sh` is changed only if a criterion turns out
+   to be untrue, in which case record that here and stop.
+   *Spec:* `specs/05-operator-tooling.md` (AC-L1 to AC-L8)
+   *Closes:* AC-L3 (the `git push` half), AC-L4, AC-L5, AC-L6; adds citations
+   for AC-L1, AC-L2, AC-L7, AC-L8.
+   *Validation:* `bash -n tools/spec-loop/loop.sh tools/spec-loop/lib.sh &&
+   bash tools/spec-loop/tests/test_runner_fixtures.sh`, then `make check`; and
+   `for ac in 1 2 3 4 5 6 7 8; do grep -rqF "AC-L$ac" tools/spec-loop/tests ||
+   echo "uncited AC-L$ac"; done` prints nothing.
+   *Branch slug:* `cover-loop-acceptance-criteria`
 - **Spec sync for W24**: open PR #73 (`sync-specs-20261101-020203`).
   Documents execute-stage model tiers in `specs/02-functional-spec.md`
   (stage 7, AC7.1) and `specs/03-data-model.md`.
