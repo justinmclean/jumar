@@ -95,6 +95,13 @@ Added since then: `jumar prune` removes old `runs/` folders by age
 latest run of every open item, and folders whose age cannot be read are
 always kept and named with the reason; `--list` shows the outcome without
 removing anything.
+Added since then: token usage is rolled up from the journal. `jumar report`
+prints a `Tokens:` line and `report.md` ends with a `## Usage` table, one row
+per item with decompose, execute and judge columns and a per-tier breakdown
+for items the execute stage escalated. `jumar status` shows each item's spend
+summed over every run, and `--by-usage` ranks items costliest first. Counts are
+tokens, not money; a harness that reports no counts (the `claude` CLI) shows as
+"not reported", never as zero.
 
 Renamed from GetStuffDone (`gsd`) to **jumar** on 2026-08-11, before anything
 was published under the old name.
