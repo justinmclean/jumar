@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import HUMAN_PAUSE_REASON
+from .usage import ItemUsage, format_usage, merge_item_usage, usage_from_entries
 
 # ---------------------------------------------------------------------------
 # Data shapes
@@ -51,6 +52,10 @@ class ItemStatusLine:
     failed_subtask_desc: str | None = None  # description of failing subtask
     failed_check_kind: str | None = None  # check kind of failing subtask
     next_eligible_at: str | None = None  # for deferred items
+    # Token usage summed over every run that made a model call for this item,
+    # not just the latest one. None when no run ever did.
+    usage: ItemUsage | None = None
+    usage_runs: int = 0  # how many runs contributed to `usage`
 
 
 @dataclass
@@ -97,16 +102,29 @@ class _RunAttempt:
     failed_check_kind: str | None
 
 
-def _scan_runs(runs_dir: Path) -> dict[str, _RunAttempt]:
-    """Return the *latest* attempt info per item_id across all run journals.
+@dataclass
+class _ItemUsageAcrossRuns:
+    """One item's token usage summed over every run that called a model for it."""
+
+    usage: ItemUsage
+    runs: int = 0
+
+
+def _scan_runs(
+    runs_dir: Path,
+) -> tuple[dict[str, _RunAttempt], dict[str, _ItemUsageAcrossRuns]]:
+    """Return the *latest* attempt per item, and each item's usage over all runs.
 
     Journals that do not parse or are missing are silently skipped.
-    Only the run with the latest ``run_started`` timestamp wins per item.
+    Only the run with the latest ``run_started`` timestamp wins per item for
+    the attempt view; usage is summed over every run, since the question it
+    answers is what the item has cost in total.
     """
     latest: dict[str, _RunAttempt] = {}
+    usage: dict[str, _ItemUsageAcrossRuns] = {}
 
     if not runs_dir.exists():
-        return latest
+        return latest, usage
 
     for run_dir in sorted(runs_dir.iterdir()):
         if not run_dir.is_dir():
@@ -130,6 +148,14 @@ def _scan_runs(runs_dir: Path) -> dict[str, _RunAttempt]:
 
         if run_started_at is None:
             continue
+
+        # Usage is summed over every run, not just the latest.
+        for used_id, item_usage in usage_from_entries(entries).items.items():
+            if item_usage.total.calls == 0:
+                continue
+            acc = usage.setdefault(used_id, _ItemUsageAcrossRuns(ItemUsage(item_id=used_id)))
+            merge_item_usage(acc.usage, item_usage)
+            acc.runs += 1
 
         # Per-item state within this run.
         item_outcomes: dict[str, str] = {}
@@ -205,7 +231,7 @@ def _scan_runs(runs_dir: Path) -> dict[str, _RunAttempt]:
                 failed_check_kind=failed_kind,
             )
 
-    return latest
+    return latest, usage
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +244,7 @@ def build_status(
     runs_dir: Path,
     config: Any,
     now: datetime,
+    by_usage: bool = False,
 ) -> StatusReport:
     """Build a :class:`StatusReport` by aggregating the todo file and all journals.
 
@@ -231,6 +258,9 @@ def build_status(
         Loaded :class:`~jumar.config.Config`.
     now:
         Current eligibility instant (timezone-aware UTC).
+    by_usage:
+        Order the rows by total tokens used across all runs, costliest first,
+        instead of by position in the todo file.
 
     Returns
     -------
@@ -267,7 +297,7 @@ def build_status(
             blocked_ids[item.item_id] = reason
 
     # Scan journals once for all items.
-    attempts = _scan_runs(runs_dir)
+    attempts, usage_by_item = _scan_runs(runs_dir)
 
     lines: list[ItemStatusLine] = []
 
@@ -299,6 +329,7 @@ def build_status(
 
         # --- last attempt info ---
         attempt = attempts.get(item.item_id)
+        acc = usage_by_item.get(item.item_id)
         line = ItemStatusLine(
             item_id=item.item_id,
             text=item.text,
@@ -311,8 +342,14 @@ def build_status(
             failed_subtask_desc=(attempt.failed_subtask_desc if attempt else None),
             failed_check_kind=(attempt.failed_check_kind if attempt else None),
             next_eligible_at=deferred_ids.get(item.item_id),
+            usage=acc.usage if acc else None,
+            usage_runs=acc.runs if acc else 0,
         )
         lines.append(line)
+
+    if by_usage:
+        # Costliest first; items with no usage keep their file order at the end.
+        lines.sort(key=lambda ln: -(ln.usage.total.total_tokens if ln.usage else -1))
 
     return StatusReport(todo_path=str(todo_path), items=lines)
 
@@ -357,6 +394,10 @@ def format_status(report: StatusReport) -> str:
             if item.last_outcome:
                 attempt_line += f"  outcome={item.last_outcome}"
             output_lines.append(attempt_line)
+
+        if item.usage is not None:
+            runs = f"{item.usage_runs} run{'' if item.usage_runs == 1 else 's'}"
+            output_lines.append(f"    usage: {format_usage(item.usage.total)} across {runs}")
 
         if item.state == "failed" or (item.last_outcome == "failed"):
             if item.failed_subtask_desc:

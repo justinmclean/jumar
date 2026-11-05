@@ -20,7 +20,7 @@ from typing import Any
 from . import __version__
 from .models import HUMAN_PAUSE_REASON, FailureCode, HarnessInfo, Termination
 
-SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status")
+SUBCOMMANDS = ("plan", "run", "resume", "report", "schedule", "doctor", "status", "prune")
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +323,62 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit the status as a JSON document on stdout (warnings still go to stderr).",
     )
+    status_p.add_argument(
+        "--by-usage",
+        action="store_true",
+        help="Order items by total tokens used across all runs, costliest first.",
+    )
+
+    # --- prune
+    prune_p = subs.add_parser(
+        "prune",
+        help="Remove old run folders under runs/. With no selector, keeps everything.",
+    )
+    prune_p.add_argument(
+        "--todo", default=None, metavar="PATH", help="Override the todo file path."
+    )
+    prune_p.add_argument(
+        "--config", default=None, metavar="PATH", help="Absolute path to jumar.toml."
+    )
+    prune_p.add_argument(
+        "--runs-dir", default=None, metavar="DIR", help="Override the runs directory."
+    )
+    prune_p.add_argument(
+        "--keep",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Keep the newest N real runs; remove the rest and every dry run.",
+    )
+    prune_p.add_argument(
+        "--older-than",
+        default=None,
+        metavar="AGE",
+        help="Remove runs started more than AGE ago: 12h, 30d, 2w.",
+    )
+    prune_p.add_argument(
+        "--dry-runs",
+        action="store_true",
+        help="Remove only plan --dry-run and run --dry-run folders, whatever their age.",
+    )
+    prune_p.add_argument(
+        "--keep-dry-runs",
+        action="store_true",
+        help="Let --keep count dry runs like any other run instead of removing them.",
+    )
+    prune_p.add_argument(
+        "--include-unfinished",
+        action="store_true",
+        help="Also remove runs with no run_finished event (interrupted or in progress).",
+    )
+    prune_p.add_argument(
+        "--list",
+        action="store_true",
+        help="Show what would be removed and remove nothing.",
+    )
+    prune_p.add_argument(
+        "--json", action="store_true", help="Emit the outcome as a JSON document on stdout."
+    )
 
     return parser
 
@@ -347,6 +403,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_doctor(args)
     if args.command == "status":
         return _cmd_status(args)
+    if args.command == "prune":
+        return _cmd_prune(args)
     print(f"jumar {args.command}: not implemented yet — see IMPLEMENTATION_PLAN.md")
     return 2
 
@@ -1555,12 +1613,83 @@ def _cmd_status(args: argparse.Namespace) -> int:
     todo_path = Path(config.todo_path)
     runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
 
-    report = build_status(todo_path, runs_dir, config, now)
+    report = build_status(
+        todo_path, runs_dir, config, now, by_usage=bool(getattr(args, "by_usage", False))
+    )
     use_json: bool = getattr(args, "json", False)
     if use_json:
         print(format_status_json(report))
     else:
         print(format_status(report))
+    return 0
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    """Implement ``jumar prune``.
+
+    Exit 0 when the selection was applied (or listed), 2 on a usage error such
+    as no selector or an unreadable age. Never creates a run directory.
+    """
+    from .clock import capture_now
+    from .config import ConfigError, load_config
+    from .prune import (
+        PruneError,
+        PruneResult,
+        apply_prune,
+        format_prune,
+        format_prune_json,
+        parse_age,
+        plan_prune,
+        protected_run_ids,
+        scan_runs,
+    )
+
+    cli_overrides: dict[str, object] = {}
+    if getattr(args, "todo", None):
+        cli_overrides["todo_path"] = args.todo
+    config_path = Path(args.config) if getattr(args, "config", None) else None
+    try:
+        config = load_config(cli_overrides=cli_overrides or None, config_path=config_path)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    now = capture_now(config)
+    todo_path = Path(config.todo_path)
+    runs_dir = Path(args.runs_dir) if getattr(args, "runs_dir", None) else Path("runs")
+
+    try:
+        older_than = parse_age(args.older_than) if args.older_than else None
+        runs = scan_runs(runs_dir)
+        protected = protected_run_ids(todo_path, runs_dir, config, now) if runs else set()
+        decisions = plan_prune(
+            runs,
+            now=now,
+            keep=args.keep,
+            older_than=older_than,
+            dry_runs_only=args.dry_runs,
+            keep_dry_runs=args.keep_dry_runs,
+            include_unfinished=args.include_unfinished,
+            protected=protected,
+        )
+    except PruneError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if not args.list:
+        removed = set(apply_prune(runs_dir, decisions))
+        # A folder that could not be removed is reported as kept, not removed.
+        for d in decisions:
+            if d.action == "remove" and d.run_id not in removed:
+                d.action, d.reason = "keep", "could not be removed"
+
+    result = PruneResult(
+        runs_dir=str(runs_dir),
+        listed_only=bool(args.list),
+        removed=[d for d in decisions if d.action == "remove"],
+        kept=[d for d in decisions if d.action == "keep"],
+    )
+    print(format_prune_json(result) if args.json else format_prune(result))
     return 0
 
 
