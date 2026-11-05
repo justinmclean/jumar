@@ -223,10 +223,13 @@ def execute(
     artefacts_dir.mkdir(parents=True, exist_ok=True)
     transcript_name = f"{subtask.subtask_id.replace('#', '-')}-attempt-{attempt_no}.txt"
     transcript_path = artefacts_dir / transcript_name
-    transcript_path.write_text(
-        f"=== stdout ===\n{result.stdout}\n=== stderr ===\n{result.stderr}\n",
-        encoding="utf-8",
-    )
+    transcript = f"=== stdout ===\n{result.stdout}\n=== stderr ===\n{result.stderr}\n"
+    # The claude CLI's JSON envelope (session id, cost, how the run ended)
+    # is kept beside the unwrapped reply for the forensic record.
+    envelope = getattr(result, "envelope", None)
+    if envelope:
+        transcript += f"=== envelope ===\n{envelope}\n"
+    transcript_path.write_text(transcript, encoding="utf-8")
 
     # How the run ended, decided now, before stage 6 looks at what it left.
     termination = classify_termination(result, harness_error)
