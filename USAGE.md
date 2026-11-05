@@ -574,6 +574,18 @@ Notes that matter:
   `tier` is journalled on `attempt_started` and `attempt_finished`. A tier's
   model name goes to the agent CLI as is: the Claude CLI accepts `haiku`,
   `sonnet`, `opus`, `fable` and full ids such as `claude-fable-5-1`.
+- **The Claude CLI is run with `--output-format json`.** Its reply comes back
+  in one JSON envelope with the token counts, the session id and how the run
+  ended. jumar unwraps it, so the journal, the judge and the decompose stage
+  see the reply text exactly as they did with the text format, and the
+  `prompt_tokens` and `completion_tokens` that only the `openai` harness used
+  to report are journalled for Claude runs too (prompt tokens sum fresh,
+  cache-read and cache-creation input, the uncached ceiling). A
+  `--max-turns` stop is read from the envelope's `error_max_turns` subtype
+  rather than by scanning for a phrase. The raw envelope is kept in the
+  attempt transcript under `=== envelope ===`. Output that is not an
+  envelope (an older CLI, a crash before the result) is passed through
+  unchanged with no counts, never a traceback.
 - **Harness profiles are for a second model line-up, not a second config file.**
   `jumar run --harness-profile heavy` layers `[jumar.harness.profiles.heavy]`
   over `[jumar.harness]`; everything else in the file — `todo_path`,
